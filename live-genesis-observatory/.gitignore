@@ -1,0 +1,5 @@
+.openai/
+.git/
+.env
+*.db
+__pycache__/
