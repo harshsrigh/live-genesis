@@ -29,6 +29,43 @@ def _fold(text: str) -> str:
     return _INVISIBLE.sub("", unicodedata.normalize("NFKC", text))
 
 
+# ---------------------------------------------------------------- characters
+
+# Characters that change how text is DISPLAYED or parsed without being visible content:
+#   * every Unicode control character (category Cc): C0 U+0000-U+001F, DEL U+007F, C1 U+0080-U+009F.
+#     In multi-line text only, newline (U+000A), tab (U+0009) and a carriage return that is
+#     directly followed by a newline are allowed.
+#   * lone surrogates (category Cs, U+D800-U+DFFF): not valid text; they cannot be stored as UTF-8.
+#   * bidirectional format characters: U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069.
+#   * the line and paragraph separators U+2028 and U+2029 (line breaks the line limits do not count).
+# Deliberately NOT refused: letters of any script, emoji, variation selectors, and the other
+# format characters (zero-width joiner U+200D and non-joiner U+200C, which emoji sequences and
+# several scripts need, zero-width space, soft hyphen, BOM). The content checks below already
+# ignore those when matching (_fold).
+_DISPLAY_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u2028\u2029")
+CHARACTER_RULE = ("contains a control or text-direction character (for example NUL, an escape code or a "
+                  "right-to-left override)")
+
+
+def has_forbidden_character(text: str, *, multiline: bool = False) -> bool:
+    """True when `text` holds a character refused by the rule above."""
+    for index, ch in enumerate(text):
+        if ch in _DISPLAY_CONTROLS:
+            return True
+        if unicodedata.category(ch) in ("Cc", "Cs"):
+            if multiline and (ch in "\n\t" or (ch == "\r" and text[index + 1:index + 2] == "\n")):
+                continue
+            return True
+    return False
+
+
+def check_characters(text: str, label: str, *, multiline: bool = False) -> None:
+    """422 for a forbidden character. Never echoes the text or the character."""
+    if has_forbidden_character(text, multiline=multiline):
+        allowed = "Plain text, newlines and tabs only" if multiline else "Plain text on one line only"
+        raise HTTPException(422, f"{label} {CHARACTER_RULE}. Remove it and resend. {allowed}.")
+
+
 # ---------------------------------------------------------------- PII and secrets
 
 _EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")

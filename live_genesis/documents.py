@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS document_blame (
 def _text(value: Any, maximum: int, label: str) -> str:
     if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
         raise HTTPException(422, f"{label} must be 1-{maximum} characters")
+    guards.check_characters(value.strip(), label)  # titles and summaries: one line, no control characters
     return value.strip()
 
 
@@ -102,6 +103,7 @@ def _body(value: Any) -> str:
     text = value.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text or len(text) > BODY_CHARS:
         raise HTTPException(422, f"body must be 1-{BODY_CHARS} characters")
+    guards.check_characters(text, "body", multiline=True)  # newline and tab only
     if text.count("\n") >= BODY_LINES:
         raise HTTPException(422, f"body must have at most {BODY_LINES} lines")
     return text

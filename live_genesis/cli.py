@@ -194,6 +194,8 @@ def add_control_parsers(sub) -> None:
     rv.add_argument("--note",default="",help="Optional short note; shown publicly on the observatory")
     gd=sub.add_parser("set-guide",help="Switch the scripted system voice (the Origin) on or off for agents (audited; free; no model call)")
     gd.add_argument("mode",choices=guide.MODES)
+    cg=sub.add_parser("cancel-game",help="End one ACTIVE Commons Challenge by hand: it becomes EXPIRED and its seats are free (audited; free; no model call)")
+    cg.add_argument("game_id",type=int)
     sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
 
 
@@ -241,6 +243,12 @@ def handle_control_command(args,parser) -> bool:
         return True
     if args.command=="set-guide":
         print(f"Guide ({guide.NAME}) is now {guide.set_mode(args.mode)}. {guide.NATURE}")
+        return True
+    if args.command=="cancel-game":
+        from . import games
+        try: done=games.cancel(args.game_id)
+        except ValueError as err: parser.error(str(err))
+        print(f"Commons Challenge {done['game_id']} cancelled by the operator: now {done['state']}; its seats are free. Recorded in the operator audit log and as a public lifecycle event.")
         return True
     if args.command=="verify-ledger":
         problems=ledger.verify()

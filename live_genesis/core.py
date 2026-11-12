@@ -186,7 +186,14 @@ IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 #             caller typed into X-Agent-Model / X-Agent-Client: self-declared, verified=0.
 # Events recorded before this table existed have no row and read as 'demo' (demo flag) or 'unknown'.
 PROVENANCE_SOURCES = ("demo", "engine", "api")
-DECLARED = re.compile(r"[A-Za-z0-9._:/-][A-Za-z0-9 ._:/-]{0,79}")
+# Declared model / client names are shown on the public page, so no link may fit in them:
+# no colon at all, and at most one slash, allowed only after a provider or client name that
+# has no dot ("vendor/model-1.0", "my-client/1.2"; never "host.tld/path" or "a/b/c").
+# The slash is kept because provider-prefixed model ids and name/version client strings
+# (examples/agent_client.py sends one) are the normal form of these values.
+DECLARED = re.compile(r"(?=.{1,80}\Z)(?:[A-Za-z0-9_-][A-Za-z0-9 _-]*/)?[A-Za-z0-9._-][A-Za-z0-9 ._-]*")
+DECLARED_RULE = ("must be 1-80 characters of A-Z a-z 0-9 space . _ - , with at most one / after a "
+                 "provider or client name that contains no dot (no colon, no link)")
 
 def _provenance(provenance: dict[str,Any] | None, demo: bool, receipt: int | None = None) -> dict[str,Any]:
     """Normalize a provenance declaration. `verified` is derived from the source, never accepted from a caller.
@@ -214,7 +221,12 @@ def _provenance(provenance: dict[str,Any] | None, demo: bool, receipt: int | Non
             if value is None:
                 continue
             if not isinstance(value, str) or not DECLARED.fullmatch(value):
-                raise HTTPException(422, f"{header} must be 1-80 characters of A-Z a-z 0-9 space . _ : / -")
+                raise HTTPException(422, f"{header} {DECLARED_RULE}. Fix or omit the header and resend.")
+            # Published like post text, so the same pure content guards apply (payment links,
+            # phone numbers, credentials ...). The category is named, the value never echoed.
+            reason = guards.content_reason(value)
+            if reason:
+                raise HTTPException(422, f"{header} rejected: {reason}. Send only a model or client name, or omit the header.")
             out[field] = value
     return out
 
@@ -269,8 +281,11 @@ def authenticate(token: str | None) -> dict:
     return dict(agent)
 
 def clean(value: Any, maximum: int, label: str) -> str:
+    """Shared text check for titles and bodies. Control and text-direction characters are refused
+    (guards.check_characters); only a `body` may hold newlines and tabs."""
     if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
         raise HTTPException(422, f"{label} must be 1-{maximum} characters")
+    guards.check_characters(value.strip(), label, multiline=label == "body")
     return value.strip()
 
 def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, cooldown: bool=True,
@@ -357,8 +372,11 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             choice = action.get("choice")
             if choice not in ("like", "dislike") or type(post_id) is not int:
                 raise HTTPException(422, "post_id int and choice like/dislike required")
-            if not cx.execute("SELECT 1 FROM posts WHERE id=?",(post_id,)).fetchone():
+            target = cx.execute("SELECT demo FROM posts WHERE id=?",(post_id,)).fetchone()
+            if not target:
                 raise HTTPException(404, "Post not found. Use a post id from GET /api/agent/context.")
+            if bool(target["demo"]) != bool(demo):
+                raise HTTPException(409, "Scripted demo posts and agent actions cannot mix. Choose a post that is not labelled demo.")
             cx.execute("INSERT INTO reactions(agent_id,post_id,choice,demo,created_at) VALUES (?,?,?,?,?) "
                        "ON CONFLICT(agent_id,post_id) DO UPDATE SET choice=excluded.choice,demo=excluded.demo,created_at=excluded.created_at",
                        (agent_id,post_id,choice,int(demo),stamp))
@@ -670,4 +688,6 @@ def update_memory(agent_id: int, memory: str) -> dict[str,Any]:
     Never raises for guard-rejected text: returns {"stored","note_id","rejected"} and keeps the old memory.
     """
     from . import memory as world_memory  # local import: memory.py imports this module
+    if isinstance(memory, str) and guards.has_forbidden_character(memory, multiline=True):
+        return {"stored": False, "note_id": None, "rejected": guards.CHARACTER_RULE}  # same rule as clean()
     return world_memory.record_memory(agent_id, memory)

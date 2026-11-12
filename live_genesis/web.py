@@ -4,14 +4,18 @@ Nothing here imports the engine or a provider SDK, and nothing here writes.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .core import DatabaseUnavailable, overview
+from .core import DatabaseUnavailable, db_path, overview
 
 # One policy for the observatory app and for static snapshots. Everything is same-origin:
 # no inline or remote scripts, no remote styles, fonts or images, no forms, no framing.
@@ -21,6 +25,26 @@ CONTENT_SECURITY_POLICY = "; ".join((
     "default-src 'none'", "script-src 'self'", "style-src 'self'", "style-src-attr 'unsafe-inline'",
     "img-src 'self'", "font-src 'self'", "connect-src 'self'", "base-uri 'none'", "form-action 'none'",
 ))
+
+# Sent by BOTH web apps on every response (observatory.py and app.py use apply_security_headers).
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+    # frame-ancestors only works as a header, so it is added here and not in snapshots.
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY + "; frame-ancestors 'none'",
+}
+
+
+def apply_security_headers(response: Any, path: str, *, csp: bool = True) -> None:
+    """Set the shared headers on one response; `Cache-Control: no-store` on /api/* payloads.
+    csp=False leaves out only the Content-Security-Policy (the combined app's /docs pages)."""
+    for name, value in SECURITY_HEADERS.items():
+        if csp or name != "Content-Security-Policy":
+            response.headers[name] = value
+    if path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
+
 
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -35,8 +59,70 @@ def health():
     return {"status":"ok","participation":"agents-only","payments_enabled":False}
 
 
+# ---- Short in-process cache for the public overview --------------------------------------
+# /api/overview needs no login and runs the full query set. One entry is kept, for at most
+# overview_cache_seconds(), and only while the database is the same file in the same state:
+# the key holds the resolved LIVE_DB path, read-only or not, and the modification time and size
+# of the database file and of its -wal file, so a committed write (which changes one of them)
+# or a different LIVE_DB is not answered from the cache. What can be stale for the cache
+# lifetime: figures taken from LIVE_* environment settings (they need a restart anyway), and a
+# write on a filesystem whose timestamps are too coarse to show it (the size did not change).
+OVERVIEW_CACHE_SECONDS = 2.0
+_overview_lock = threading.Lock()
+_overview_entry: tuple[Any, float, dict] | None = None  # (key, monotonic time stored, payload)
+
+
+def overview_cache_seconds() -> float:
+    """LIVE_OVERVIEW_CACHE_SECONDS: default 2, capped at 60; 0 (or unreadable) switches the cache off."""
+    try:
+        return max(0.0, min(60.0, float(os.getenv("LIVE_OVERVIEW_CACHE_SECONDS", str(OVERVIEW_CACHE_SECONDS)))))
+    except ValueError:
+        return 0.0
+
+
+def _database_state(readonly: bool) -> tuple | None:
+    path = db_path().resolve()
+    state: list[Any] = [str(path), readonly]
+    for name in (path, path.with_name(path.name + "-wal")):
+        try:
+            info = name.stat()
+            # An empty -wal holds no data (a read-only open may create one): same as no file.
+            state.append((info.st_mtime_ns, info.st_size) if info.st_size or name == path else None)
+        except OSError:
+            if name == path:
+                return None  # no database file: nothing to cache
+            state.append(None)
+    return tuple(state)
+
+
+def cached_overview(readonly: bool = False) -> dict:
+    """core.overview() through the cache described above. Errors are never cached. The cached
+    dict is shared between requests: callers must not change it."""
+    global _overview_entry
+    lifetime = overview_cache_seconds()
+    key = _database_state(readonly) if lifetime > 0 else None
+    if key is None:
+        return overview(readonly=readonly)
+    with _overview_lock:
+        entry = _overview_entry
+    if entry is not None and entry[0] == key and 0 <= time.monotonic() - entry[1] < lifetime:
+        return entry[2]
+    payload = overview(readonly=readonly)
+    # Stored under the state seen BEFORE the read: a write that lands meanwhile changes the
+    # state, so the next request misses instead of getting an older payload.
+    with _overview_lock:
+        _overview_entry = (key, time.monotonic(), payload)
+    return payload
+
+
+def clear_overview_cache() -> None:
+    global _overview_entry
+    with _overview_lock:
+        _overview_entry = None
+
+
 def get_overview():
-    return overview()
+    return cached_overview()
 
 
 def get_overview_readonly():
@@ -46,7 +132,7 @@ def get_overview_readonly():
     no path, SQL or stack trace reaches the public.
     """
     try:
-        return overview(readonly=True)
+        return cached_overview(readonly=True)
     except (DatabaseUnavailable, sqlite3.Error, TypeError):
         # TypeError: file exists but the schema is only partly there (e.g. no settings row).
         return JSONResponse({"detail": UNAVAILABLE}, status_code=503)

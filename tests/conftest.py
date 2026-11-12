@@ -1,6 +1,6 @@
 import pytest
 
-from live_genesis import controls
+from live_genesis import controls, web
 from live_genesis.core import init_db
 
 
@@ -26,7 +26,13 @@ def isolated_db(tmp_path,monkeypatch):
     for name in ('LIVE_PROPOSAL_DISCUSSION_ROUNDS','LIVE_PROPOSAL_VOTING_ROUNDS','LIVE_PROPOSAL_QUORUM_PERCENT',
                  'LIVE_PROPOSAL_REPORT_ROUNDS','LIVE_GAME_IDLE_ROUNDS'):
         monkeypatch.delenv(name,raising=False)  # proposal lifecycle defaults; tests/test_governance.py overrides them
-    controls.api_limiter.reset()  # in-memory HTTP limiter is per process: start each test empty
+    for name in ('LIVE_AUTH_FAILURES_PER_MINUTE','LIVE_TRUSTED_PROXIES'):
+        monkeypatch.delenv(name,raising=False)
+    # The /api/overview cache is off so no test waits for it; tests/test_hardening.py turns it on.
+    monkeypatch.setenv('LIVE_OVERVIEW_CACHE_SECONDS','0')
+    web.clear_overview_cache()
+    controls.api_limiter.reset()  # in-memory HTTP limiters are per process: start each test empty
+    controls.auth_failure_limiter.reset()
     # CLI key commands (and `demo` on an empty database) write secrets/agent-keys.json under ROOT.
     monkeypatch.setattr('live_genesis.cli.ROOT',tmp_path)
     monkeypatch.delenv('OPENAI_API_KEY',raising=False)

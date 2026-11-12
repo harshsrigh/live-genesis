@@ -150,7 +150,7 @@ def test_expired_game_frees_seats_and_allows_a_new_start(isolated_db, monkeypatc
         assert view['active'] == [] and view['can_start'] is True
         assert ('expired' in view) == (agent_id != 4)
     assert agent_context(3)['games']['expired'] == [
-        {'id': gid, 'state': 'EXPIRED', 'next': 'none: expired from inactivity, no move possible'}]
+        {'id': gid, 'state': 'EXPIRED', 'next': 'none: ended without a result (inactivity or the operator), no move possible'}]
     assert all('game_share' not in hint and 'game_guess' not in hint for hint in agent_context(3)['guide']['guidance'])
     before = table_counts()
     assert refused(3, {'action': 'game_share', 'game_id': gid}) == 409

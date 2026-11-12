@@ -11,7 +11,8 @@ Honest limits:
 * Receipts stop a caller from *labelling* an action `engine` without a settled
   reservation. Code running inside this process with database access could still forge
   rows; this is a consistency control, not a sandbox.
-* `RateLimiter` state lives in one process's memory and is lost on restart.
+* `RateLimiter` state lives in one process's memory and is lost on restart; the client
+  address is the direct peer unless `LIVE_TRUSTED_PROXIES` names the proxy in front.
 
 `now` is the single time source for expiry, quota windows and the HTTP limiter; tests
 replace it (`monkeypatch.setattr(controls, "now", ...)`) instead of sleeping.
@@ -19,6 +20,7 @@ replace it (`monkeypatch.setattr(controls, "now", ...)`) instead of sleeping.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import math
 import os
 import secrets
@@ -393,18 +395,29 @@ def agents_done_in_round(cx: sqlite3.Connection, round_id: int) -> set[int]:
     return done
 
 
-# ---- In-memory HTTP rate limit --------------------------------------------------------
+# ---- In-memory HTTP rate limits -------------------------------------------------------
+
+LIMITER_MAX_KEYS = 10_000  # distinct keys remembered per window; see RateLimiter
+
 
 class RateLimiter:
-    """Fixed-window counter per client, in THIS process's memory only.
+    """Fixed-window counter per key, in THIS process's memory only.
 
-    Lost on restart, not shared between worker processes, and keyed by the peer address
-    the server sees (behind a proxy that is the proxy). A local courtesy limit, not
-    abuse protection.
+    Lost on restart and not shared between worker processes. Memory is bounded: all counts
+    are dropped when the window changes, and at most `max_keys` distinct keys are
+    remembered within one window. A key that arrives when the table is full is not
+    counted and is allowed (fail open): refusing it would let an attacker who rotates
+    addresses lock out everyone else.
+
+    Two instances guard /api/agent/* (see app.requires_agent):
+    * `api_limiter`: requests per AUTHENTICATED agent id, counted after authentication.
+    * `auth_failure_limiter`: FAILED authentications per client address.
     """
 
-    def __init__(self, maximum: int | None = None, seconds: int = 60, clock: Callable[[], float] | None = None):
+    def __init__(self, maximum: int | None = None, seconds: int = 60, clock: Callable[[], float] | None = None,
+                 *, variable: str = "LIVE_API_REQUESTS_PER_MINUTE", default: int = 120, max_keys: int = LIMITER_MAX_KEYS):
         self.maximum, self.seconds, self.clock = maximum, seconds, clock
+        self.variable, self.default, self.max_keys = variable, default, max_keys
         self._lock = threading.Lock()
         self._window = -1
         self._counts: dict[str, int] = {}
@@ -413,25 +426,40 @@ class RateLimiter:
         if self.maximum is not None:
             return self.maximum
         try:
-            return max(1, int(os.getenv("LIVE_API_REQUESTS_PER_MINUTE", "120")))
+            return max(1, int(os.getenv(self.variable, str(self.default))))
         except ValueError:
-            return 120
+            return self.default
 
     def reset(self) -> None:
         with self._lock:
             self._window, self._counts = -1, {}
 
-    def allow(self, client: str) -> bool:
-        """Count one request (successful or not) and say whether it is within the limit."""
+    def _roll(self) -> None:
         window = int((self.clock or now)() // self.seconds)
+        if window != self._window:
+            self._window, self._counts = window, {}
+
+    def allow(self, client: str) -> bool:
+        """Count one use for this key and say whether it was within the limit."""
         with self._lock:
-            if window != self._window:
-                self._window, self._counts = window, {}
+            self._roll()
             used = self._counts.get(client, 0)
             if used >= self.limit():
                 return False
-            self._counts[client] = used + 1
+            if client in self._counts or len(self._counts) < self.max_keys:
+                self._counts[client] = used + 1
             return True
+
+    def blocked(self, client: str) -> bool:
+        """True when this key has already used its whole allowance. Counts nothing."""
+        with self._lock:
+            self._roll()
+            return self._counts.get(client, 0) >= self.limit()
+
+    def size(self) -> int:
+        """Number of keys currently remembered (never above `max_keys`)."""
+        with self._lock:
+            return len(self._counts)
 
     def retry_after(self) -> int:
         """Whole seconds until the current window ends (at least 1)."""
@@ -439,7 +467,47 @@ class RateLimiter:
         return max(1, math.ceil((int(current // self.seconds) + 1) * self.seconds - current))
 
 
-api_limiter = RateLimiter()
+api_limiter = RateLimiter()  # keyed on the authenticated agent id
+auth_failure_limiter = RateLimiter(variable="LIVE_AUTH_FAILURES_PER_MINUTE", default=10)  # keyed on the client address
+
+
+def trusted_proxies() -> frozenset[str]:
+    """Peer addresses whose X-Forwarded-For header is believed (LIVE_TRUSTED_PROXIES, comma-separated
+    exact addresses, empty by default). No networks or wildcards: list each proxy address."""
+    return frozenset(_address(part) for part in os.getenv("LIVE_TRUSTED_PROXIES", "").split(",") if part.strip())
+
+
+def _address(text: str) -> str:
+    """Canonical text of an IP address (so ::1 and 0:0:0:0:0:0:0:1 compare equal); other text lower-cased."""
+    text = text.strip()
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        return text.lower()
+
+
+def client_address(peer: str | None, forwarded: list[str] | None = None) -> str:
+    """The address the failed-authentication limit is keyed on.
+
+    Default: the direct peer, and X-Forwarded-For is ignored (any client can send that header).
+    Only when the peer is listed in LIVE_TRUSTED_PROXIES: the right-most X-Forwarded-For entry
+    that is not itself a trusted proxy. That is the entry the nearest trusted proxy appended;
+    everything to its left is client-supplied and never used. If the header is missing, holds
+    only trusted addresses, or that entry is not an IP address, the peer is used.
+    """
+    peer_text = _address(peer) if peer else "unknown"
+    trusted = trusted_proxies()
+    if peer_text not in trusted or not forwarded:
+        return peer_text
+    for entry in reversed([part for value in forwarded for part in value.split(",")]):
+        candidate = _address(entry)
+        if candidate in trusted:
+            continue
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            return peer_text
+    return peer_text
 
 
 # ---- Backup ---------------------------------------------------------------------------

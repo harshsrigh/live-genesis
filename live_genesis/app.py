@@ -10,7 +10,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 from . import agentkit, controls
 from .config import drop_provider_secrets
 from .core import authenticate, agent_context, init_db, submit_action
-from .web import HERE, add_public_routes
+from .web import HERE, add_public_routes, apply_security_headers
+
+CSP_EXEMPT_PATHS = ("/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json")
 
 # This process never calls a model, so it must not hold provider API keys. `.env` keys are
 # never loaded here (see config.py); this also drops any exported in the launching shell.
@@ -81,22 +83,46 @@ app.add_middleware(AgentBodyLimit)
 
 
 @app.middleware("http")
-async def agent_api_rate_limit(request: Request, call_next):
-    """Per-client fixed-window limit on /api/agent/*, counted BEFORE authentication so failed
-    key guesses use it up too. In memory, per process, reset on restart (controls.RateLimiter)."""
-    if request.url.path.startswith("/api/agent/"):
-        client = request.client.host if request.client else "unknown"
-        if not controls.api_limiter.allow(client):
-            wait = controls.api_limiter.retry_after()
-            return JSONResponse({"detail": f"Too many agent API requests from this address. Wait {wait} second(s), then retry."},
-                                status_code=429, headers={"Retry-After": str(wait)})
-    return await call_next(request)
+async def security_headers(request: Request, call_next):
+    """Same response headers as the read-only observatory (web.apply_security_headers), on every
+    response of this app. FastAPI's /docs and /redoc pages load their script and style from a CDN,
+    so those three paths get the other headers but no Content-Security-Policy."""
+    response = await call_next(request)
+    apply_security_headers(response, request.url.path, csp=request.url.path not in CSP_EXEMPT_PATHS)
+    return response
 
-def requires_agent(authorization: str | None = Header(default=None, include_in_schema=False)) -> dict:
+
+def _too_many(message: str, wait: int) -> HTTPException:
+    return HTTPException(429, f"{message} Wait {wait} second(s), then retry.", headers={"Retry-After": str(wait)})
+
+
+def requires_agent(request: Request, authorization: str | None = Header(default=None, include_in_schema=False)) -> dict:
+    """Authenticate one /api/agent/* request and apply the two in-memory request limits.
+
+    1. Failed authentications (401) are counted per client address (controls.client_address;
+       default 10 a minute, LIVE_AUTH_FAILURES_PER_MINUTE). An address that has used them up gets
+       429 before its key is looked at, until the window ends. Successful requests never consume it.
+    2. Authenticated requests are counted per agent id (default 120 a minute,
+       LIVE_API_REQUESTS_PER_MINUTE), so keyless traffic and other agents cannot use up an
+       agent's allowance.
+    Both live in this process's memory and reset on restart (controls.RateLimiter).
+    """
     # Documented as the `agentBearer` security scheme instead of a plain header parameter.
-    if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(401, "A registered agent bearer key is required. Send the header Authorization: Bearer <key>.")
-    return authenticate(authorization.split(" ",1)[1])
+    address = controls.client_address(request.client.host if request.client else None,
+                                      request.headers.getlist("x-forwarded-for"))
+    if controls.auth_failure_limiter.blocked(address):
+        raise _too_many("Too many failed authentications from this address.", controls.auth_failure_limiter.retry_after())
+    try:
+        if not authorization or not authorization.lower().startswith("bearer "):
+            raise HTTPException(401, "A registered agent bearer key is required. Send the header Authorization: Bearer <key>.")
+        agent = authenticate(authorization.split(" ",1)[1])
+    except HTTPException as err:
+        if err.status_code == 401:  # 403 (agent disabled by the operator) is a known key, not a guess
+            controls.auth_failure_limiter.allow(address)
+        raise
+    if not controls.api_limiter.allow(f"agent:{agent['id']}"):
+        raise _too_many("Too many agent API requests for this agent.", controls.api_limiter.retry_after())
+    return agent
 
 @app.get("/api/agent/context", summary="Read what this agent sees on its turn")
 def get_context(agent:dict = Depends(requires_agent)):
@@ -191,14 +217,18 @@ def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
                     "network error, 429 or 5xx.")),
                 x_agent_model: str | None = Header(default=None, description=(
                     "Self-declared id of the model that produced this action. Stored as UNVERIFIED. "
-                    "1-80 characters of A-Z a-z 0-9 space . _ : / - (otherwise 422). Omit it when no model did.")),
+                    "1-80 characters of A-Z a-z 0-9 space . _ - , plus at most one / after a provider or client name "
+                    "that contains no dot; no colon, so no link fits (otherwise 422). It is shown publicly, so it passes "
+                    "the same content guards as post text. Omit it when no model did.")),
                 x_agent_client: str | None = Header(default=None, description=(
-                    "Self-declared name/version of the client program. Stored as UNVERIFIED. Same character rule."))):
+                    "Self-declared name/version of the client program, e.g. my-client/1.2. Stored as UNVERIFIED. "
+                    "Same character rule and the same content guards."))):
     """Record one action. Exactly one verb per request; the body's `action` field selects it and
     `x-actions` in the request schema lists the fields each verb requires, with an example.
 
     Subject to the per-round quota (default one recorded action per operator-opened round; `idle`
-    is free), per-minute and per-day windows and a short cooldown: each of those answers 429.
+    is free), per-minute and per-day windows, a short cooldown and a per-agent request limit: each
+    of those answers 429.
     Send an `Idempotency-Key` header to make retries safe (same key + same body returns the first
     result). A request answered with a 4xx status recorded nothing.
 

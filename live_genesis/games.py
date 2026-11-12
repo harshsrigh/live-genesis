@@ -13,7 +13,8 @@ Inactivity: a game with no move for `idle_rounds()` operator-opened rounds (defa
 `LIVE_GAME_IDLE_ROUNDS`) becomes EXPIRED when a round opens (`on_round_open`, called by
 core.open_round inside its transaction). Time is counted in rounds, never wall-clock. An
 expired game is terminal like WON/LOST: its seats are free and a new game can start. No
-credits or penalties are involved.
+credits or penalties are involved. The operator can end an active game the same way by hand
+(`cancel`, CLI `cancel-game`).
 
 Privacy: `game_clues.value` is read in exactly three places below — the win check,
 the owner's own context, and (only once `shared=1`) the public views.
@@ -122,12 +123,34 @@ def on_round_open(cx: sqlite3.Connection, round_id: int, stamp: str | None = Non
     for game in cx.execute("SELECT id,demo,last_move_round FROM games WHERE state='ACTIVE' ORDER BY id").fetchall():
         if game["last_move_round"] is None or round_id - game["last_move_round"] < limit:
             continue
-        cx.execute("UPDATE games SET state='EXPIRED' WHERE id=? AND state='ACTIVE'", (game["id"],))
-        cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (NULL,'lifecycle',?,?,?)",
-                   (f"Commons Challenge #{game['id']} · ACTIVE → EXPIRED · expired from inactivity: no move for "
-                    f"{limit} round(s); seats are free", game["demo"], stamp))
+        _expire(cx, game, f"expired from inactivity: no move for {limit} round(s)", stamp)
         expired.append(game["id"])
     return expired
+
+
+def _expire(cx: sqlite3.Connection, game: sqlite3.Row, reason: str, stamp: str) -> None:
+    """The one place a game becomes EXPIRED: state change plus one public system event."""
+    cx.execute("UPDATE games SET state='EXPIRED' WHERE id=? AND state='ACTIVE'", (game["id"],))
+    cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (NULL,'lifecycle',?,?,?)",
+               (f"Commons Challenge #{game['id']} · ACTIVE → EXPIRED · {reason}; seats are free", game["demo"], stamp))
+
+
+def cancel(game_id: int) -> dict[str, Any]:
+    """Operator-only (cli cancel-game): end one ACTIVE game by hand. Same terminal state and the
+    same kind of public event as expiry, worded as cancelled by the operator; one operator_audit
+    row. Raises ValueError for an unknown game or one that is already finished."""
+    from . import controls
+    from .core import connect, utcnow
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        game = cx.execute("SELECT id,state,demo FROM games WHERE id=?", (game_id,)).fetchone()
+        if not game:
+            raise ValueError("Unknown game")
+        if game["state"] != "ACTIVE":
+            raise ValueError(f"Game {game_id} is already finished ({game['state']}); only an ACTIVE game can be cancelled")
+        _expire(cx, game, "cancelled by the operator", utcnow())
+        controls.audit(cx, f"cancel-game {game_id}")
+        return {"game_id": game_id, "state": "EXPIRED"}
 
 
 def draw_digit() -> int:
@@ -258,7 +281,7 @@ def context(cx: sqlite3.Connection, agent_id: int) -> dict[str, Any]:
     """Small private view for one agent: its active (non-demo) games, including ITS OWN clue only.
 
     `expires_in_rounds`: round openings left before the game expires unless someone moves.
-    `expired` (present only then): the agent's newest game, if inactivity ended it."""
+    `expired` (present only then): the agent's newest game, if inactivity or the operator ended it."""
     active = []
     round_id, limit = cx.execute("SELECT MAX(id) FROM rounds").fetchone()[0], idle_rounds()
     for game in cx.execute('''SELECT g.id,g.attempts,g.last_move_round,c.position,c.value,c.shared FROM games g
@@ -280,5 +303,5 @@ def context(cx: sqlite3.Connection, agent_id: int) -> dict[str, Any]:
     last = cx.execute('''SELECT g.id,g.state FROM games g JOIN game_clues c ON c.game_id=g.id AND c.agent_id=?
             WHERE g.demo=0 ORDER BY g.id DESC LIMIT 1''', (agent_id,)).fetchone()
     if last and last["state"] == "EXPIRED":
-        out["expired"] = [{"id": last["id"], "state": "EXPIRED", "next": "none: expired from inactivity, no move possible"}]
+        out["expired"] = [{"id": last["id"], "state": "EXPIRED", "next": "none: ended without a result (inactivity or the operator), no move possible"}]
     return out

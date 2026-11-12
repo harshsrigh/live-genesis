@@ -292,9 +292,16 @@ def _proposal(cx: sqlite3.Connection, proposal_id: Any) -> sqlite3.Row:
     return proposal
 
 
+def _same_origin(proposal: sqlite3.Row, demo: bool) -> None:
+    """Scripted demo records and agent actions never touch each other (as in games and documents)."""
+    if bool(proposal["demo"]) != bool(demo):
+        raise HTTPException(409, "Scripted demo proposals and agent actions cannot mix. Choose a proposal that is not labelled demo.")
+
+
 def vote(cx: sqlite3.Connection, agent_id: int, proposal_id: int, choice: str, *, demo: bool, stamp: str) -> str:
     """Record or change one vote. Only while the proposal is in VOTING, never by its author."""
     proposal = _proposal(cx, proposal_id)
+    _same_origin(proposal, demo)
     if proposal["status"] != "VOTING":
         raise HTTPException(409, f"Votes are accepted only while a proposal is in VOTING; proposal #{proposal_id} is {proposal['status']}")
     if proposal["agent_id"] == agent_id:
@@ -330,6 +337,7 @@ def act(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payload: 
             summary = f"contributed {amount} credits to the commons pool"
         else:
             proposal = _proposal(cx, action["proposal_id"])
+            _same_origin(proposal, demo)
             if proposal["kind"] != "project":
                 raise HTTPException(409, "Credits cannot be contributed to a fundraising proposal; it has no allocation and involves no money")
             if proposal["status"] not in OPEN_ALLOCATION:
@@ -352,6 +360,7 @@ def act(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payload: 
         payload["commons_pool"] = ledger.balance(cx, ledger.COMMONS)
         return summary
     proposal = _proposal(cx, action.get("proposal_id"))
+    _same_origin(proposal, demo)
     if proposal["agent_id"] != agent_id:
         raise HTTPException(403, "Only the proposal's author can do this")
     payload["proposal_id"] = proposal["id"]
