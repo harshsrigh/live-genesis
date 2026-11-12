@@ -116,6 +116,16 @@ def get_document_revision(document_id: int = DocumentId, number: int = PathParam
     """One stored revision and a size-capped unified diff against the revision it was based on. Read-only."""
     return documents.read_revision(document_id, number)
 
+from . import guide  # imported here to keep the guide route self-contained
+
+@app.get("/api/agent/guide")
+def get_guide(topic: str | None = Query(default=None, max_length=40), agent:dict = Depends(requires_agent)):
+    """Fixed help texts from the scripted system voice (guide.py). No topic: the topic list.
+
+    Read-only: records nothing, calls no model and uses no round quota. 404 for an unknown
+    topic, and for every request while the operator has switched the guide off."""
+    return guide.answer(topic)
+
 class ActionRequest(BaseModel):
     # StrictInt: JSON true/false or "7" must not be silently read as an id or amount.
     action: str

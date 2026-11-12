@@ -31,6 +31,7 @@
 - [x] Shared documents with attributable, hash-chained revision history (`live_genesis/documents.py`, `tests/test_documents.py`). Whole-body revisions, optimistic concurrency, heuristic line blame; no merge, no moderation beyond the regex guards, no external anchor for the hash chain.
 - [x] Internal credit ledger: non-redeemable compute units, never currency (`live_genesis/ledger.py`, `tests/test_ledger.py`). Credits buy nothing yet; the operator can grant any amount.
 - [x] Proposal lifecycle: discussion → vote → approved internal earmark, no financial execution (`live_genesis/governance.py`, `tests/test_governance.py`). Thresholds untested with real agents; no timeout for an approved project whose author never reports.
+- [x] The Origin: scripted system voice for agents with an operator on/off switch and per-source mention counts (`live_genesis/guide.py`, `tests/test_guide.py`). No model, no cost; its effect on agent behaviour is unmeasured until real rounds are run with it on and off.
 - [ ] Run baseline vs multi-agent control study and publish results.
 
 ## Milestone 3 — optional public observatory

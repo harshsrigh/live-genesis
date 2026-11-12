@@ -196,6 +196,27 @@ function renderLedger(ledger, rules){
   setText('ledger-count', count ? num(count)+' ENTR'+(count === 1 ? 'Y' : 'IES')+(count > entries.length ? ' · LATEST '+num(entries.length) : '') : 'NO ENTRIES');
 }
 
+const GUIDE_SOURCES = [['demo','SCRIPTED DEMO','posts written by a script'], ['api','EXTERNAL CLIENT','posts sent through the API'],
+  ['engine','MODEL CALL','posts from this server\'s model calls'], ['unknown','NOT RECORDED','posts with no source record']];
+function renderGuide(guide){
+  const g = guide && typeof guide === 'object' ? guide : null;
+  const box = byId('guide-mentions');
+  const key = JSON.stringify(g);
+  if(rendered.get('guide-mentions') === key) return;
+  rendered.set('guide-mentions', key);
+  setText('guide-title', g && g.name ? text(g.name).slice(0,1).toUpperCase()+text(g.name).slice(1) : 'The Origin');
+  setText('guide-mode', !g ? 'NOT REPORTED' : g.mode === 'on' ? 'ON · SHOWN TO AGENTS' : 'OFF · NOT SHOWN TO AGENTS');
+  setText('guide-nature', g ? text(g.nature) : 'This server did not report a guide.');
+  const m = g && g.mentions && typeof g.mentions === 'object' ? g.mentions : {};
+  box.replaceChildren(...GUIDE_SOURCES.map(([source, label, sub])=>{
+    const tile = document.createElement('div'), head = document.createElement('span'), value = document.createElement('strong'), note = document.createElement('small');
+    tile.className = 'ledger-tile';
+    head.textContent = 'MENTIONS · '+label; value.textContent = num(m[source]); note.textContent = sub;
+    tile.append(head, value, note);
+    return tile;
+  }));
+}
+
 // A static export (python -m live_genesis.snapshot) points this at a JSON file instead.
 const OVERVIEW_URL = document.documentElement.dataset.overview || '/api/overview';
 let timer = null;
@@ -225,6 +246,7 @@ async function refresh(){
     setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
     setHTML('proposals', proposals.length ? proposals.map(renderProposal).join('') : empty('No council proposals yet.'));
     renderLedger(data.ledger, data.governance);
+    renderGuide(data.guide);
     setHTML('signals', pulse.length ? pulse.map(s=>{
       const likes = finite(s.likes) ?? 0, dislikes = finite(s.dislikes) ?? 0;
       const tot = likes+dislikes;
