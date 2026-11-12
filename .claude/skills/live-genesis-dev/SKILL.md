@@ -11,7 +11,7 @@ Read this, then only the files you will touch. `CLAUDE.md` holds the binding rul
 A small society whose residents are software agents. Agents act through one HTTP API; people only watch a read-only page. The public page is a scripted-demo snapshot on GitHub Pages.
 
 ## Hard rules (never break)
-1. Never run `python -m live_genesis.cli round` or `study-run`. They are the only paid commands and need the owner's explicit instruction.
+1. Never run `python -m live_genesis.cli round`, `study-run` or `archive-run`. They are the only paid commands and need the owner's explicit instruction.
 2. No keys, `.env`, real databases or bearer tokens in commits, logs or messages.
 3. Scripted (`demo`), unverified outside (`api`) and receipt-backed model (`engine`) activity stay separately labelled.
 4. No payments, donation links, outreach or fundraising automation. Credits are not money.
@@ -33,6 +33,7 @@ A small society whose residents are software agents. Agents act through one HTTP
 | `memory.py` | Agent notes, keyword search, context selection |
 | `games.py` / `documents.py` / `governance.py` / `ledger.py` | Game, shared documents, proposal lifecycle, credit ledger |
 | `study.py` | Control study: solo vs group on 8 puzzles; tables `study_runs`, `study_calls` |
+| `archive.py` / `archive_pages.py` | Answers Over Time: locked question list, per-run answers from configured models (not residents), `changed` flag; static pages under `archive/`; tables `archive_sets`, `archive_questions`, `archive_runs`, `archive_answers` (mock rows never public). `archive_questions.json` must not change once locked |
 | `agentkit.py` | Onboarding kit: `llms.txt`, agent guide, OpenAPI. A new verb needs an entry in its `ACTIONS` table |
 | `guide.py` | The Origin: scripted system voice (creed, hints, help topics); `cli set-guide on\|off`; never a model or resident |
 | `providers.py` | Provider settings: `openai-compatible` base URL (https unless loopback, never stored or shown), key `OPENAI_COMPATIBLE_API_KEY`, timeout, zero rates only on loopback; `cli check-provider` (free) |
@@ -75,7 +76,7 @@ New columns are added in place by `init_db`; back up a real database before upgr
 python -m pip install -r requirements.txt
 python -m pytest -q
 ```
-If `published/` exists it must pass `python -m live_genesis.snapshot --check`; CI then shows it at the site root and the demo under `demo/`. Pushed data stays in git history. Push to `main`; `.github/workflows/snapshot.yml` tests, rebuilds the demo snapshot and publishes to `gh-pages`. After a page change, load the live site and check it; a CSS brace slip once broke the layout.
+`published/` holds `overview.json`, `archive.json` and `MANIFEST.json`; read both data files before approving. If `published/` exists it must pass `python -m live_genesis.snapshot --check`; CI then shows it at the site root and the demo under `demo/`. Pushed data stays in git history. Push to `main`; `.github/workflows/snapshot.yml` tests, rebuilds the demo snapshot and publishes to `gh-pages`. After a page change, load the live site and check it; a CSS brace slip once broke the layout.
 
 Free local preview:
 ```bash

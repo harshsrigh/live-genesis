@@ -10,7 +10,7 @@ from html.parser import HTMLParser
 import pytest
 from fastapi.testclient import TestClient
 
-from live_genesis import cli, pages, snapshot, web
+from live_genesis import archive, cli, pages, snapshot, web
 from live_genesis.app import app as combined_app
 from live_genesis.core import overview, seed_agents
 from live_genesis.observatory import app as observatory_app
@@ -373,7 +373,8 @@ def test_demo_export_writes_one_page_per_post_and_agent_with_links_that_resolve(
     assert snapshot.build(out)['demo_only'] is True
     data = json.loads((out / 'overview.json').read_text(encoding='utf-8'))
     files = export_files(out)
-    html_files = sorted(name for name in files if name.endswith('.html'))
+    # The Answers Over Time pages under archive/ have their own tests (tests/test_archive.py).
+    html_files = sorted(name for name in files if name.endswith('.html') and not name.startswith('archive/'))
     assert html_files == sorted(['index.html', 'stats.html'] + [f'post/{p["id"]}.html' for p in data['posts']]
                                 + [f'profile/{a["id"]}.html' for a in data['agents']])
     assert len(data['posts']) == 9 and len(data['agents']) == 10 and not (out / 'static' / 'stats.html').exists()
@@ -428,7 +429,7 @@ def test_export_pages_come_from_the_exported_file_and_escape_what_it_holds(demo_
     payload = snapshot._encode(data)
     out = tmp_path / 'site'
     _, kit, include_client = snapshot._kit(None)
-    snapshot._render(out, payload, kit, include_client, 'demo/')
+    snapshot._render(out, payload, kit, include_client, 'demo/', snapshot._encode(archive.public_payload()))
     assert (out / 'overview.json').read_bytes() == payload
     parent = (out / 'post' / f'{data["posts"][-1]["id"]}.html').read_text(encoding='utf-8')
     assert 'Replies (1)' in visible(parent) and HOSTILE_TITLE in visible(parent) and 'Nested reply' in visible(parent)
@@ -436,5 +437,5 @@ def test_export_pages_come_from_the_exported_file_and_escape_what_it_holds(demo_
     assert (out / 'post' / f'{top + 2}.html').is_file() and 'data-sibling="demo/"' in (out / 'stats.html').read_text(encoding='utf-8')
     # Nothing is written when a page cannot be generated.
     with pytest.raises(RuntimeError):
-        snapshot._render(tmp_path / 'broken', b'[1, 2]', kit, include_client, None)
+        snapshot._render(tmp_path / 'broken', b'[1, 2]', kit, include_client, None, snapshot._encode(archive.public_payload()))
     assert not (tmp_path / 'broken').exists()

@@ -21,6 +21,10 @@ Publishing recorded (non-demo) data goes through reviewed JSON committed to the 
     python -m live_genesis.snapshot --check               # what CI runs: hash intact and reviewed
     python -m live_genesis.snapshot OUTDIR --from-data published   # render without a database
 
+The export also carries `archive.json` (Answers Over Time: questions, runs and answers; mock
+answers are never in it) under the same hash, manifest, guard and ASCII rules, and every
+snapshot holds the archive pages under `archive/` (archive_pages.py; plain HTML, no script).
+
 See docs/FIRST-REAL-ROUND.md. Publishing is not reversible in practice: git history keeps the data.
 """
 from __future__ import annotations
@@ -32,14 +36,15 @@ import re
 import shutil
 from pathlib import Path
 
-from . import agentkit, guards, pages
+from . import agentkit, archive, archive_pages, guards, pages
 from .core import overview, utcnow
 from .web import CONTENT_SECURITY_POLICY
 
 STATIC = Path(__file__).resolve().parent / "static"
 PUBLISHED = Path(__file__).resolve().parent.parent / "published"   # reviewed data, committed by the owner
-SCHEMA = "live-genesis-published/1"
-DATA_FILE, MANIFEST_FILE = "overview.json", "MANIFEST.json"
+SCHEMA = "live-genesis-published/2"   # /2: the folder also holds archive.json
+DATA_FILE, ARCHIVE_FILE, MANIFEST_FILE = "overview.json", "archive.json", "MANIFEST.json"
+FILES = (DATA_FILE, ARCHIVE_FILE, MANIFEST_FILE)
 SOURCES = ("demo", "api", "engine", "unknown")
 # Relative address of the other published snapshot (demo <-> recorded); nothing else is accepted.
 SIBLING = re.compile(r"(?:\.\./|[a-z0-9-]+/)")
@@ -64,6 +69,14 @@ def _capture() -> dict:
     data["snapshot"] = {"generated_at": utcnow(), "demo_only": demo_only,
                         "note": "Static copy of recorded data. Nothing is running behind this page."}
     return data
+
+
+def _capture_archive() -> dict:
+    """The public Answers Over Time payload (never a mock row); read-only, no model call."""
+    try:
+        return archive.public_payload(readonly=True)
+    except archive.ArchiveRefused as err:
+        raise RuntimeError(str(err)) from None
 
 
 def _encode(data: dict) -> bytes:
@@ -194,8 +207,13 @@ def item_pages(payload: bytes) -> dict[str, str]:
     return out
 
 
-def _render(out: Path, payload: bytes, kit: dict[str, str], include_client: bool, sibling: str | None) -> None:
+def _render(out: Path, payload: bytes, kit: dict[str, str], include_client: bool, sibling: str | None,
+            archive_payload: bytes) -> None:
     # Everything is generated before anything is written, so a failure leaves no half-built folder.
+    try:
+        archive_html = archive_pages.render_site(_loads(archive_payload))
+    except ValueError as err:
+        raise RuntimeError(str(err)) from None
     shells = {name: _shell(name, sibling) for name in SHELL_PAGES}
     items = item_pages(payload)
     out.mkdir(parents=True, exist_ok=True)
@@ -204,6 +222,11 @@ def _render(out: Path, payload: bytes, kit: dict[str, str], include_client: bool
         (out / name).parent.mkdir(parents=True, exist_ok=True)
         (out / name).write_text(html, encoding="utf-8")
     (out / "overview.json").write_bytes(payload)
+    (out / ARCHIVE_FILE).write_bytes(archive_payload)   # the data behind archive/, byte for byte
+    for name, text in archive_html.items():
+        target = out / "archive" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
     (out / ".nojekyll").write_text("", encoding="utf-8")  # serve files as-is on GitHub Pages
     for name, text in kit.items():
         (out / name).write_text(text, encoding="utf-8")
@@ -218,10 +241,13 @@ def build(outdir: str | Path, *, allow_non_demo: bool = False, api_base: str | N
     api_base, kit, include_client = _kit(api_base)
     _check_outdir(out, sibling)
     data = _capture()
+    answers = _capture_archive()
+    # A recorded archive answer makes the database non-demo, whatever the world's own mode is.
+    data["snapshot"]["demo_only"] = data["snapshot"]["demo_only"] and answers["demo_only"]
     if not data["snapshot"]["demo_only"] and not allow_non_demo:
         raise RuntimeError("Database is not scripted-demo-only (mode %s). Review the content, then pass "
                            "--allow-non-demo to export it anyway." % data.get("mode"))
-    _render(out, _encode(data), kit, include_client, sibling)
+    _render(out, _encode(data), kit, include_client, sibling, _encode(answers))
     return {**data["snapshot"], "api_base": api_base}
 
 
@@ -283,14 +309,39 @@ def non_ascii_report(node: object, kind: str = "overview", ref: object = None, f
 def published_non_ascii(target: str | Path | None = None) -> list[str]:
     """non_ascii_report for an export folder that already passed check_published."""
     folder = Path(target) if target is not None else PUBLISHED
-    data = _loads((folder / DATA_FILE).read_bytes())
-    return [line for kind, value in data.items() for line in non_ascii_report(value, kind, None, kind)]
+    lines: list[str] = []
+    for name in (DATA_FILE, ARCHIVE_FILE):
+        data = _loads((folder / name).read_bytes())
+        prefix = "" if name == DATA_FILE else "archive "
+        lines += [prefix + line for kind, value in data.items() for line in non_ascii_report(value, kind, None, kind)]
+    return lines
 
 
 def _counts(data: dict) -> tuple[dict, dict]:
     by_source = (data.get("metrics") or {}).get("actions_by_source") or {}
     return ({name: int(by_source.get(name, 0)) for name in SOURCES},
             {name: len(data.get(name) or []) for name in ("agents", "posts", "proposals", "events", "games", "documents")})
+
+
+def _archive_counts(answers: dict) -> dict:
+    by_source = {name: sum(1 for a in answers["answers"] if a.get("source") == name) for name in archive.SOURCES}
+    return {"file": ARCHIVE_FILE, "answers_by_source": by_source, "runs": len(answers["runs"]),
+            "questions": len(answers["questions"]), "question_set": answers["question_set"], "set_hash": answers["set_hash"]}
+
+
+def _archive_problem(answers: object) -> str | None:
+    """Why an archive.json may not be published, or None. Mock answers never leave the database, and
+    scripted demo answers are not reviewed data (the demo site is built from the script itself)."""
+    problem = archive.payload_problem(answers)
+    if problem:
+        return problem
+    if any(a["source"] == "mock" for a in answers["answers"]):
+        return "it holds mock answers, which are never published"
+    if any(a["source"] == "demo" for a in answers["answers"]) or any(run["demo"] for run in answers["runs"]):
+        return "it holds scripted demo answers; the demo is published without review"
+    if answers["answers"] and not answers["locked"]:
+        return "it holds answers but the question list is not locked"
+    return None
 
 
 def _write_manifest(folder: Path, manifest: dict) -> None:
@@ -302,7 +353,7 @@ def _is_file(path: Path) -> bool:
 
 
 def export_published(target: str | Path | None = None, *, replace: bool = False) -> dict:
-    """Database (read-only) -> published/overview.json + MANIFEST.json, unreviewed."""
+    """Database (read-only) -> published/overview.json + archive.json + MANIFEST.json, unreviewed."""
     out = Path(target) if target is not None else PUBLISHED
     if out.is_symlink() or (out.exists() and not out.is_dir()):
         raise RuntimeError(f"{out} exists and is not a plain folder")
@@ -310,25 +361,33 @@ def export_published(target: str | Path | None = None, *, replace: bool = False)
         raise RuntimeError(f"{out} already holds an export. Pass --replace to overwrite it "
                            "(the new export starts unreviewed).")
     data = _capture()
+    answers = _capture_archive()
+    data["snapshot"]["demo_only"] = data["snapshot"]["demo_only"] and answers["demo_only"]
     if data["snapshot"]["demo_only"]:
         raise RuntimeError("Export refused; nothing was written. This database holds scripted demo data only, "
                            "so there is nothing to review: the scripted demo is already the public site.")
-    hits = _scan(data)
+    problem = _archive_problem(answers)
+    if problem:
+        raise RuntimeError(f"Export refused; nothing was written. Answers Over Time: {problem}.")
+    hits = _scan(data) + [f"archive {hit}" for hit in _scan(answers)]
     if hits:
         raise RuntimeError("Export refused; nothing was written. Content guards matched:\n  " + "\n  ".join(hits))
     payload = _encode(data)
+    archive_payload = _encode(answers)
     by_source, records = _counts(data)
     manifest = {"schema": SCHEMA, "file": DATA_FILE, "sha256": hashlib.sha256(payload).hexdigest(),
                 "exported_at": data["snapshot"]["generated_at"], "mode": data.get("mode"),
                 "actions_by_source": by_source, "records": records,
+                "archive": {**_archive_counts(answers), "sha256": hashlib.sha256(archive_payload).hexdigest()},
                 "reviewed": False, "reviewed_at": None}
     out.mkdir(parents=True, exist_ok=True)
-    for stale in list(out.iterdir()):   # only reached with --replace: the folder holds the two files and nothing else
+    for stale in list(out.iterdir()):   # only reached with --replace: the folder holds the three files and nothing else
         if stale.is_dir() and not stale.is_symlink():
             shutil.rmtree(stale)
         else:
             stale.unlink()
     (out / DATA_FILE).write_bytes(payload)
+    (out / ARCHIVE_FILE).write_bytes(archive_payload)
     _write_manifest(out, manifest)
     return manifest
 
@@ -342,14 +401,18 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
     if folder.is_symlink() or not folder.is_dir():
         raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (not a plain folder)")
     names = sorted(entry.name for entry in folder.iterdir())
-    extra = [name for name in names if name not in (DATA_FILE, MANIFEST_FILE)]
+    extra = [name for name in names if name not in FILES]
     if extra:
-        raise RuntimeError(f"{folder}: unexpected entries ({len(extra)}); it must hold only {DATA_FILE} and {MANIFEST_FILE}")
+        raise RuntimeError(f"{folder}: unexpected entries ({len(extra)}); it must hold only {DATA_FILE}, {ARCHIVE_FILE} and {MANIFEST_FILE}")
     if not _is_file(folder / MANIFEST_FILE) or not _is_file(folder / DATA_FILE):
         raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (must be regular files)")
+    if not _is_file(folder / ARCHIVE_FILE):
+        raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is missing or unreadable (must be a regular file). An export made "
+                           "before Answers Over Time has none; export and review again.")
     try:
         manifest = _loads((folder / MANIFEST_FILE).read_bytes())
         payload = (folder / DATA_FILE).read_bytes()
+        archive_payload = (folder / ARCHIVE_FILE).read_bytes()
     except (OSError, ValueError) as err:
         raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable ({type(err).__name__})") from None
     if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA or manifest.get("file") != DATA_FILE:
@@ -383,11 +446,32 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
         raise RuntimeError(f"{folder}: {DATA_FILE} is not an exported overview") from None
     if manifest.get("actions_by_source") != by_source or manifest.get("records") != records:
         raise RuntimeError(f"{folder}: the counts in the manifest do not match {DATA_FILE}")
-    hits = _scan(data)
+    # ---- archive.json: the same rules (hash, ASCII, strict JSON, shape, counts, guards) ----
+    listed = manifest.get("archive")
+    if not isinstance(listed, dict) or listed.get("file") != ARCHIVE_FILE:
+        raise RuntimeError(f"{folder}: the manifest does not describe {ARCHIVE_FILE}")
+    if hashlib.sha256(archive_payload).hexdigest() != listed.get("sha256"):
+        raise RuntimeError(f"{folder}: {ARCHIVE_FILE} does not match the sha256 in the manifest. "
+                           "It changed after export; export and review again.")
+    if not archive_payload.isascii():
+        raise RuntimeError(f"{folder}: {ARCHIVE_FILE} holds a non-ASCII byte. An export writes every non-ASCII "
+                           "character as a \\uXXXX escape so that none can hide from the reviewer; export again.")
+    try:
+        answers = _loads(archive_payload)
+    except _Malformed as err:
+        raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is not strict JSON ({err})") from None
+    except ValueError:
+        raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is not an exported answer archive") from None
+    problem = _archive_problem(answers)
+    if problem:
+        raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is refused: {problem}")
+    if {k: v for k, v in listed.items() if k != "sha256"} != _archive_counts(answers):
+        raise RuntimeError(f"{folder}: the counts in the manifest do not match {ARCHIVE_FILE}")
+    hits = _scan(data) + [f"archive {hit}" for hit in _scan(answers)]
     if hits:
         raise RuntimeError(f"{folder}: refused. Content guards matched:\n  " + "\n  ".join(hits))
     if require_reviewed and manifest.get("reviewed") is not True:
-        raise RuntimeError(f"{folder}: not approved (\"reviewed\" is not true). Read {DATA_FILE}, then run "
+        raise RuntimeError(f"{folder}: not approved (\"reviewed\" is not true). Read {DATA_FILE} and {ARCHIVE_FILE}, then run "
                            "python -m live_genesis.snapshot --approve --i-have-read-it")
     return manifest
 
@@ -397,7 +481,7 @@ def approve_published(target: str | Path | None = None, *, confirmed: bool = Fal
     folder = Path(target) if target is not None else PUBLISHED
     manifest = check_published(folder, require_reviewed=False)
     if not confirmed:
-        raise RuntimeError(f"Not approved. Read {folder / DATA_FILE} in full, then repeat with --i-have-read-it")
+        raise RuntimeError(f"Not approved. Read {folder / DATA_FILE} and {folder / ARCHIVE_FILE} in full, then repeat with --i-have-read-it")
     manifest.update(reviewed=True, reviewed_at=utcnow())
     _write_manifest(folder, manifest)
     return manifest
@@ -413,15 +497,19 @@ def build_from_data(outdir: str | Path, published: str | Path | None = None, *, 
     manifest = check_published(folder)
     payload = (folder / DATA_FILE).read_bytes()   # published byte for byte, so anyone can re-check the hash
     info = _loads(payload)["snapshot"]
-    _render(out, payload, kit, include_client, sibling)
+    _render(out, payload, kit, include_client, sibling, (folder / ARCHIVE_FILE).read_bytes())
     return {**info, "api_base": api_base, "manifest": manifest}
 
 
 def _describe(manifest: dict) -> str:
     counts = ", ".join(f"{name} {manifest['actions_by_source'].get(name, 0)}" for name in SOURCES)
     records = ", ".join(f"{name} {n}" for name, n in manifest["records"].items())
+    answered = manifest["archive"]
     return (f"  exported {manifest['exported_at']} · data mode {manifest['mode']}\n"
-            f"  actions by source: {counts}\n  records in file: {records}\n  sha256 {manifest['sha256']}")
+            f"  actions by source: {counts}\n  records in file: {records}\n  sha256 {manifest['sha256']}\n"
+            f"  {ARCHIVE_FILE}: {answered['runs']} run(s), answers by source: "
+            + ", ".join(f"{name} {n}" for name, n in answered["answers_by_source"].items())
+            + f"\n  {ARCHIVE_FILE} sha256 {answered['sha256']}")
 
 
 def main() -> None:
@@ -438,7 +526,7 @@ def main() -> None:
                         help="Relative link to the other published snapshot (demo/ or ../), shown on the page")
     steps = parser.add_mutually_exclusive_group()
     steps.add_argument("--export", metavar="DIR", nargs="?", const=str(PUBLISHED), default=None,
-                       help="Write overview.json and MANIFEST.json for review (default folder: published/)")
+                       help="Write overview.json, archive.json and MANIFEST.json for review (default folder: published/)")
     steps.add_argument("--approve", metavar="DIR", nargs="?", const=str(PUBLISHED), default=None,
                        help="Mark an export as reviewed; needs --i-have-read-it")
     steps.add_argument("--check", metavar="DIR", nargs="?", const=str(PUBLISHED), default=None,
@@ -453,7 +541,7 @@ def main() -> None:
             if args.export:
                 manifest = export_published(args.export, replace=args.replace)
                 print(f"Export written to {args.export} (NOT yet approved). No model was called.\n{_describe(manifest)}")
-                print(f"Next: read {Path(args.export) / DATA_FILE} in full, then run\n"
+                print(f"Next: read {Path(args.export) / DATA_FILE} and {Path(args.export) / ARCHIVE_FILE} in full, then run\n"
                       "  python -m live_genesis.snapshot --approve --i-have-read-it")
             elif args.approve:
                 print(_describe(check_published(args.approve, require_reviewed=False)))
@@ -464,7 +552,8 @@ def main() -> None:
                 else:
                     print("No non-ASCII characters in the file besides the server's own separators.")
                 print("The guards are regular expressions and do not understand meaning. Approving means you "
-                      f"read every agent-written text in {Path(args.approve) / DATA_FILE}.\n"
+                      f"read every agent-written text in {Path(args.approve) / DATA_FILE} and every answer in "
+                      f"{Path(args.approve) / ARCHIVE_FILE}.\n"
                       "Once pushed, the data stays in git history even if you withdraw it later.")
                 manifest = approve_published(args.approve, confirmed=args.i_have_read_it)
                 print(f"Approved at {manifest['reviewed_at']}. Commit the folder to publish it.")

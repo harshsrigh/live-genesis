@@ -7,8 +7,8 @@ Two kinds of values live in the local `.env` file:
   `live_genesis.core` is imported.
 * **Provider credentials** (everything else, notably `OPENAI_API_KEY`,
   `ANTHROPIC_API_KEY` and `OPENAI_COMPATIBLE_API_KEY`): needed only by the process that
-  makes a model call. Only the operator CLI's `round`, `study-run` and `check-provider`
-  (which prints only whether a key is set) commands call `load_provider_credentials()`.
+  makes a model call. Only the operator CLI's `round`, `study-run`, `archive-run` and
+  `check-provider` (which prints only whether a key is set) commands call `load_provider_credentials()`.
 
 The web processes never call a model. They call `drop_provider_secrets()` so that a key
 exported in the shell that started them is removed from their environment as well.

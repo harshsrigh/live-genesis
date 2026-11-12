@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import pages
+from . import archive, archive_pages, pages
 from .core import DatabaseUnavailable, db_path, overview
 
 # One policy for the observatory app and for static snapshots. Everything is same-origin:
@@ -175,6 +175,33 @@ def _item_routes(readonly: bool):
     return post_page, profile_page
 
 
+# ---- Answers Over Time: the same pages a snapshot holds, rendered from the database ----------
+# Read-only connection in both apps; plain HTML with relative links (archive_pages.py). Mock
+# answers are never in the payload. Any failure is a fixed 503 or 404: no path or SQL leaks.
+
+def _archive_page(render) -> HTMLResponse | JSONResponse:
+    try:
+        return HTMLResponse(render(archive.public_payload(readonly=True)))
+    except KeyError:
+        return JSONResponse({"detail": "No such archive page"}, status_code=404)
+    except (DatabaseUnavailable, sqlite3.Error, TypeError, ValueError, archive.ArchiveRefused):
+        return JSONResponse({"detail": UNAVAILABLE}, status_code=503)
+
+
+def archive_redirect():
+    return RedirectResponse("/archive/index.html", status_code=307)
+
+
+def archive_index():
+    return _archive_page(archive_pages.render_index)
+
+
+def archive_question(name: str):
+    if not name.endswith(".html") or not archive.QUESTION_ID.fullmatch(name[:-5]):
+        return JSONResponse({"detail": "No such archive page"}, status_code=404)
+    return _archive_page(lambda payload: archive_pages.render_question(payload, name[:-5]))
+
+
 def add_public_routes(application: FastAPI, *, readonly: bool = False) -> None:
     """Register the human-facing surface: pages, static files, overview and health."""
     methods = ["GET", "HEAD"] if readonly else ["GET"]
@@ -185,4 +212,8 @@ def add_public_routes(application: FastAPI, *, readonly: bool = False) -> None:
     application.add_api_route(f"/{pages.POST_DIR}/{{name}}", post_page, methods=methods, include_in_schema=False)
     application.add_api_route(f"/{pages.AGENT_DIR}/{{name}}", profile_page, methods=methods, include_in_schema=False)
     application.add_api_route("/health", health, methods=methods)
+    for path in ("/archive", "/archive/"):
+        application.add_api_route(path, archive_redirect, methods=methods, include_in_schema=False)
+    application.add_api_route("/archive/index.html", archive_index, methods=methods, include_in_schema=False)
+    application.add_api_route("/archive/q/{name}", archive_question, methods=methods, include_in_schema=False)
     application.add_api_route("/api/overview", get_overview_readonly if readonly else get_overview, methods=methods)

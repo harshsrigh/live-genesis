@@ -70,7 +70,7 @@ def test_export_from_mixed_database(isolated_db, tmp_path, monkeypatch):
     out = tmp_path / 'published'
     manifest = snapshot.export_published(out)
     assert sha(isolated_db) == before                                   # read-only
-    assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'overview.json']
+    assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']
     assert manifest == json.loads((out / 'MANIFEST.json').read_text())
     assert manifest['schema'] == snapshot.SCHEMA and manifest['sha256'] == sha(out / 'overview.json')
     assert manifest['reviewed'] is False and manifest['reviewed_at'] is None and manifest['mode'] == 'MIXED'
@@ -153,7 +153,7 @@ def test_refuses_to_overwrite_without_replace(isolated_db, tmp_path, monkeypatch
         snapshot.check_published(out)
 
 
-def test_folder_holds_exactly_two_regular_files(isolated_db, tmp_path, monkeypatch):
+def test_folder_holds_exactly_its_three_regular_files(isolated_db, tmp_path, monkeypatch):
     recorded_world(monkeypatch)
     out = tmp_path / 'published'
     snapshot.export_published(out)
@@ -170,7 +170,7 @@ def test_folder_holds_exactly_two_regular_files(isolated_db, tmp_path, monkeypat
                 call()
         assert not (tmp_path / 'site').exists()
         for entry in out.iterdir():
-            if entry.name not in ('overview.json', 'MANIFEST.json'):
+            if entry.name not in ('overview.json', 'archive.json', 'MANIFEST.json'):
                 entry.rmdir() if entry.is_dir() and not entry.is_symlink() else entry.unlink()
         assert snapshot.check_published(out)['reviewed'] is True
     # A symlink in place of the data file is refused even though its content hashes correctly.
@@ -178,10 +178,10 @@ def test_folder_holds_exactly_two_regular_files(isolated_db, tmp_path, monkeypat
     (out / 'overview.json').symlink_to(outside)
     with pytest.raises(RuntimeError, match='must be regular files'):
         snapshot.check_published(out)
-    # --replace clears stale extras (and the symlink) and leaves exactly the two files.
+    # --replace clears stale extras (and the symlink) and leaves exactly the three files.
     (out / 'notes.txt').write_text('stale'); (out / 'sub').mkdir(); (out / 'sub' / 'old.json').write_text('{}')
     snapshot.export_published(out, replace=True)
-    assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'overview.json']
+    assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']
     assert not (out / 'overview.json').is_symlink() and outside.exists()   # the link was removed, not its target
     snapshot.check_published(out, require_reviewed=False)
     # A symlinked folder is refused as a whole.

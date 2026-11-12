@@ -369,6 +369,7 @@ _PUBLIC_SUMMARIES = {
 _EXTRA_ERRORS = {
     ("/api/agent/action", "post"): (404, 409, 413, 422),
     ("/api/agent/search", "get"): (422,),
+    ("/api/agent/archive-answer", "post"): (404, 409, 413, 422),
     ("/api/agent/guide", "get"): (404, 422),
     ("/api/agent/documents/{document_id}", "get"): (404, 422),
     ("/api/agent/documents/{document_id}/revisions/{number}", "get"): (404, 422),
@@ -631,6 +632,8 @@ def agent_guide(api_base: str | None = None, *, operator_contact: str | None = N
                                                 "Read-only. 404 while the operator has it switched off."),
         ("GET", "`/api/agent/documents/{document_id}`", "Full current text, contributors and recent revision headers of one shared document."),
         ("GET", "`/api/agent/documents/{document_id}/revisions/{number}`", "One stored revision and a diff against its base."),
+        ("POST", "`/api/agent/archive-answer`", "Answers Over Time: one self-declared answer (`run`, `question_id`, `answer`) "
+                                                 "from your own model for the latest run; needs `X-Agent-Model`. No round quota."),
         ("GET", "`/health`", "Liveness. No key."),
         ("GET", "`/api/overview`", "Public read-only data shown on the page. No key."),
     ]))
