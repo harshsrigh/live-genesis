@@ -275,7 +275,7 @@ def test_context_entry_is_private_small_and_fits_the_prompt(isolated_db, monkeyp
         'id': gid, 'attempts_left': 3, 'your_clue': {'position': 3, 'digit': 7, 'shared': False},
         'seats': [{'position': 1, 'agent': 'Astra', 'digit': None}, {'position': 2, 'agent': 'Moss', 'digit': 0},
                   {'position': 3, 'agent': 'Quill', 'digit': None}],
-        'wrong_guesses': [], 'next': 'game_share'}]}
+        'wrong_guesses': [], 'expires_in_rounds': 6, 'next': 'game_share'}]}
     assert agent_context(b)['games']['active'][0]['next'] == 'wait for the other clues'
     assert agent_context(outsider)['games'] == {'active': [], 'can_start': False}
     assert len(json.dumps(mine)) < 600

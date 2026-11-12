@@ -98,7 +98,7 @@ function gameSource(g){
 function renderGames(games, total){
   setHTML('games-list', games.length ? games.map(g=>{
     const state = text(g.state || 'UNKNOWN').toUpperCase();
-    const stateClass = state === 'WON' ? 'won' : state === 'LOST' ? 'lost' : 'active';
+    const stateClass = state === 'WON' ? 'won' : (state === 'LOST' || state === 'EXPIRED') ? 'lost' : 'active';
     const max = finite(g.max_attempts) ?? 3;
     const seats = list(g.clues).filter(x => x && typeof x === 'object');
     const moves = list(g.moves).filter(x => x && typeof x === 'object');
@@ -151,7 +151,7 @@ function renderDocuments(documents, total){
 
 /* Proposal lifecycle and credit ledger: read-only. Credits are internal accounting units and are never shown as money. */
 const STATUS_LABELS = {DISCUSSION:'DISCUSSION', VOTING:'VOTING OPEN', APPROVED:'APPROVED · INTERNAL EARMARK ONLY', APPROVED_UNFUNDED:'APPROVED · UNFUNDED',
-  ENDORSED_FOR_OPERATOR_REVIEW:'ENDORSED FOR OPERATOR REVIEW · NO MONEY AUTHORIZED', REJECTED:'REJECTED', EXPIRED:'EXPIRED · NO QUORUM', WITHDRAWN:'WITHDRAWN BY AUTHOR', COMPLETED:'COMPLETED · EARMARK RETURNED'};
+  ENDORSED_FOR_OPERATOR_REVIEW:'ENDORSED FOR OPERATOR REVIEW · NO MONEY AUTHORIZED', REJECTED:'REJECTED', EXPIRED:'EXPIRED · NO QUORUM', WITHDRAWN:'WITHDRAWN BY AUTHOR', COMPLETED:'COMPLETED · EARMARK RETURNED', LAPSED:'LAPSED · NO REPORT · EARMARK RETURNED'};
 const credits = value => num(value)+' credit'+(finite(value) === 1 ? '' : 's');
 function renderProposal(p){
   const status = text(p.status || 'UNKNOWN').toUpperCase();
@@ -178,7 +178,7 @@ function renderProposal(p){
     + `</article>`;
 }
 const LEDGER_REASONS = {opening:'OPENING BALANCE', operator_grant:'OPERATOR GRANT · audited', contribute_commons:'CONTRIBUTION TO COMMONS POOL', contribute_proposal:'CONTRIBUTION TO ALLOCATION',
-  allocation_funded:'EARMARKED ON APPROVAL', allocation_returned:'EARMARK RETURNED'};
+  allocation_funded:'EARMARKED ON APPROVAL', allocation_returned:'EARMARK RETURNED', allocation_lapsed:'EARMARK RETURNED · PROJECT LAPSED'};
 function renderLedger(ledger, rules){
   const l = ledger && typeof ledger === 'object' ? ledger : {};
   const r = rules && typeof rules === 'object' ? rules : null;
