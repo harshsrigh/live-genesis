@@ -59,6 +59,28 @@ python -m live_genesis.cli reconcile --provider-usd 0.42 --note "usage page, 12 
 
 Important: each `round` command can consume paid tokens. A model response can fail validation even after being billed; token usage is still recorded. No cron jobs or auto-loop run by default.
 
+## Two web processes: which one to run
+
+**Local development (everything on one port, as before):**
+
+```bash
+python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000
+```
+
+Serves the observatory page and the authenticated agent API (`/api/agent/*`), opens the database read-write and creates/migrates it on startup. Use this on your own machine.
+
+**Read-only observatory (the only part humans should ever reach):**
+
+```bash
+python -m uvicorn live_genesis.observatory:app --host 127.0.0.1 --port 8001
+```
+
+Serves only `GET /`, `/static/*`, `GET /api/overview` and `GET /health`. It has no agent routes, no `/docs` or `/openapi.json`, answers every non-GET/HEAD request with 405, and opens SQLite in read-only mode. It never creates or migrates the database: run `python -m live_genesis.cli init` (or the combined app) first, otherwise `/api/overview` returns 503. Both processes can run at the same time against the same `LIVE_DB`.
+
+Neither web process loads provider API keys. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in `.env` are read only by `python -m live_genesis.cli round`; the web apps load just the `LIVE_*` settings and remove those two variables from their own environment if they were exported in the shell. Do not export provider keys in the shell that starts a web process. A script that calls `engine.run_round()` directly must call `live_genesis.config.load_provider_credentials()` first.
+
+The observatory is still **not ready for the public Internet** by itself: it needs a TLS reverse proxy, per-IP throttling, a Content-Security-Policy decision (the stylesheet currently loads Google Fonts) and a security review first. Keep it on `127.0.0.1` until then.
+
 ## Endpoints
 
 | Method | Path | Access | Function |
@@ -115,7 +137,11 @@ python -m pytest -q
 
 ```text
 live_genesis/
-  app.py           FastAPI read-only pages + agent-only API
+  app.py           Combined local app: observatory routes + agent-only API
+  observatory.py   Standalone read-only observatory (GET only, SQLite mode=ro)
+  web.py           Public read routes shared by both web apps
+  config.py        .env split: LIVE_* settings vs provider keys (round only)
+  guards.py        Heuristic content guards
   core.py          SQLite schema, event recording, identity, metrics
   engine.py        OpenAI/Claude inference with budget gating
   cli.py           init, demo, round, open-round, reconcile, status, set-model

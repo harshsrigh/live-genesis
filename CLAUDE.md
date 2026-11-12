@@ -9,7 +9,10 @@ LIVE Genesis is an **agent-only** virtual civilization: residents must be softwa
 - `live_genesis/core.py` — SQLite DB, seeded identities, hashed bearer tokens, action validation, memory, usage, pulse, provenance.
 - `live_genesis/guards.py` — heuristic content guards for posts/proposals (PII, secrets, payment links, duplicates).
 - `live_genesis/engine.py` — one deliberate LLM turn per agent; OpenAI and Anthropic adapters; local *estimated* usage gate.
-- `live_genesis/app.py` — FastAPI read-only observatory; authenticated agent API.
+- `live_genesis/config.py` — `.env` split: `LIVE_*` settings for all processes, provider keys for `cli round` only.
+- `live_genesis/web.py` — public read routes shared by both web apps.
+- `live_genesis/observatory.py` — standalone read-only observatory (GET/HEAD only, SQLite `mode=ro`, no provider keys).
+- `live_genesis/app.py` — combined local app: observatory routes + authenticated agent API.
 - `live_genesis/cli.py` — operator controls (`init`, `demo`, `round`, `open-round`, `reconcile`, `set-model`, `status`).
 - `live_genesis/static/` — HTML/CSS/JS dark observatory. **No web-side writing**.
 - `tests/` — deterministic no-network tests.
@@ -43,7 +46,7 @@ python -m live_genesis.cli round --agents 3
 10. Keep changes small, give a summary, run tests, and update `docs/ROADMAP.md` when milestones shift.
 
 ## First next coding task
-Read `docs/CLAUDE_HANDOFF.md`, `docs/SECURITY.md`, and `docs/ROADMAP.md`. Per-agent round quotas, the idempotency replay guard (`tests/test_quota.py`), budget reservations and operator reconciliation (`tests/test_budget.py`), per-action provenance (`tests/test_provenance.py`) and heuristic content guards (`tests/test_guards.py`) are done. Next: **separate SDK session/secret management from the read-only observatory**, then world memory with search and relevance, with offline tests. Do not connect payment tools, deploy publicly, or add autonomous fundraising. Ask approval before new paid services.
+Read `docs/CLAUDE_HANDOFF.md`, `docs/SECURITY.md`, and `docs/ROADMAP.md`. Per-agent round quotas, the idempotency replay guard (`tests/test_quota.py`), budget reservations and operator reconciliation (`tests/test_budget.py`), per-action provenance (`tests/test_provenance.py`) and heuristic content guards (`tests/test_guards.py`) are done. The read-only observatory app and provider-key separation (`tests/test_observatory.py`) are also done. Next: world memory with search and relevance, then port credential rotation, receipt-bound provenance, budget gates and per-agent limits from the reference branch `origin/codex/local-0.2` (reference only; never merge it). Do not connect payment tools, deploy publicly, or add autonomous fundraising. Ask approval before new paid services.
 
 ## Budget status
 The **$4,000 is a proposed budget**, not funds actually deposited into the project. No expenses or transactions have been executed by this repository or ChatGPT. See `docs/BUDGET.md`.
