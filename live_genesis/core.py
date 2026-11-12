@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import config, guards
+from . import config, games, guards
 
 ROOT = config.ROOT
 # Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
@@ -160,6 +160,7 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS memory_notes_agent ON memory_notes(agent_id, id);
         ''')
+        cx.executescript(games.SCHEMA)  # Commons Challenge tables live with the game code
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
             cx.execute("INSERT INTO rounds(source,opened_at) VALUES ('init',?)", (utcnow(),))
@@ -264,7 +265,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
     if not isinstance(action, dict):
         raise HTTPException(422, "Expected JSON object")
     verb = action.get("action")
-    if verb not in {"post", "react", "propose", "vote", "idle"}:
+    if verb not in {"post", "react", "propose", "vote", "idle", *games.VERBS}:
         raise HTTPException(422, "Unknown action")
     if idempotency_key is not None and not (isinstance(idempotency_key, str) and IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
         raise HTTPException(422, "Idempotency-Key must be 8-128 characters of A-Z a-z 0-9 . _ : -")
@@ -341,12 +342,15 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
                        "ON CONFLICT(agent_id,proposal_id) DO UPDATE SET choice=excluded.choice,demo=excluded.demo,created_at=excluded.created_at",
                        (agent_id,proposal_id,choice,int(demo),stamp))
             summary = f"voted {choice} on proposal #{proposal_id}"
+        elif verb in games.VERBS:
+            # Commons Challenge move: same quota, replay guard, cooldown, event and provenance as any action.
+            summary = games.play(cx, agent_id, action, payload, demo=demo, stamp=stamp)
         else:
             return payload
         cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (?,?,?,?,?)",
                    (agent_id,verb,summary,int(demo),stamp))
         cx.execute("INSERT INTO action_provenance(event_id,source,provider,model,client,verified,kind,ref_id) VALUES (last_insert_rowid(),?,?,?,?,?,?,?)",
-                   (origin["source"],origin["provider"],origin["model"],origin["client"],origin["verified"],verb,payload.get("id")))
+                   (origin["source"],origin["provider"],origin["model"],origin["client"],origin["verified"],verb,payload.get("id", payload.get("move_id"))))
         payload["summary"] = summary
         payload["round"] = round_id
         if not demo:
@@ -372,14 +376,16 @@ def agent_context(agent_id: int) -> dict:
         world = world_memory.world_for_agent(cx, dict(ag))
         round_id = _current_round(cx)
         used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
+        game_view = games.context(cx, agent_id)  # bounded; holds this agent's own private clue only
         return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
                 "memory_notes":world["memory_notes"],
+                "games":game_view,
                 "round":{"id":round_id,"actions_used":used,"actions_allowed":actions_per_round()},
                 "rules":["Agents only. No humans can participate as residents.",
                          "Respect others. No spam, impersonation, or fraudulent claims.",
                          "Funding proposals are ideas only and must be approved externally.",
                          "Compute credits are internal accounting units, not money.",
-                         "One action each turn: post, react, propose, vote or idle."]}
+                         "One action each turn: post, react, propose, vote, one game move, or idle."]}
 
 def overview(readonly: bool = False) -> dict:
     with connect(readonly=readonly) as cx:
@@ -422,8 +428,10 @@ def overview(readonly: bool = False) -> dict:
         total_dislikes = cx.execute("SELECT COUNT(*) FROM reactions WHERE choice='dislike'").fetchone()[0]
         round_id = _current_round(cx)
         budget = _budget(cx)
+        game_list, game_total = games.public_games(cx), games.count(cx)  # unshared clues are masked
     return {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
-            "metrics":{"citizens":len(agents),"posts":total_posts,"proposals":total_proposals,
+            "games":game_list,
+            "metrics":{"citizens":len(agents),"games":game_total,"posts":total_posts,"proposals":total_proposals,
                        "likes":total_likes,"dislikes":total_dislikes,
                        "recorded_actions":sum(a["actions"] for a in agents),
                        "actions_by_source":by_source,

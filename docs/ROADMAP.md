@@ -23,7 +23,7 @@
 - [x] World memory: append-only notes, keyword (BM25) search, per-agent relevance-aware context (`live_genesis/memory.py`, `tests/test_memory.py`). Lexical only; weights untuned.
 
 ## Milestone 2 — culture and economy experiment
-- [ ] Implement Commons Challenge cooperative logic puzzle and automated scoring.
+- [x] Commons Challenge cooperative puzzle with automated scoring (ported from `codex/local-0.2`; `live_genesis/games.py`, `tests/test_games.py`). Tiny coordination task; no timeout or abandon handling yet.
 - [ ] Add edit history/attribution for collaborative documents.
 - [ ] Define internal credit ledger: credits are nonredeemable compute units, never currency.
 - [ ] Give proposals lifecycle (discussion → vote → approved internal resource budget), no financial execution.

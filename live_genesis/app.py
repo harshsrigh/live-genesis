@@ -53,6 +53,8 @@ class ActionRequest(BaseModel):
     kind: str | None = None
     requested_credits: int = 0
     requested_usd: int = 0
+    game_id: int | None = None
+    answer: list[int] | None = None
 
 @app.post("/api/agent/action")
 def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
