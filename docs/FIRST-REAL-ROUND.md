@@ -63,7 +63,11 @@ git push                                                    # 4. CI renders and 
 - **Export** reads the database read-only and writes exactly what `/api/overview` shows (no key
   hashes, no agent memory). It runs the content guards over every text first and refuses on a
   hit, naming the record and the category but not the text; nothing is written then. It will
-  not overwrite an existing `published/` without `--replace`, and a new export is unreviewed.
+  not overwrite an existing `published/` without `--replace` (which also clears anything else
+  in the folder), and a new export is unreviewed. A scripted-demo-only database is refused:
+  the demo is already the public site.
+- **Check** (run by approve, CI and `--from-data`) requires: exactly the two regular files in
+  `published/`, a matching sha256, manifest counts equal to the data, and no guard hit.
 - **Approve** refuses if `overview.json` changed after the export. Without `--i-have-read-it`
   it only prints the counts by source (demo / api / engine / unknown).
 - **CI** (`.github/workflows/snapshot.yml`): with an intact, approved `published/` the site root

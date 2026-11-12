@@ -175,15 +175,22 @@ def _write_manifest(folder: Path, manifest: dict) -> None:
     (folder / MANIFEST_FILE).write_bytes((json.dumps(manifest, indent=1) + "\n").encode("utf-8"))
 
 
+def _is_file(path: Path) -> bool:
+    return path.is_file() and not path.is_symlink()
+
+
 def export_published(target: str | Path | None = None, *, replace: bool = False) -> dict:
     """Database (read-only) -> published/overview.json + MANIFEST.json, unreviewed."""
     out = Path(target) if target is not None else PUBLISHED
-    if out.exists() and not out.is_dir():
-        raise RuntimeError(f"{out} exists and is not a folder")
+    if out.is_symlink() or (out.exists() and not out.is_dir()):
+        raise RuntimeError(f"{out} exists and is not a plain folder")
     if out.exists() and any(out.iterdir()) and not replace:
         raise RuntimeError(f"{out} already holds an export. Pass --replace to overwrite it "
                            "(the new export starts unreviewed).")
     data = _capture()
+    if data["snapshot"]["demo_only"]:
+        raise RuntimeError("Export refused; nothing was written. This database holds scripted demo data only, "
+                           "so there is nothing to review: the scripted demo is already the public site.")
     hits = _scan(data)
     if hits:
         raise RuntimeError("Export refused; nothing was written. Content guards matched:\n  " + "\n  ".join(hits))
@@ -194,14 +201,30 @@ def export_published(target: str | Path | None = None, *, replace: bool = False)
                 "actions_by_source": by_source, "records": records,
                 "reviewed": False, "reviewed_at": None}
     out.mkdir(parents=True, exist_ok=True)
+    for stale in list(out.iterdir()):   # only reached with --replace: the folder holds the two files and nothing else
+        if stale.is_dir() and not stale.is_symlink():
+            shutil.rmtree(stale)
+        else:
+            stale.unlink()
     (out / DATA_FILE).write_bytes(payload)
     _write_manifest(out, manifest)
     return manifest
 
 
 def check_published(target: str | Path | None = None, *, require_reviewed: bool = True) -> dict:
-    """The one gate used by `--check` (CI), `--approve` and `--from-data`. Raises RuntimeError."""
+    """The one gate used by `--check` (CI), `--approve` and `--from-data`. Raises RuntimeError.
+
+    Hash, folder contents, counts and the content guards are all re-checked here, so a
+    hand-edited manifest cannot carry text past the regex floor."""
     folder = Path(target) if target is not None else PUBLISHED
+    if folder.is_symlink() or not folder.is_dir():
+        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (not a plain folder)")
+    names = sorted(entry.name for entry in folder.iterdir())
+    extra = [name for name in names if name not in (DATA_FILE, MANIFEST_FILE)]
+    if extra:
+        raise RuntimeError(f"{folder}: unexpected entries ({len(extra)}); it must hold only {DATA_FILE} and {MANIFEST_FILE}")
+    if not _is_file(folder / MANIFEST_FILE) or not _is_file(folder / DATA_FILE):
+        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (must be regular files)")
     try:
         manifest = json.loads((folder / MANIFEST_FILE).read_text(encoding="utf-8"))
         payload = (folder / DATA_FILE).read_bytes()
@@ -214,13 +237,22 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
                            "It changed after export; export and review again.")
     try:
         data = json.loads(payload.decode("utf-8"))
-        captured = data["snapshot"]["generated_at"]
+        captured, demo_only = data["snapshot"]["generated_at"], data["snapshot"]["demo_only"]
     except (ValueError, KeyError, TypeError):
         raise RuntimeError(f"{folder}: {DATA_FILE} is not an exported overview") from None
     if captured != manifest.get("exported_at") or data.get("mode") != manifest.get("mode"):
         raise RuntimeError(f"{folder}: manifest and {DATA_FILE} disagree on export time or data mode")
-    if not isinstance(manifest.get("actions_by_source"), dict) or not isinstance(manifest.get("records"), dict):
-        raise RuntimeError(f"{folder}: manifest has no counts")
+    if demo_only is not False:
+        raise RuntimeError(f"{folder}: {DATA_FILE} is scripted demo data only; the demo is published without review")
+    try:
+        by_source, records = _counts(data)
+    except (ValueError, TypeError, AttributeError):
+        raise RuntimeError(f"{folder}: {DATA_FILE} is not an exported overview") from None
+    if manifest.get("actions_by_source") != by_source or manifest.get("records") != records:
+        raise RuntimeError(f"{folder}: the counts in the manifest do not match {DATA_FILE}")
+    hits = _scan(data)
+    if hits:
+        raise RuntimeError(f"{folder}: refused. Content guards matched:\n  " + "\n  ".join(hits))
     if require_reviewed and manifest.get("reviewed") is not True:
         raise RuntimeError(f"{folder}: not approved (\"reviewed\" is not true). Read {DATA_FILE}, then run "
                            "python -m live_genesis.snapshot --approve --i-have-read-it")
@@ -228,12 +260,9 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
 
 
 def approve_published(target: str | Path | None = None, *, confirmed: bool = False) -> dict:
-    """Mark an intact export as reviewed. Re-checks the hash and the guards first."""
+    """Mark an intact export as reviewed. The check re-runs hash, counts and guards first."""
     folder = Path(target) if target is not None else PUBLISHED
     manifest = check_published(folder, require_reviewed=False)
-    hits = _scan(json.loads((folder / DATA_FILE).read_bytes().decode("utf-8")))
-    if hits:
-        raise RuntimeError("Approval refused. Content guards matched:\n  " + "\n  ".join(hits))
     if not confirmed:
         raise RuntimeError(f"Not approved. Read {folder / DATA_FILE} in full, then repeat with --i-have-read-it")
     manifest.update(reviewed=True, reviewed_at=utcnow())

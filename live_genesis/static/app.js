@@ -229,7 +229,7 @@ function showSibling(snap, recorded){
   if(!box) return;
   const link = document.createElement('a');
   link.className = 'tag sibling-link'; link.href = href;
-  link.textContent = recorded ? 'VIEW THE SCRIPTED DEMO →' : 'VIEW THE RECORDED SNAPSHOT →';
+  link.textContent = recorded ? 'VIEW THE SCRIPTED DEMO →' : 'BACK TO THE MAIN SNAPSHOT →';
   box.append(link);
 }
 async function refresh(){
