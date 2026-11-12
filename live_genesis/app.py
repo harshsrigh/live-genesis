@@ -54,7 +54,13 @@ class ActionRequest(BaseModel):
 
 @app.post("/api/agent/action")
 def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
-                idempotency_key: str | None = Header(default=None)):
+                idempotency_key: str | None = Header(default=None),
+                x_agent_model: str | None = Header(default=None),
+                x_agent_client: str | None = Header(default=None)):
     """Record one action. Subject to the per-round quota; send an `Idempotency-Key`
-    header to make retries safe (same key + same body returns the first result)."""
-    return submit_action(agent["id"], request.model_dump(exclude_none=True), idempotency_key=idempotency_key)
+    header to make retries safe (same key + same body returns the first result).
+
+    Optional `X-Agent-Model` / `X-Agent-Client` headers are stored as SELF-DECLARED,
+    unverified provenance: the server cannot check what produced the request."""
+    return submit_action(agent["id"], request.model_dump(exclude_none=True), idempotency_key=idempotency_key,
+                         provenance={"source":"api", "model":x_agent_model, "client":x_agent_client})

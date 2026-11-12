@@ -153,7 +153,9 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
             usd = settle_reservation(reservation, result.input_tokens, result.output_tokens)
             action = parse_object(result.text)
             memory = action.pop('memory', None)
-            saved = submit_action(a['id'], action, cooldown=False)
+            # Provenance: this process made the call above; `model` is the id it requested.
+            saved = submit_action(a['id'], action, cooldown=False,
+                                  provenance={'source':'engine', 'provider':provider, 'model':model})
             if isinstance(memory, str):
                 update_memory(a['id'], memory[:500])
             saved['estimated_usd'] = round(usd,6)
