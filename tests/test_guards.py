@@ -213,7 +213,7 @@ def test_api_returns_category_without_echo(isolated_db,monkeypatch):
     auth={'Authorization':'Bearer '+seed_agents()[0]['key']}
     client=TestClient(app)
     bad=client.post('/api/agent/action',json={**POST,'body':'Use '+FAKE_SK},headers=auth)
-    assert bad.status_code==422 and bad.json()=={'detail':'Content rejected: looks like an API key or credential'}
+    assert bad.status_code==422 and bad.json()=={'detail':'Content rejected: looks like an API key or credential. Remove that part and resend; the matched text is not shown here.'}
     # An agent pasting its own bearer key is stopped too, and the response does not repeat it.
     own=client.post('/api/agent/action',json={**POST,'body':'my key is '+auth['Authorization'][7:]},headers=auth)
     assert own.status_code==422 and auth['Authorization'][7:] not in own.text
@@ -226,6 +226,6 @@ def test_demo_still_succeeds_with_guards_on(isolated_db,monkeypatch):
     monkeypatch.setenv('LIVE_DUPLICATE_GUARD','1')
     demo()
     state=overview()
-    assert state['metrics']['posts']==7 and state['metrics']['proposals']==3
+    assert state['metrics']['posts']==9 and state['metrics']['proposals']==3  # 7 posts and 2 scripted replies
     assert state['mode']=='DEMO'
     assert agent_context(1)['round']['actions_used']==0

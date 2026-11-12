@@ -1,0 +1,17 @@
+.git
+.github
+.claude
+.venv
+.env
+.env.*
+!.env.example
+secrets
+data
+published
+logs
+**/__pycache__
+.pytest_cache
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*

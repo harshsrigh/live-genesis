@@ -16,7 +16,7 @@ from live_genesis.core import DatabaseUnavailable, connect, overview, seed_agent
 from live_genesis.observatory import app
 
 REPO = Path(__file__).resolve().parent.parent
-PROVIDER_KEYS = ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY')
+PROVIDER_KEYS = ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_COMPATIBLE_API_KEY')
 POST = {'action':'post','title':'Observatory test','body':'Read-only surface check','topic':'engineering'}
 
 
@@ -39,7 +39,8 @@ def test_route_allow_list():
         else:
             assert methods <= {'GET', 'HEAD'}, (route.path, methods)
         seen.add(route.path)
-    assert seen == {'/', '/static', '/health', '/api/overview'}
+    assert seen == {'/', '/stats.html', '/post/{name}', '/profile/{name}', '/static', '/health', '/api/overview',
+                    '/archive', '/archive/', '/archive/index.html', '/archive/q/{name}'}
     assert not any('agent' in path for path in seen)
     assert app.openapi_url is None and app.docs_url is None and app.redoc_url is None
 
@@ -59,7 +60,10 @@ def test_read_routes_and_headers(isolated_db):
             assert response.headers['x-content-type-options'] == 'nosniff'
             assert response.headers['referrer-policy'] == 'no-referrer'
             assert response.headers['x-frame-options'] == 'DENY'
-            assert 'content-security-policy' not in response.headers  # deliberately deferred
+            policy = response.headers['content-security-policy']
+            assert "default-src 'none'" in policy and "script-src 'self'" in policy and "frame-ancestors 'none'" in policy
+            assert 'unsafe-eval' not in policy and 'http' not in policy and '*' not in policy
+            assert "'unsafe-inline'" not in policy.replace("style-src-attr 'unsafe-inline'", '')
         assert page.headers.get('cache-control') != 'no-store'  # only the API payload is uncacheable
 
 
@@ -141,7 +145,7 @@ def test_overview_matches_combined_app(isolated_db):
         observed = reader.get('/api/overview')
     assert expected.status_code == observed.status_code == 200
     assert observed.json() == expected.json() == json.loads(json.dumps(overview(readonly=True)))
-    assert observed.json()['metrics']['posts'] == 8
+    assert observed.json()['metrics']['posts'] == 10
     assert observed.json()['metrics']['actions_by_source']['api'] == 1
     assert 'key_hash' not in observed.text and 'memory' not in observed.json()['agents'][0]
 
@@ -184,7 +188,8 @@ print(json.dumps(report))
 def test_importing_web_apps_loads_no_engine_sdk_or_env_secrets(tmp_path):
     env_file = tmp_path / 'dotenv-for-test'
     env_file.write_text('OPENAI_API_KEY=fake-openai-key-never-used\nANTHROPIC_API_KEY=fake-anthropic-key-never-used\n'
-                        'OPENAI_BASE_URL=http://127.0.0.1:9\n'
+                        'OPENAI_COMPATIBLE_API_KEY=fake-compatible-key-never-used\nOPENAI_BASE_URL=http://127.0.0.1:9\n'
+                        'LIVE_COMPAT_BASE_URL=http://127.0.0.1:9/v1\n'
                         f'LIVE_DB={tmp_path / "from-dotenv.sqlite"}\nLIVE_ACTIONS_PER_ROUND=3\nLIVE_SPEND_LIMIT_USD=2.50\n')
     report = run_python(IMPORT_CHECK, env_file)
     assert report['forbidden_modules'] == []
@@ -195,7 +200,7 @@ def test_importing_web_apps_loads_no_engine_sdk_or_env_secrets(tmp_path):
     assert report['db_name'] == 'from-dotenv.sqlite'
     assert report['db_exists'] is False  # importing never creates a database
     # The engine/CLI path can still obtain them, and the web apps can still drop them.
-    assert report['secrets_after_explicit_load'] == ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL']
+    assert report['secrets_after_explicit_load'] == ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'OPENAI_BASE_URL', 'OPENAI_COMPATIBLE_API_KEY']
     assert report['secrets_after_drop'] == ['OPENAI_BASE_URL']
 
 
@@ -203,7 +208,8 @@ def test_exported_keys_are_dropped_at_import_and_environment_wins_over_dotenv(tm
     env_file = tmp_path / 'dotenv-for-test'
     env_file.write_text('LIVE_ACTIONS_PER_ROUND=3\n')
     report = run_python(IMPORT_CHECK, env_file, env_overrides={
-        'OPENAI_API_KEY': 'fake-exported-key-never-used', 'LIVE_ACTIONS_PER_ROUND': '5',
+        'OPENAI_API_KEY': 'fake-exported-key-never-used', 'OPENAI_COMPATIBLE_API_KEY': 'fake-exported-compatible-key',
+        'LIVE_ACTIONS_PER_ROUND': '5',
         'LIVE_DB': str(tmp_path / 'unused.sqlite')})
     assert report['secrets_after_import'] == []
     assert report['actions_per_round'] == 5

@@ -54,9 +54,9 @@ def test_prompt_is_trimmed_to_valid_json_not_sliced():
     prop={'id':1,'title':'t'*100,'body':'b'*1400,'kind':'project','requested_usd':0,'requested_credits':0,'author':'Moss','yes':0,'no':0}
     context={'identity':{'name':'Astra','memory':'m'*700},'recent_posts':[{**post,'id':i} for i in range(8,0,-1)],
              'proposals':[{**prop,'id':i} for i in range(6,0,-1)],'rules':['r'*80]*5}
-    assert len(json.dumps(context,separators=(',',':')))>engine.PROMPT_CHAR_LIMIT
+    assert len(json.dumps(context,separators=(',',':')))>engine.PROMPT_BYTE_LIMIT
     prompt=engine.build_prompt(context)
-    assert len(prompt)<=engine.PROMPT_CHAR_LIMIT
+    assert len(prompt.encode())<=engine.PROMPT_BYTE_LIMIT
     parsed=json.loads(prompt)  # still valid JSON
     assert parsed['identity']==context['identity'] and parsed['rules']==context['rules']
     assert parsed['recent_posts'][0]['id']==8 and parsed['proposals'][0]['id']==6  # newest kept

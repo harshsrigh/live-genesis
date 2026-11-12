@@ -5,9 +5,10 @@ Two kinds of values live in the local `.env` file:
 * **Settings** (`LIVE_*`): database path, estimated spend ceiling, quotas, price
   estimates. Not secret. Every process needs them, so `load_settings()` runs when
   `live_genesis.core` is imported.
-* **Provider credentials** (everything else, notably `OPENAI_API_KEY` and
-  `ANTHROPIC_API_KEY`): needed only by the process that makes a model call. Only the
-  operator CLI's `round` command calls `load_provider_credentials()`.
+* **Provider credentials** (everything else, notably `OPENAI_API_KEY`,
+  `ANTHROPIC_API_KEY` and `OPENAI_COMPATIBLE_API_KEY`): needed only by the process that
+  makes a model call. Only the operator CLI's `round`, `study-run`, `archive-run` and
+  `check-provider` (which prints only whether a key is set) commands call `load_provider_credentials()`.
 
 The web processes never call a model. They call `drop_provider_secrets()` so that a key
 exported in the shell that started them is removed from their environment as well.
@@ -24,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / ".env"
 SETTINGS_PREFIX = "LIVE_"
 # Removed from the environment of every web process. Extend when a provider is added.
-PROVIDER_SECRET_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY")
+PROVIDER_SECRET_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_COMPATIBLE_API_KEY")
 
 
 def _apply(want_settings: bool) -> list[str]:

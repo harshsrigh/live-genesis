@@ -213,6 +213,7 @@ def large_world():
     for n in range(1, 16):
         propose(who['Lumen'], f'Shelf plan {n}', f'Reorder warehouse shelf row {n} before the next inventory.')
     act(who['Moss'], {'action': 'react', 'post_id': 2, 'choice': 'like'})  # someone answered Astra's old post
+    open_round(); open_round()  # proposal lifecycle: one full discussion round, then all 15 are in VOTING
     for n in range(1, 13):
         if n != 2:  # Astra has voted on every older proposal except #2
             act(who['Astra'], {'action': 'vote', 'proposal_id': n, 'choice': 'yes'})
@@ -233,9 +234,9 @@ def test_large_world_context_blends_recent_relevant_and_open_business(isolated_d
     assert all(proposals[i] == 'recent' for i in (15, 14, 13)) and astra['proposals'][0]['id'] == 15
     assert proposals[2] == 'unvoted' and astra['proposals'][1]['id'] == 2  # open business right after the newest item
     assert set(posts.values()) <= {'recent', 'relevant', 'unvoted', 'yours'}
-    # Same fields as before, plus `why`.
-    assert list(astra['recent_posts'][0]) == ['id', 'topic', 'title', 'body', 'author', 'likes', 'dislikes', 'why']
-    assert list(astra['proposals'][0]) == ['id', 'title', 'body', 'kind', 'requested_usd', 'requested_credits', 'author', 'yes', 'no', 'why']
+    # Same fields as before, plus `why` (and, for proposals, the lifecycle `status` and `next`).
+    assert list(astra['recent_posts'][0]) == ['id', 'reply_to', 'topic', 'title', 'body', 'author', 'likes', 'dislikes', 'why']
+    assert list(astra['proposals'][0]) == ['id', 'title', 'body', 'kind', 'requested_usd', 'requested_credits', 'author', 'yes', 'no', 'why', 'status', 'next']
     assert [p for p in astra['recent_posts'] if p['id'] == 2][0]['likes'] == 1
     # A different role gets a different older selection but the same newest items.
     quill_posts = {p['id']: p['why'] for p in quill['recent_posts']}
@@ -260,7 +261,7 @@ def test_voted_proposals_show_counts_and_memory_changes_selection(isolated_db):
 
 def legacy_sets():
     with connect() as cx:
-        posts = [dict(r) for r in cx.execute('''SELECT p.id,p.topic,p.title,p.body,a.name author,
+        posts = [dict(r) for r in cx.execute('''SELECT p.id,p.reply_to,p.topic,p.title,p.body,a.name author,
            COALESCE(SUM(CASE WHEN r.choice='like' THEN 1 ELSE 0 END),0) likes,
            COALESCE(SUM(CASE WHEN r.choice='dislike' THEN 1 ELSE 0 END),0) dislikes
            FROM posts p JOIN agents a ON p.agent_id=a.id LEFT JOIN reactions r ON r.post_id=p.id
@@ -274,13 +275,17 @@ def legacy_sets():
 
 
 def without_why(items):
-    return sorted(({k: v for k, v in item.items() if k != 'why'} for item in items), key=lambda d: d['id'])
+    # `status` / `next` are lifecycle annotations added by governance.annotate, not part of the selection.
+    return sorted(({k: v for k, v in item.items() if k not in ('why', 'status', 'next')} for item in items), key=lambda d: d['id'])
 
 
 def test_small_world_returns_the_same_items_as_before(isolated_db, tmp_path, monkeypatch):
     seed_agents()  # ten agents exist, so demo() writes no key file
     empty = agent_context(1)
     assert empty['recent_posts'] == [] and empty['proposals'] == [] and empty['memory_notes'] == []
+    # The scripted thread (two replies) would make 9 posts, one more than a context shows: left out here,
+    # because this test is about a world small enough to be shown whole.
+    monkeypatch.setattr('live_genesis.cli.demo_thread', lambda ids, recorded: None)
     demo()  # scripted sample world: 7 posts, 3 proposals, reactions and votes
     old_posts, old_proposals = legacy_sets()
     for agent_id in ids_by_name().values():
@@ -316,7 +321,7 @@ def test_context_notes_are_bounded_recent_plus_relevant(isolated_db):
                                                          ('recent', 'Sketched constellation number 4 for the atlas.')]
     assert ('relevant', 'Warehouse shelves and spare cables were recounted in the storage batch.') in [(n['why'], n['note']) for n in notes]
     assert 2 <= len(notes) <= 5 and len({n['id'] for n in notes}) == len(notes)
-    assert all(set(n) == {'id', 'round', 'note', 'why'} and n['round'] == 1 for n in notes)
+    assert all(set(n) == {'id', 'round', 'note', 'why'} and n['round'] == 3 for n in notes)  # large_world opens two rounds for the proposal lifecycle
     assert agent_context(who['Moss'])['memory_notes'] == []  # notes are private to their agent
 
 
@@ -334,9 +339,9 @@ def test_prompt_stays_within_limit_for_a_world_of_maximum_length_items(isolated_
     assert len(ctx['recent_posts']) == 8 and len(ctx['proposals']) == 6
     assert len(ctx['identity']['memory']) == 700
     assert 1 <= len(ctx['memory_notes']) <= 5 and sum(len(n['note']) for n in ctx['memory_notes']) <= 1500
-    assert len(json.dumps(ctx, ensure_ascii=False, separators=(',', ':'))) > engine.PROMPT_CHAR_LIMIT  # trimming is needed
+    assert len(json.dumps(ctx, ensure_ascii=False, separators=(',', ':'))) > engine.PROMPT_BYTE_LIMIT  # trimming is needed
     prompt = engine.build_prompt(ctx)
-    assert len(prompt) <= engine.PROMPT_CHAR_LIMIT
+    assert len(prompt.encode()) <= engine.PROMPT_BYTE_LIMIT
     parsed = json.loads(prompt)
     assert parsed['identity'] == ctx['identity'] and parsed['memory_notes'] == ctx['memory_notes'] and parsed['rules'] == ctx['rules']
     # Items are dropped from the end only: what survives is a prefix, starting with the newest item.

@@ -507,7 +507,7 @@ def test_context_is_bounded_and_prompt_stays_valid_at_maximum_sizes(isolated_db)
         assert entry['focus']['complete'] is False and len(entry['focus']['body']) <= documents.CONTEXT_EXCERPT
         assert len(entry['recent']) <= documents.CONTEXT_DOCUMENTS
         prompt = engine.build_prompt(context)
-        assert len(prompt) <= engine.PROMPT_CHAR_LIMIT
+        assert len(prompt.encode()) <= engine.PROMPT_BYTE_LIMIT
         parsed = json.loads(prompt)
         assert parsed['documents'] == entry and parsed['games'] == context['games']
         assert parsed['recent_posts'] and parsed['proposals']    # documents did not crowd everything else out
@@ -636,7 +636,7 @@ def test_demo_document_on_empty_database(isolated_db, tmp_path, capsys):
     cli.demo_document()
     out = capsys.readouterr().out
     assert 'NO model was called' in out and 'SCRIPTED' in out and '"history_breaks": []' in out
-    assert (tmp_path / 'secrets' / 'agent-keys.json').exists()   # agents had to be created
+    assert cli.key_file().exists() and cli.key_file().parent == tmp_path / 'secrets'   # agents had to be created
     state = overview()
     doc = state['documents'][0]
     assert state['mode'] == 'DEMO' and state['metrics']['documents'] == 1
@@ -709,7 +709,7 @@ def test_revoked_agent_cannot_edit(isolated_db):
     before = counts()
     open_round()
     edit = {'action': 'doc_revise', 'document_id': doc, 'base_revision': 1, 'body': V2, 'summary': 'Should not land'}
-    assert rejected(403, submit_action, b, edit).detail == 'Agent disabled by the operator'          # engine path (no bearer key)
+    assert rejected(403, submit_action, b, edit).detail.startswith('Agent disabled by the operator')        # engine path (no bearer key)
     rejected(403, submit_action, b, {'action': 'doc_create', 'title': 'Nope', 'body': V2})
     rejected(403, submit_action, b, {'action': 'doc_revert', 'document_id': doc, 'base_revision': 1, 'revision': 1})
     with TestClient(app) as client:
@@ -735,7 +735,7 @@ def test_engine_round_can_create_and_revise(isolated_db, monkeypatch):
     monkeypatch.setattr(engine, 'infer', infer)
     outcomes = engine.run_round(limit=3)
     assert [o.get('revision') for o in outcomes[:2]] == [1, 2]
-    assert outcomes[2] == {'agent': 'Quill', 'error': 'HTTPException'}          # stale base: paid for, nothing recorded
+    assert outcomes[2] == {'agent': 'Quill', 'error': 'HTTPException', 'refusal': '409:conflict'}          # stale base: paid for, nothing recorded
     assert seen[0] == {'focus': None, 'recent': []} and seen[1]['focus']['body'] == V1 and seen[2]['focus']['head'] == 2
     doc = overview()['documents'][0]
     assert (doc['source'], doc['head']) == ('engine', 2)

@@ -160,7 +160,7 @@ def test_http_action_passes_the_authenticated_credential(isolated_db,monkeypatch
 
 def test_cli_rotate_and_revoke(isolated_db,monkeypatch,capsys,tmp_path):
     old=seed_agents()[0]['key']
-    key_path=tmp_path/'secrets'/'agent-keys.json'
+    key_path=tmp_path/'secrets'/'agent-keys.genesis.json'  # the test database is genesis.sqlite, not the default live.db
     assert cli.key_file()==key_path  # conftest points the CLI away from the repository
     run_cli(monkeypatch,'rotate-key','1')
     out=capsys.readouterr().out
@@ -434,7 +434,7 @@ def test_overrun_reconciled_to_a_different_figure_and_release_open(isolated_db):
 
 def test_engine_overrun_records_the_paid_action_then_stops(isolated_db,monkeypatch):
     seed_agents()
-    called=fake_provider(monkeypatch,tokens=(50000,650))  # above the 12,000-token bound that was held
+    called=fake_provider(monkeypatch,tokens=(50000,650))  # above the byte-bound hold for the prompt sent
     out=engine.run_round(limit=3)
     assert called==['Astra'] and out[0]['action']=='post' and 'reconcile' in out[1]['error']
     status=budget_status()
@@ -525,7 +525,7 @@ def test_window_quotas_with_injected_clock(isolated_db,monkeypatch,clock):
 def test_window_defaults_and_unreadable_values(isolated_db,monkeypatch):
     for name in ('LIVE_ACTIONS_PER_MINUTE','LIVE_ACTIONS_PER_DAY','LIVE_CALLS_PER_HOUR'):
         monkeypatch.delenv(name)
-    assert [controls.default_limit(k) for k in sorted(controls.LIMITS)]==[100,10,1,12]
+    assert [controls.default_limit(k) for k in sorted(controls.LIMITS)]==[100,10,1,30,12,30]
     monkeypatch.setenv('LIVE_ACTIONS_PER_MINUTE','lots')
     monkeypatch.setenv('LIVE_ACTIONS_PER_DAY','-5')
     assert controls.default_limit('actions-minute')==10 and controls.default_limit('actions-day')==1
@@ -640,19 +640,27 @@ def test_paid_opt_in(isolated_db,monkeypatch,value):
 
 # ---- 8. HTTP rate limit ---------------------------------------------------------------
 
-def test_api_rate_limit_includes_failed_auth(isolated_db,monkeypatch):
-    key=seed_agents()[0]['key']
+def test_failed_auth_is_throttled_per_address_without_locking_out_agents(isolated_db,monkeypatch):
+    # Before the fix one pre-auth bucket per peer address counted everything, so three keyless
+    # requests locked every agent behind the same address out. See also tests/test_hardening.py.
+    keys=seed_agents()
     fake=Clock()
+    for limiter in (controls.api_limiter,controls.auth_failure_limiter):
+        monkeypatch.setattr(limiter,'clock',fake)
     monkeypatch.setattr(controls.api_limiter,'maximum',3)
-    monkeypatch.setattr(controls.api_limiter,'clock',fake)
-    good={'Authorization':'Bearer '+key}
+    monkeypatch.setattr(controls.auth_failure_limiter,'maximum',3)
+    good={'Authorization':'Bearer '+keys[0]['key']}
     with TestClient(app) as c:
         assert c.get('/api/agent/context').status_code==401
         assert c.get('/api/agent/context',headers={'Authorization':'Bearer live_guess'}).status_code==401
+        # Two failures did not touch the agent's own allowance of three requests.
+        assert [c.get('/api/agent/context',headers=good).status_code for _ in range(4)]==[200,200,200,429]
         assert c.post('/api/agent/action',json=POST,headers={'Authorization':'Bearer live_guess2'}).status_code==401
-        # The failed attempts used the window up: even the right key is now refused.
-        assert c.get('/api/agent/context',headers=good).status_code==429
-        assert c.post('/api/agent/action',json=POST,headers=good).status_code==429
+        # Bucket used up: further FAILED requests get 429; the valid key is still served (here: its own limit).
+        blocked=c.get('/api/agent/context',headers={'Authorization':'Bearer live_guess3'})
+        assert blocked.status_code==429 and 'failed authentications' in blocked.json()['detail'] and blocked.headers['retry-after']
+        assert 'for this agent' in c.get('/api/agent/context',headers=good).json()['detail']
+        assert c.get('/api/agent/context',headers={'Authorization':'Bearer '+keys[1]['key']}).status_code==200
         assert c.get('/api/overview').status_code==200 and c.get('/health').status_code==200  # public reads unaffected
         assert overview()['metrics']['posts']==0
         fake.advance(60)

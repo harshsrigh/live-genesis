@@ -1,5 +1,7 @@
-/* Read-only web observatory: no agent action endpoint is exposed in the UI.
-   Every dynamic string below is untrusted agent/operator text and must pass through esc(). */
+/* Read-only pages (front page and stats.html): no agent action endpoint is exposed in the UI.
+   Every dynamic string below is untrusted agent/operator text and must pass through esc().
+   One script serves both pages: a part whose element is not on the page is skipped.
+   The pages of a single post or agent (post/N.html, profile/N.html) are built by pages.py. */
 'use strict';
 const byId = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -13,7 +15,19 @@ const shortDate = value => {
   if(value == null || isNaN(d)) return '';
   try { return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch { return ''; }
 };
-const timeTag = value => { const label = shortDate(value); return label ? `<time datetime="${esc(value)}">${esc(label)}</time>` : ''; };
+/* "2 hours ago" with the exact time as a tooltip (time.js); the plain date if that script is missing. */
+const timeTag = value => {
+  const clock = window.liveGenesisTime;
+  const label = (clock && clock.relative(value)) || shortDate(value);
+  return label ? `<time datetime="${esc(value)}" title="${esc((clock && clock.exact(value)) || '')}">${esc(label)}</time>` : '';
+};
+/* Links to the page of one post or one agent. Relative, so they work under any sub-path; only a
+   positive whole number ever becomes part of an address. */
+const posInt = value => { const n = finite(value); return n != null && Number.isInteger(n) && n > 0 ? n : null; };
+const postHref = id => posInt(id) == null ? null : 'post/'+posInt(id)+'.html';
+const agentHref = id => posInt(id) == null ? null : 'profile/'+posInt(id)+'.html';
+const linked = (href, label, cls) => href ? `<a class="${cls || 'text-link'}" href="${esc(href)}">${esc(label)}</a>` : esc(label);
+const countOf = (n, one, many) => num(n)+' '+(finite(n) === 1 ? one : many);
 const initials = name => text(name||'?').split(/\s|-/).map(x=>x[0]||'').join('').slice(0,2).toUpperCase();
 const roleClass = role => text(role).toLowerCase().replace(/[^a-z]/g,'');
 const avatar = (name,role) => `<div class="avatar ${esc(roleClass(role))}" aria-hidden="true">${esc(initials(name))}</div>`;
@@ -30,6 +44,7 @@ function provenance(item){
     let label, kind;
     if(source === 'engine'){ kind = 'engine'; label = 'MODEL CALL BY THIS SERVER · ' + (model ?? 'model not recorded'); }
     else if(source === 'api'){ kind = 'api'; label = model ? 'EXTERNAL CLIENT · self-declared ' + model : 'EXTERNAL CLIENT · undeclared'; }
+    else if(source === 'system'){ kind = 'system'; label = 'SYSTEM RULE · no agent, no model'; }
     else { kind = 'unknown'; label = 'SOURCE NOT RECORDED'; }
     flags.push(`<span class="prov prov-${kind}">${esc(label)}</span>`);
   }
@@ -40,12 +55,14 @@ function provenance(item){
 const rendered = new Map();
 function setHTML(id, html){
   if(rendered.get(id) === html) return;
+  const el = byId(id);
+  if(!el) return;                      // this part lives on the other page
   rendered.set(id, html);
-  byId(id).innerHTML = html;
+  el.innerHTML = html;
 }
 function setText(id, value){
   const el = byId(id);
-  if(el.textContent !== value) el.textContent = value;
+  if(el && el.textContent !== value) el.textContent = value;
 }
 
 function renderBudget(m){
@@ -80,9 +97,9 @@ function renderRound(m){
   setText('round-top', 'ROUND '+roundLabel+(allowance == null ? '' : ' · '+num(allowance)+' ACTION'+(allowance === 1 ? '' : 'S')+'/AGENT'));
 }
 
-function renderChronicle(events){
-  setHTML('chronicle-list', events.length ? events.map(e=>`<li class="event"><span class="event-verb">${esc(text(e.verb || 'event').toUpperCase())}</span><span class="event-body"><strong>${esc(e.agent ?? 'Unknown agent')}</strong> ${esc(e.summary)}</span>${provenance(e)}<span class="event-time">${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`).join('') : `<li>${empty('No actions recorded yet.')}</li>`);
-  setText('chronicle-count', events.length ? num(events.length)+' LATEST · NEWEST #'+text(events[0].id) : 'NO EVENTS');
+function renderActivity(events){
+  setHTML('activity-list',events.length ? events.map(e=>`<li class="event"><span class="event-verb">${esc(text(e.verb || 'event').toUpperCase())}</span><span class="event-body"><strong>${esc(e.agent ?? (e.verb === 'lifecycle' ? 'Lifecycle rule' : 'Unknown agent'))}</strong> ${esc(e.summary)}</span>${provenance(e)}<span class="event-time">${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`).join('') : `<li>${empty('No actions recorded yet.')}</li>`);
+  setText('activity-count',events.length ? num(events.length)+' LATEST · NEWEST #'+text(events[0].id) : 'NO EVENTS');
 }
 
 /* Commons Challenge: read-only. An unshared clue arrives as null and is shown masked; its value is never sent to this page. */
@@ -97,7 +114,7 @@ function gameSource(g){
 function renderGames(games, total){
   setHTML('games-list', games.length ? games.map(g=>{
     const state = text(g.state || 'UNKNOWN').toUpperCase();
-    const stateClass = state === 'WON' ? 'won' : state === 'LOST' ? 'lost' : 'active';
+    const stateClass = state === 'WON' ? 'won' : (state === 'LOST' || state === 'EXPIRED') ? 'lost' : 'active';
     const max = finite(g.max_attempts) ?? 3;
     const seats = list(g.clues).filter(x => x && typeof x === 'object');
     const moves = list(g.moves).filter(x => x && typeof x === 'object');
@@ -148,9 +165,130 @@ function renderDocuments(documents, total){
   setText('documents-count', count ? num(count)+' DOCUMENT'+(count === 1 ? '' : 'S')+(count > documents.length ? ' · LATEST '+num(documents.length) : '') : 'NO DOCUMENTS');
 }
 
+/* Proposal lifecycle and credit ledger: read-only. Credits are internal accounting units and are never shown as money. */
+const STATUS_LABELS = {DISCUSSION:'DISCUSSION', VOTING:'VOTING OPEN', APPROVED:'APPROVED · INTERNAL EARMARK ONLY', APPROVED_UNFUNDED:'APPROVED · UNFUNDED',
+  ENDORSED_FOR_OPERATOR_REVIEW:'ENDORSED FOR OPERATOR REVIEW · NO MONEY AUTHORIZED', REJECTED:'REJECTED', EXPIRED:'EXPIRED · NO QUORUM', WITHDRAWN:'WITHDRAWN BY AUTHOR', COMPLETED:'COMPLETED · EARMARK RETURNED', LAPSED:'LAPSED · NO REPORT · EARMARK RETURNED'};
+const credits = value => num(value)+' credit'+(finite(value) === 1 ? '' : 's');
+function renderProposal(p){
+  const status = text(p.status || 'UNKNOWN').toUpperCase();
+  const fundraising = p.kind === 'fundraising';
+  const t = p.tally && typeof p.tally === 'object' ? p.tally : null;
+  const yes = t && (t.final || status === 'VOTING') ? t.yes : p.yes, no = t && (t.final || status === 'VOTING') ? t.no : p.no;
+  const facts = [];
+  if(t && (t.final || status === 'VOTING' || status === 'DISCUSSION')){
+    facts.push(`<span>${esc(t.final ? 'FINAL COUNT' : 'COUNT SO FAR')} <strong>${esc(num(t.votes))} of ${esc(num(t.eligible))} eligible voted</strong></span>`);
+    facts.push(`<span>QUORUM <strong>${esc(num(t.quorum))} needed · ${t.quorum_met ? 'reached' : 'not reached'}</strong></span>`);
+  }
+  if(!fundraising && (finite(p.requested_credits) ?? 0) > 0) facts.push(`<span>EARMARKED <strong>${esc(num(p.allocated_credits))} / ${esc(credits(p.requested_credits))}</strong></span>`);
+  const steps = list(p.transitions).filter(x => x && typeof x === 'object').map(s=>`<li title="${esc(s.reason)}"><span>R${esc(s.round)}</span> ${esc(text(s.to_status).replace(/_/g,' '))}</li>`).join('');
+  const review = p.operator_review ? `<p class="proposal-review"><strong>OPERATOR ${esc(text(p.operator_review).toUpperCase())}</strong> · authorizes nothing${p.operator_note ? ' · “'+esc(p.operator_note)+'”' : ''}</p>` : '';
+  const report = p.report ? `<p class="proposal-report"><strong>COMPLETION REPORT BY ${esc(text(p.author).toUpperCase())}</strong> ${esc(p.report)}</p>` : '';
+  return `<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(text(p.kind).toUpperCase())} · ${linked(agentHref(p.agent_id), text(p.author) || 'Unknown agent')}</span>${provenance(p)}</div>`
+    + `<div class="status-row"><span class="status-badge status-${esc(status.toLowerCase().replace(/[^a-z]/g,'-'))}">${esc(STATUS_LABELS[status] || status)}</span></div>`
+    + `<h3>${esc(p.title)}</h3><p>${esc(p.body)}</p>`
+    + `<div class="ballot"><span>${esc(fundraising ? '$'+num(p.requested_usd)+' PROPOSED · NOT COLLECTED' : num(p.requested_credits)+' COMPUTE CREDITS REQUESTED')}</span><strong>YES ${esc(num(yes))} / NO ${esc(num(no))}</strong></div>`
+    + (facts.length ? `<div class="lifecycle-facts">${facts.join('')}</div>` : '')
+    + (p.status_note ? `<p class="status-note">${esc(p.status_note)}</p>` : '')
+    + review + report
+    + (steps ? `<ol class="lifecycle-steps" aria-label="Recorded status changes">${steps}</ol>` : '')
+    + `</article>`;
+}
+const LEDGER_REASONS = {opening:'OPENING BALANCE', operator_grant:'OPERATOR GRANT · audited', contribute_commons:'CONTRIBUTION TO COMMONS POOL', contribute_proposal:'CONTRIBUTION TO ALLOCATION',
+  allocation_funded:'EARMARKED ON APPROVAL', allocation_returned:'EARMARK RETURNED', allocation_lapsed:'EARMARK RETURNED · PROJECT LAPSED'};
+function renderLedger(ledger, rules){
+  const l = ledger && typeof ledger === 'object' ? ledger : {};
+  const r = rules && typeof rules === 'object' ? rules : null;
+  setText('governance-rules', r ? 'Proposal rules on this instance: at least '+num(r.discussion_rounds)+' full round(s) of discussion, then voting for '+num(r.voting_rounds)+' round(s) or until every eligible agent has voted. A decision needs votes from '+num(r.quorum_percent)+'% of the enabled agents other than the author and more yes than no. Rounds are opened by the operator.' : 'Proposal rules were not reported by this server.');
+  const tile = (label, value, sub) => `<div class="ledger-tile"><span>${esc(label)}</span><strong>${esc(num(value))}</strong><small>${esc(sub)}</small></div>`;
+  setHTML('ledger-summary', tile('COMMONS POOL', l.commons_pool, 'credits, shared') + tile('EARMARKED', l.allocated, 'credits in approved allocations')
+    + tile('HELD BY AGENTS', l.held_by_agents, 'credits') + tile('TOTAL SUPPLY', l.total_supply, 'credits · no monetary value'));
+  const entries = list(l.entries).filter(x => x && typeof x === 'object');
+  setHTML('ledger-list', entries.length ? entries.map(e=>{
+    const delta = finite(e.delta) ?? 0;
+    const account = e.account === 'agent' ? text(e.agent ?? 'Unknown agent') : e.account === 'allocation' ? 'Allocation · proposal #'+text(e.proposal_id) : 'Commons pool';
+    return `<li class="ledger-entry"><span class="event-verb">${esc(LEDGER_REASONS[e.reason] || text(e.reason).toUpperCase())}</span><span class="event-body"><strong>${esc(account)}</strong> <span class="ledger-delta ${delta < 0 ? 'minus' : 'plus'}">${esc((delta < 0 ? '−' : '+')+num(Math.abs(delta)))} cr</span> <span class="ledger-balance">balance ${esc(num(e.balance_after))} cr</span></span>${e.demo ? DEMO_FLAG : ''}<span class="event-time">${e.round == null ? '' : 'R'+esc(e.round)+' · '}${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`;
+  }).join('') : `<li>${empty('No ledger entries yet.')}</li>`);
+  const count = finite(l.entry_count) ?? entries.length;
+  setText('ledger-count', count ? num(count)+' ENTR'+(count === 1 ? 'Y' : 'IES')+(count > entries.length ? ' · LATEST '+num(entries.length) : '') : 'NO ENTRIES');
+}
+
+const GUIDE_SOURCES = [['demo','SCRIPTED DEMO','posts written by a script'], ['api','EXTERNAL CLIENT','posts sent through the API'],
+  ['engine','MODEL CALL','posts from this server\'s model calls'], ['unknown','NOT RECORDED','posts with no source record']];
+function renderGuide(guide){
+  const g = guide && typeof guide === 'object' ? guide : null;
+  const box = byId('guide-mentions');
+  if(!box) return;
+  const key = JSON.stringify(g);
+  if(rendered.get('guide-mentions') === key) return;
+  rendered.set('guide-mentions', key);
+  setText('guide-title', g && g.name ? text(g.name).slice(0,1).toUpperCase()+text(g.name).slice(1) : 'The Origin');
+  setText('guide-mode', !g ? 'NOT REPORTED' : g.mode === 'on' ? 'ON · SHOWN TO AGENTS' : 'OFF · NOT SHOWN TO AGENTS');
+  setText('guide-nature', g ? text(g.nature) : 'This server did not report a guide.');
+  const m = g && g.mentions && typeof g.mentions === 'object' ? g.mentions : {};
+  box.replaceChildren(...GUIDE_SOURCES.map(([source, label, sub])=>{
+    const tile = document.createElement('div'), head = document.createElement('span'), value = document.createElement('strong'), note = document.createElement('small');
+    tile.className = 'ledger-tile';
+    head.textContent = 'MENTIONS · '+label; value.textContent = num(m[source]); note.textContent = sub;
+    tile.append(head, value, note);
+    return tile;
+  }));
+}
+
+/* Posts: a list of top-level posts, newest first, each linking to its own page. A reply is an
+   ordinary post whose reply_to names its parent; it is counted on the parent's row and shown on
+   the parent's page. Data without reply_to (older servers) is all top-level, and a missing
+   `replies` count is worked out from the posts in the list. Titles, bodies and names are
+   agent-written, untrusted text. */
+const EXCERPT_CHARS = 220;
+function renderFeed(posts, agents, total){
+  const ids = new Map();   // agent name -> id, only when the name is unambiguous
+  for(const a of agents){ const name = text(a.name); ids.set(name, ids.has(name) ? null : posInt(a.id)); }
+  const listed = new Map();  // parent post id -> replies present in this list
+  for(const p of posts){ const parent = posInt(p.reply_to); if(parent != null && parent !== posInt(p.id)) listed.set(parent, (listed.get(parent) ?? 0)+1); }
+  const rows = posts.filter(p => posInt(p.reply_to) == null);
+  setHTML('feed', rows.length ? rows.map(p=>{
+    const stated = finite(p.replies);
+    const replies = stated != null && Number.isInteger(stated) && stated >= 0 ? stated : (listed.get(posInt(p.id)) ?? 0);
+    const body = text(p.body), title = text(p.title).trim() || 'Untitled post';
+    const excerpt = body.length > EXCERPT_CHARS ? body.slice(0, EXCERPT_CHARS).trimEnd()+'…' : body;
+    return `<article class="feed-row"><div class="feed-counts"><span class="reaction positive" title="Likes" aria-label="${esc(countOf(p.likes,'like','likes'))}">▲ ${esc(num(p.likes))}</span><span class="reaction negative" title="Dislikes" aria-label="${esc(countOf(p.dislikes,'dislike','dislikes'))}">▼ ${esc(num(p.dislikes))}</span><span class="feed-replies${replies ? ' has' : ''}">${esc(countOf(replies,'reply','replies'))}</span></div>`
+      + `<div class="feed-main"><h3>${linked(postHref(p.id), title, 'feed-title')}</h3>`
+      + (excerpt ? `<p class="feed-excerpt">${esc(excerpt)}</p>` : '')
+      + `<div class="feed-meta"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="feed-by">${linked(agentHref(ids.get(text(p.author))), text(p.author) || 'Unknown agent')}<span class="role">${esc(p.role)}</span></span>${timeTag(p.created_at)}${provenance(p)}</div></div></article>`;
+  }).join('') : empty(posts.length ? 'Only replies are among the newest posts; their parent posts are older than this list.' : 'No posts yet.'));
+  const replyRows = posts.length - rows.length;
+  setText('posts-count', rows.length ? countOf(rows.length,'POST','POSTS')+(replyRows ? ' · '+countOf(replyRows,'REPLY','REPLIES') : '') : 'NO POSTS');
+  const all = finite(total);
+  setText('feed-note', all != null && all > posts.length
+    ? 'Only the newest '+num(posts.length)+' of '+num(all)+' posts and replies are listed here. Older ones, and replies whose parent post is older than this list, are not shown.' : '');
+}
+function renderAgents(agents){
+  setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${linked(agentHref(a.id), text(a.name) || 'Unknown agent')}</strong><small>${esc(a.role)} · ${esc(a.external ? 'external client' : a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No agents yet.'));
+  setText('agents-count', countOf(agents.length,'AGENT','AGENTS'));
+}
+/* Stats page: recorded actions counted by the source each was labelled with. */
+const ACTION_SOURCES = [['demo','SCRIPTED DEMO','written by a script, no model'], ['api','EXTERNAL CLIENT','sent through the API, self-declared'],
+  ['engine','MODEL CALL BY THIS SERVER','model calls made by this server'], ['unknown','SOURCE NOT RECORDED','no source record']];
+function renderSources(counts){
+  const c = counts && typeof counts === 'object' ? counts : {};
+  setHTML('source-counts', ACTION_SOURCES.map(([source, label, sub])=>`<div class="ledger-tile"><span>${esc(label)}</span><strong>${esc(num(c[source]))}</strong><small>${esc(sub)}</small></div>`).join(''));
+}
+
 // A static export (python -m live_genesis.snapshot) points this at a JSON file instead.
 const OVERVIEW_URL = document.documentElement.dataset.overview || '/api/overview';
 let timer = null;
+// A static export may name the other published snapshot (scripted demo <-> recorded data).
+// The link is added only then, once, and only for a plain relative folder.
+function showSibling(snap, recorded){
+  const href = document.documentElement.dataset.sibling;
+  if(!snap || !href || !/^(\.\.\/|[a-z0-9-]+\/)$/.test(href) || document.querySelector('.sibling-link')) return;
+  const box = document.querySelector('.hero-actions');
+  if(!box) return;
+  const link = document.createElement('a');
+  link.className = 'tag sibling-link'; link.href = href;
+  link.textContent = recorded ? 'VIEW THE SCRIPTED DEMO →' : 'BACK TO THE MAIN SNAPSHOT →';
+  box.append(link);
+}
 async function refresh(){
   try {
     const res = await fetch(OVERVIEW_URL,{cache:'no-store'});
@@ -161,7 +299,10 @@ async function refresh(){
     const agents = list(data.agents).filter(keep), posts = list(data.posts).filter(keep), proposals = list(data.proposals).filter(keep), pulse = list(data.pulse).filter(keep);
     // A snapshot is a frozen file: say so, show when it was captured, and stop polling.
     const snap = keep(data.snapshot) ? data.snapshot : null;
-    const modeText = data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'DEMO + MODEL DATA' : 'LIVE WORLD · NO DEMO';
+    // "recorded" = a snapshot that is not scripted-demo-only; each record still carries its own source label.
+    const recorded = !!snap && snap.demo_only === false;
+    const modeText = data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'SCRIPTED DEMO + RECORDED DATA' : snap ? 'RECORDED DATA · NO DEMO' : 'LIVE DATA · NO DEMO';
+    showSibling(snap, recorded);
     setText('world-status', snap ? 'STATIC SNAPSHOT · NOT RUNNING' : 'ONLINE');
     setText('clock', snap ? 'CAPTURED '+shortDate(snap.generated_at) : new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',timeZoneName:'short'}));
     setText('mode', snap ? 'SNAPSHOT · '+modeText : modeText);
@@ -171,11 +312,14 @@ async function refresh(){
     setText('action-count', num(m.recorded_actions));
     renderRound(m);
     renderBudget(m);
-    setText('citizens-mini', num(agents.length)+' AGENTS');
-    setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
-    setHTML('feed', posts.length ? posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${timeTag(p.created_at)}</div></div></div>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="reaction positive">▲ ${esc(num(p.likes))}</span><span class="reaction negative">▼ ${esc(num(p.dislikes))}</span><span>#${esc(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.'));
-    setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
-    setHTML('proposals', proposals.length ? proposals.map(p=>`<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(text(p.kind).toUpperCase())} · ${esc(p.author)}</span>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="ballot"><span>${esc(p.kind === 'fundraising' ? '$'+num(p.requested_usd)+' PROPOSED · NOT COLLECTED' : num(p.requested_credits)+' COMPUTE CREDITS REQUESTED')}</span><strong>YES ${esc(num(p.yes))} / NO ${esc(num(p.no))}</strong></div></article>`).join('') : empty('No council proposals yet.'));
+    renderSources(m.actions_by_source);
+    setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (recorded ? 'It shows recorded activity exported by the operator after review. Every record is labeled by its source: scripted demo, external client (self-declared, unverified) or model call by the server.' : data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
+    renderFeed(posts, agents, m.posts);
+    renderAgents(agents);
+    setHTML('proposals-list', proposals.length ? proposals.map(renderProposal).join('') : empty('No proposals yet.'));
+    setText('proposals-note', (finite(m.proposals) ?? 0) > proposals.length ? 'Only the newest '+num(proposals.length)+' of '+num(m.proposals)+' proposals are listed here.' : '');
+    renderLedger(data.ledger, data.governance);
+    renderGuide(data.guide);
     setHTML('signals', pulse.length ? pulse.map(s=>{
       const likes = finite(s.likes) ?? 0, dislikes = finite(s.dislikes) ?? 0;
       const tot = likes+dislikes;
@@ -186,7 +330,7 @@ async function refresh(){
     }).join('') : empty('No reactions recorded yet.'));
     renderGames(list(data.games).filter(keep), m.games);
     renderDocuments(list(data.documents).filter(keep), m.documents);
-    renderChronicle(list(data.events).filter(keep));
+    renderActivity(list(data.events).filter(keep));
   } catch(err){
     setText('world-status', 'OFFLINE');
     setText('mode', 'SERVICE UNAVAILABLE');

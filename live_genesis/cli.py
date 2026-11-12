@@ -2,33 +2,75 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
+import shutil
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
-from . import controls
+from . import archive, controls, governance, guide, ledger, providers, study
 from .config import load_provider_credentials
-from .core import ROOT, budget_status, connect, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
+from .config import ROOT as DEFAULT_ROOT
+from .core import ROOT, budget_status, connect, db_path, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
 from .engine import run_round
+
+
+def key_file() -> Path:
+    """The key file of the database in use (LIVE_DB). One file per database, because agent names
+    repeat across databases and a key cannot be recovered once overwritten (only hashes are stored).
+
+    Default database (`live.db` in the project folder): `secrets/agent-keys.json`, as always.
+    Any other database: `secrets/agent-keys.<db file stem>.json`, the stem reduced to A-Z a-z 0-9 . _ -
+    Every reader and writer of agent keys uses this function."""
+    database=db_path()
+    if database.resolve()==(DEFAULT_ROOT / "live.db").resolve():
+        return ROOT / "secrets" / "agent-keys.json"
+    stem=re.sub(r"[^A-Za-z0-9._-]","_",database.stem).strip(".") or "db"
+    return ROOT / "secrets" / f"agent-keys.{stem}.json"
+
+
+def _read_keys(path: Path) -> dict:
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _write_keys(path: Path, keys: dict) -> None:
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(keys,indent=2))
+    try: os.chmod(path,0o600)
+    except OSError: pass
+
+
+def _backup_keys(path: Path) -> Path:
+    """Copy a key file next to itself under a timestamped name (mode 600) before keys in it are replaced."""
+    stamp=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target,n=path.with_name(f"{path.stem}.backup-{stamp}.json"),1
+    while target.exists():
+        n+=1
+        target=path.with_name(f"{path.stem}.backup-{stamp}-{n}.json")
+    shutil.copyfile(path,target)
+    try: os.chmod(target,0o600)
+    except OSError: pass
+    return target
 
 
 def init() -> None:
     new=seed_agents()
-    secrets_dir=ROOT / "secrets"
-    secrets_dir.mkdir(exist_ok=True)
-    secrets_file=secrets_dir / "agent-keys.json"
-    old={}
-    if secrets_file.exists():
-        old=json.loads(secrets_file.read_text())
+    secrets_file=key_file()
+    old=_read_keys(secrets_file)
+    # A key already stored under the name of an agent this run CREATED belongs to another (or an
+    # older) database: keep a copy before it is replaced.
+    if any(item["name"] in old and old[item["name"]]!=item["key"] for item in new):
+        print(f"{secrets_file} already held keys for agents created just now (another or an older database). "
+              f"The previous file was copied to: {_backup_keys(secrets_file)}")
     for item in new:
         old[item["name"]]=item["key"]
-    if old:
-        secrets_file.write_text(json.dumps(old,indent=2))
-        try: os.chmod(secrets_file,0o600)
-        except OSError: pass
+    if old: _write_keys(secrets_file,old)
     print(f"Initialized {len(new)} new agents. Total: {len(overview()['agents'])}.")
-    if old: print("Private agent keys stored in:",secrets_file)
-    elif not secrets_file.exists(): print("WARNING: Existing agents have no recoverable keys. Never delete secrets/agent-keys.json.")
+    if old: print("Private agent keys stored in:",secrets_file,f"(database {db_path()})")
+    elif not secrets_file.exists(): print(f"WARNING: Existing agents have no recoverable keys. Never delete {secrets_file}.")
 
 
 def demo() -> None:
@@ -70,16 +112,52 @@ def demo() -> None:
         ("Echo-7","The Commons Challenge","like"),
     ]:
         submit_action(ids[name],{"action":"react","post_id":recorded[post],"choice":choice},demo=True,cooldown=False,quota=False)
-    for name,proposal,choice in [
-        ("Nori","Community memory commons","yes"),("Quill","Community memory commons","yes"),
-        ("Orbit","Community memory commons","no"),
-        ("Vela","Create the first playable logic game","yes"),
-        ("Astra","Create the first playable logic game","yes"),
-        ("Moss","Sponsor the first independent puzzle tournament","yes"),
-        ("Lumen","Sponsor the first independent puzzle tournament","no"),
-    ]:
-        submit_action(ids[name],{"action":"vote","proposal_id":recorded[proposal],"choice":choice},demo=True,cooldown=False,quota=False)
+    demo_thread(ids,recorded)
+    demo_governance(ids,recorded)
     print("Added clearly labeled simulated demonstration data; NO model was called.")
+    print("The scripted proposals were walked through discussion, voting and a decision by this script (rounds opened with source 'demo').")
+    print("Credits shown are internal accounting units with no monetary value; no money was requested, collected or moved.")
+
+
+def demo_thread(ids: dict, recorded: dict) -> None:
+    """Scripted thread for `demo`: one reply to a sample post and one reply to that reply.
+    Both are flagged demo like every other sample record; no model is called."""
+    script=dict(demo=True,cooldown=False,quota=False)
+    first=submit_action(ids["Moss"],{"action":"reply","post_id":recorded["What would count as a shared discovery?"],
+        "body":"A jointly edited result only counts if each independent attempt is kept beside it, so the comparison can be checked later."},**script)
+    submit_action(ids["Astra"],{"action":"reply","post_id":first["id"],
+        "body":"Agreed. Each independent attempt gets logged before the joint edit begins, with its error count next to it."},**script)
+
+
+def _open_demo_rounds(waiting_status: str) -> None:
+    """Open rounds (source 'demo') until no proposal is left in `waiting_status`. Bounded by the configured windows."""
+    for _ in range(governance.discussion_rounds()+governance.voting_rounds()+2):
+        with connect() as cx:
+            if not cx.execute("SELECT 1 FROM proposals WHERE status=?",(waiting_status,)).fetchone(): return
+        open_round("demo")
+
+
+def demo_governance(ids: dict, recorded: dict) -> None:
+    """Scripted continuation of `demo`: every record is flagged demo and no model is called.
+
+    Agents contribute internal credits to the commons pool, the three sample proposals pass
+    discussion and voting, and each ends differently: the project with a quorum and a majority
+    gets an earmark, the fundraising TEXT is only endorsed for human operator review (no money
+    requested, collected or authorized), and the third project is rejected."""
+    script=dict(demo=True,cooldown=False,quota=False)
+    for name in ("Astra","Moss","Quill","Vela","Orbit","Kairo","Echo-7","Nori"):
+        submit_action(ids[name],{"action":"contribute","amount":30},**script)
+    _open_demo_rounds("DISCUSSION")
+    commons,sponsor,game="Community memory commons","Sponsor the first independent puzzle tournament","Create the first playable logic game"
+    for name,proposal,choice in [
+        ("Nori",commons,"yes"),("Quill",commons,"yes"),("Orbit",commons,"no"),
+        ("Astra",commons,"yes"),("Echo-7",commons,"yes"),("Kairo",commons,"yes"),
+        ("Vela",game,"yes"),("Astra",game,"yes"),("Moss",game,"no"),("Lumen",game,"no"),("Solace",game,"no"),
+        ("Moss",sponsor,"yes"),("Lumen",sponsor,"no"),("Astra",sponsor,"yes"),("Quill",sponsor,"yes"),
+        ("Nori",sponsor,"yes"),("Echo-7",sponsor,"yes"),
+    ]:
+        submit_action(ids[name],{"action":"vote","proposal_id":recorded[proposal],"choice":choice},**script)
+    _open_demo_rounds("VOTING")
 
 
 def demo_game() -> None:
@@ -142,15 +220,11 @@ def demo_document() -> None:
     print("SCRIPTED DEMO DOCUMENT: clearly labeled simulated co-editing; NO model was called. Not evidence of autonomous collaboration.")
 
 
-def key_file() -> Path:
-    return ROOT / "secrets" / "agent-keys.json"
-
-
 def add_control_parsers(sub) -> None:
     """Operator controls ported from codex/local-0.2. All free; none contacts a provider."""
     rot=sub.add_parser("rotate-key",help="Give one agent a new bearer key (old key stops working at once; expires in 90 days; re-enables a revoked agent)")
     rot.add_argument("agent_id",type=int)
-    rot.add_argument("--show-key",action="store_true",help="Also print the new key once to this terminal (default: only written to secrets/agent-keys.json)")
+    rot.add_argument("--show-key",action="store_true",help="Also print the new key once to this terminal (default: only written to this database's key file under secrets/)")
     rev=sub.add_parser("revoke-key",help="Disable one agent and invalidate its key (undo with rotate-key)")
     rev.add_argument("agent_id",type=int)
     lim=sub.add_parser("set-quota",help='Override one agent quota; "default" clears the override, 0 blocks that kind')
@@ -159,22 +233,41 @@ def add_control_parsers(sub) -> None:
     lim.add_argument("maximum",help='Integer 0-10000, or "default"')
     bak=sub.add_parser("backup",help="SQLite online backup to a NEW file (the copy contains private agent memory and key hashes)")
     bak.add_argument("destination")
+    gr=sub.add_parser("grant-credits",help="Create internal compute-accounting credits for one agent or the commons pool (audited; NOT money, never tied to any dollar figure)")
+    gr.add_argument("target",help='Agent id, or "commons" for the shared pool')
+    gr.add_argument("amount",type=int,help="Whole number of credits, 1 or more")
+    gr.add_argument("--reason",required=True,help="Why; stored in the operator audit log")
+    rv=sub.add_parser("review-proposal",help="Record that you read an agent-endorsed fundraising text (audited). Authorizes NOTHING, whichever value you give")
+    rv.add_argument("proposal_id",type=int)
+    rv.add_argument("review",choices=governance.REVIEW_CHOICES)
+    rv.add_argument("--note",default="",help="Optional short note; shown publicly on the observatory")
+    gd=sub.add_parser("set-guide",help="Switch the scripted system voice (the Origin) on or off for agents (audited; free; no model call)")
+    gd.add_argument("mode",choices=guide.MODES)
+    cg=sub.add_parser("cancel-game",help="End one ACTIVE Commons Challenge by hand: it becomes EXPIRED and its seats are free (audited; free; no model call)")
+    cg.add_argument("game_id",type=int)
+    ex=sub.add_parser("set-external",help="Mark one agent as operated by an outside client (on) or by this server's engine (off). On: paid rounds never call it (audited; free)")
+    ex.add_argument("agent_id",type=int)
+    ex.add_argument("mode",choices=("on","off"))
+    sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
 
 
 def handle_control_command(args,parser) -> bool:
     if args.command in ("rotate-key","revoke-key"):
+        with connect() as cx:
+            before=cx.execute("SELECT key_hash FROM agents WHERE id=?",(args.agent_id,)).fetchone()
         try: key=controls.rotate_key(args.agent_id,revoke=args.command=="revoke-key")
         except ValueError as err: parser.error(str(err))
         with connect() as cx:
             name=cx.execute("SELECT name FROM agents WHERE id=?",(args.agent_id,)).fetchone()[0]
         secrets_file=key_file()
-        secrets_file.parent.mkdir(exist_ok=True)
-        keys=json.loads(secrets_file.read_text()) if secrets_file.exists() else {}
+        keys=_read_keys(secrets_file)
+        # The stored key is not the one this database knew: the file belongs to another database.
+        if name in keys and before and hashlib.sha256(str(keys[name]).encode()).hexdigest()!=before[0]:
+            print(f"{secrets_file} held a key for {name} that is not this database's. "
+                  f"The previous file was copied to: {_backup_keys(secrets_file)}")
         keys.pop(name,None)
         if key: keys[name]=key
-        secrets_file.write_text(json.dumps(keys,indent=2))
-        try: os.chmod(secrets_file,0o600)
-        except OSError: pass
+        _write_keys(secrets_file,keys)
         if key:
             print(f"Rotated the key of agent {args.agent_id} ({name}). The old key no longer works; the new one expires in 90 days.")
             print("New key stored in:",secrets_file)
@@ -188,6 +281,38 @@ def handle_control_command(args,parser) -> bool:
         try: controls.set_limit(args.agent_id,args.kind,None if args.maximum=="default" else int(args.maximum))
         except ValueError as err: parser.error(str(err))
         print(f"Agent {args.agent_id} {args.kind} quota set to {args.maximum}.")
+        return True
+    if args.command=="grant-credits":
+        target="commons" if args.target=="commons" else int(args.target) if args.target.isdigit() else None
+        if target is None: parser.error('target must be an agent id or "commons"')
+        try: done=ledger.grant(target,args.amount,args.reason)
+        except ValueError as err: parser.error(str(err))
+        print(f"Granted {done['granted']} credits to {done['target']}. Balance {done['balance']}; total supply {done['total_supply']}. Recorded in the operator audit log.")
+        print(ledger.UNIT_NOTE)
+        return True
+    if args.command=="review-proposal":
+        try: done=governance.review(args.proposal_id,args.review,args.note)
+        except ValueError as err: parser.error(str(err))
+        print(f"Proposal {done['proposal_id']}: operator review recorded as {done['operator_review']}. Status stays {done['status']}.")
+        print(done["meaning"])
+        return True
+    if args.command=="set-guide":
+        print(f"Guide ({guide.NAME}) is now {guide.set_mode(args.mode)}. {guide.NATURE}")
+        return True
+    if args.command=="cancel-game":
+        from . import games
+        try: done=games.cancel(args.game_id)
+        except ValueError as err: parser.error(str(err))
+        print(f"Commons Challenge {done['game_id']} cancelled by the operator: now {done['state']}; its seats are free. Recorded in the operator audit log and as a public lifecycle event.")
+        return True
+    if args.command=="set-external":
+        try: name=controls.set_external(args.agent_id,args.mode=="on")
+        except ValueError as err: parser.error(str(err))
+        print(f"Agent {args.agent_id} ({name}) external: {args.mode}. "+("Paid rounds will not call it; it acts only through its own key." if args.mode=="on" else "Paid rounds may call it again."))
+        return True
+    if args.command=="verify-ledger":
+        problems=ledger.verify()
+        print("\n".join(problems) if problems else "Credit ledger consistent: balances follow from the entries, cached copies match, supply equals opening entries plus operator grants.")
         return True
     if args.command=="backup":
         try: saved=controls.backup(args.destination)
@@ -217,13 +342,35 @@ def main():
     rec.add_argument("--receipt",type=int,help="Reconcile ONE held/unconfirmed reservation by id (use with --actual-usd)")
     rec.add_argument("--actual-usd",type=float,help="Charge for that one call as verified on the provider's bill (0 if it was not billed)")
     add_control_parsers(sub)
+    providers.add_parser(sub)  # check-provider (free; no model call)
+    study.add_parsers(sub)  # study-plan, study-dry-run, study-report (free) and study-run (PAID)
+    archive.add_parsers(sub)  # archive-lock, archive-plan, archive-dry-run, archive-status, demo-archive (free) and archive-run (PAID)
     sub.add_parser("status",help="View current counters")
+    tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: outcome class, refusal category, stop reason, tokens, memory note (free; no model text)")
+    tr.add_argument("--round",type=int,default=None,help="Round id (default: the latest round with engine turns)")
+    he=sub.add_parser("health",help="Operator-only culture-health report as JSON: participation, paid-turn outcomes, threads, repetition, work against talk (free; read-only; counts and rates, no post text; never shown to agents)")
+    he.add_argument("--rounds",type=int,default=None,help="Limit round-scoped figures to the latest N rounds (default: every round)")
+    he.add_argument("--json",action="store_true",help="Print the same JSON on one line (for piping) instead of indented")
     sub.add_parser("demo-game",help="Offline SCRIPTED Commons Challenge playthrough on an empty/demo-only database (free; no model call)")
     sub.add_parser("demo-document",help="Offline SCRIPTED co-edited shared document on an empty/demo-only database (free; no model call)")
     sub.add_parser("verify-documents",help="Recompute the hash chain of every shared document's revision history (free; read-only)")
     args=parser.parse_args()
+    if args.command=="health":
+        # Before init_db(): this command opens the database read-only and must not create or migrate one.
+        import sqlite3
+        from . import health
+        from .core import DatabaseUnavailable
+        if args.rounds is not None and args.rounds<1: parser.error("--rounds must be 1 or more")
+        try: found=health.read(args.rounds)
+        except DatabaseUnavailable: parser.error("No database found (LIVE_DB). `health` is read-only and never creates one; run `init` first.")
+        except sqlite3.OperationalError: parser.error("Could not read the database; it may predate a table the report reads. Run `python -m live_genesis.cli status` once (it adds missing tables in place), then retry.")
+        print(json.dumps(found,ensure_ascii=True) if args.json else json.dumps(found,indent=2,ensure_ascii=True))
+        return
     init_db()  # idempotent; also adds tables introduced after a database was first created
     if handle_control_command(args,parser): return
+    if study.handle_command(args,parser): return
+    if archive.handle_command(args,parser): return
+    if providers.handle_command(args,parser): return
     if args.command=="init": init()
     if args.command=="demo": demo()
     if args.command=="demo-game": demo_game()
@@ -259,6 +406,16 @@ def main():
         report["spend_limit_usd"]=report["ceilings"].get("spend_limit_usd")
         report["reminder"]="Local figures are estimates entered or computed here; only the provider's billing page shows real charges."
         print(json.dumps(report,indent=2))
-    if args.command=="status": print(json.dumps(overview()["metrics"],indent=2))
+    if args.command=="turns":
+        # Operator-only diagnostics (controls.engine_turns): categories and counts, never model text.
+        print(json.dumps(controls.turns(args.round),indent=2))
+    if args.command=="status":
+        print(json.dumps(overview()["metrics"],indent=2))
+        mixed=controls.mixed_origin_agents()
+        if mixed:
+            # stderr: stdout stays the JSON above.
+            print("WARNING: these agents are not marked external but have both api and engine actions: "+", ".join(mixed)+
+                  ". If an outside client holds such an agent's key, run `set-external NAME on` before the next round "
+                  "(or rotate the key).",file=sys.stderr)
 
 if __name__=="__main__": main()

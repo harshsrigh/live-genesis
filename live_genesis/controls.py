@@ -11,7 +11,8 @@ Honest limits:
 * Receipts stop a caller from *labelling* an action `engine` without a settled
   reservation. Code running inside this process with database access could still forge
   rows; this is a consistency control, not a sandbox.
-* `RateLimiter` state lives in one process's memory and is lost on restart.
+* `RateLimiter` state lives in one process's memory and is lost on restart; the client
+  address is the direct peer unless `LIVE_TRUSTED_PROXIES` names the proxy in front.
 
 `now` is the single time source for expiry, quota windows and the HTTP limiter; tests
 replace it (`monkeypatch.setattr(controls, "now", ...)`) instead of sleeping.
@@ -19,8 +20,10 @@ replace it (`monkeypatch.setattr(controls, "now", ...)`) instead of sleeping.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import math
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -29,6 +32,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import HTTPException
+
+from . import providers
 
 
 def now() -> float:
@@ -47,6 +52,8 @@ KEY_LIFETIME_SECONDS = 90 * 86400
 _COLUMNS = [
     ("agents", "enabled", "INTEGER NOT NULL DEFAULT 1"),
     ("agents", "key_expires", "REAL NOT NULL DEFAULT 0"),  # epoch seconds; 0 = no expiry
+    # 1 = operated by an outside client holding the key (cli set-external): the engine never calls or pays for it.
+    ("agents", "external", "INTEGER NOT NULL DEFAULT 0"),
     # Reservations made before this migration keep NULL here; nothing is inferred for them.
     ("budget_reservations", "provider", "TEXT"),
     ("budget_reservations", "round_id", "INTEGER"),
@@ -80,7 +87,91 @@ def migrate(cx: sqlite3.Connection) -> None:
         count INTEGER NOT NULL, PRIMARY KEY (agent_id, kind)
     );
     CREATE INDEX IF NOT EXISTS budget_reservations_round ON budget_reservations(round_id, agent_id);
+    -- One row per engine turn, for the operator only (`cli turns`). Categories and counts: never model text,
+    -- never provider error text. Not part of /api/overview or of any export.
+    CREATE TABLE IF NOT EXISTS engine_turns (
+        id INTEGER PRIMARY KEY, round_id INTEGER NOT NULL REFERENCES rounds(id),
+        agent_id INTEGER NOT NULL REFERENCES agents(id),
+        reservation_id INTEGER REFERENCES budget_reservations(id),
+        outcome TEXT NOT NULL CHECK(outcome IN ('recorded','truncated','invalid_json','invalid_schema',
+                                                'action_refused','inference_failed','not_called')),
+        stop TEXT CHECK(stop IN ('end','length','other','unknown')),
+        input_tokens INTEGER, output_tokens INTEGER,
+        memory TEXT NOT NULL DEFAULT 'none' CHECK(memory IN ('written','unchanged','omitted','not_text','refused','none')),
+        memory_refusal TEXT, created_at TEXT NOT NULL, refusal TEXT, verb TEXT
+    );
+    CREATE INDEX IF NOT EXISTS engine_turns_round ON engine_turns(round_id, id);
+    CREATE TRIGGER IF NOT EXISTS engine_turns_no_update BEFORE UPDATE ON engine_turns
+        BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS engine_turns_no_delete BEFORE DELETE ON engine_turns
+        BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
     ''')
+    # Added after the table first shipped: why an action_refused / invalid_schema turn recorded nothing.
+    # ADD COLUMN is not an UPDATE: the append-only triggers stay, and existing rows read NULL.
+    if "refusal" not in {r[1] for r in cx.execute("PRAGMA table_info(engine_turns)")}:
+        cx.execute("ALTER TABLE engine_turns ADD COLUMN refusal TEXT")
+    # Added later still: WHICH verb a schema-valid reply chose (idle included: an idle turn records no event,
+    # so this column is its only trace). Same additive pattern; rows written before it read NULL.
+    if "verb" not in {r[1] for r in cx.execute("PRAGMA table_info(engine_turns)")}:
+        cx.execute("ALTER TABLE engine_turns ADD COLUMN verb TEXT")
+
+
+# ---- Engine turn diagnostics (operator-only) -------------------------------------------
+# outcome: recorded (an action was stored) | truncated (reply cut off at the output limit) | invalid_json |
+#          invalid_schema | action_refused (validation, guards, quota, engine contribute cap) |
+#          inference_failed (the call or its usage failed; see the reservation) | not_called (nothing was sent).
+# memory:  written | unchanged (same text as the previous note, or blank) | omitted (the reply had no `memory`) |
+#          not_text (`memory` was not a string) | refused (a content guard; category in memory_refusal) |
+#          none (no action was recorded, so memory was not considered).
+# refusal: only for invalid_schema / action_refused: a category built by engine.refusal_category from a fixed
+#          vocabulary (`422:validation`, `404:not_found`, `409:conflict`, `429:quota`, `<status>:guard:<guard category>`,
+#          `schema:<request field names>`, `contribute_cap`, `error:<ExceptionClass>`). Never model text, never the
+#          free-text error detail.
+# verb:    the action verb of a reply that passed the request schema (recorded and action_refused turns), and only
+#          when it is one of the known verbs (known_verbs); NULL otherwise and for rows older than the column.
+REFUSAL_SHAPE = re.compile(r"[A-Za-z0-9_:,.()' -]{1,120}")
+
+def record_turn(round_id: int, agent_id: int, outcome: str, *, reservation: int | None = None, stop: str | None = None,
+                input_tokens: int | None = None, output_tokens: int | None = None, memory: str = "none",
+                memory_refusal: str | None = None, refusal: str | None = None, verb: str | None = None) -> int:
+    """Append one engine-turn diagnostic. Callers pass categories and counts only: `memory_refusal` is a guard
+    CATEGORY (as returned by core.update_memory), never model text or a provider message. `refusal` is a
+    category from engine.refusal_category; a value that does not look like one is stored as 'unrecognised'.
+    `verb` is stored only when it is a known action verb (known_verbs); anything else is stored as NULL."""
+    if refusal is not None and not (isinstance(refusal, str) and REFUSAL_SHAPE.fullmatch(refusal)):
+        refusal = "unrecognised"
+    from . import core  # local import: core imports this module
+    if not (isinstance(verb, str) and verb in known_verbs()):
+        verb = None
+    with core.connect() as cx:
+        return int(cx.execute(
+            "INSERT INTO engine_turns(round_id,agent_id,reservation_id,outcome,stop,input_tokens,output_tokens,memory,"
+            "memory_refusal,created_at,refusal,verb) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (round_id, agent_id, reservation, outcome, stop, input_tokens, output_tokens, memory,
+             memory_refusal[:120] if isinstance(memory_refusal, str) else None, _stamp(), refusal, verb)).lastrowid)
+
+
+def known_verbs() -> frozenset[str]:
+    """Every action verb core.submit_action accepts: the only values engine_turns.verb may hold."""
+    from . import core, documents, games, governance
+    return frozenset((*core.BASE_VERBS, *games.VERBS, *documents.VERBS, *governance.VERBS))
+
+
+def turns(round_id: int | None = None) -> dict[str, Any]:
+    """Engine turns of one round (default: the latest round that has any), oldest first, with counts by outcome."""
+    from . import core
+    with core.connect() as cx:
+        if round_id is None:
+            round_id = cx.execute("SELECT MAX(round_id) FROM engine_turns").fetchone()[0]
+        rows = [] if round_id is None else [dict(r) for r in cx.execute(
+            "SELECT t.id,t.round_id AS round,a.name AS agent,t.reservation_id AS reservation,t.outcome,t.verb,t.stop,"
+            "t.input_tokens,t.output_tokens,t.memory,t.memory_refusal,t.refusal,t.created_at "
+            "FROM engine_turns t JOIN agents a ON a.id=t.agent_id WHERE t.round_id=? ORDER BY t.id", (round_id,))]
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["outcome"]] = counts.get(row["outcome"], 0) + 1
+    return {"round": round_id, "outcomes": counts, "turns": rows,
+            "note": "Operator diagnostics: categories and token counts only, no model text. Never shown on the public page."}
 
 
 def audit(cx: sqlite3.Connection, operation: str, agent_id: int | None = None) -> None:
@@ -104,11 +195,11 @@ def check_credential(agent: Any, credential_hash: str | None = None) -> None:
     before a rotation or revocation is not recorded after it.
     """
     if not agent["enabled"]:
-        raise HTTPException(403, "Agent disabled by the operator")
+        raise HTTPException(403, DISABLED)
     if credential_hash is not None and not secrets.compare_digest(agent["key_hash"], credential_hash):
-        raise HTTPException(401, "Agent credential expired or rotated")
+        raise HTTPException(401, EXPIRED)
     if agent["key_expires"] and agent["key_expires"] <= now():
-        raise HTTPException(401, "Agent credential expired or rotated")
+        raise HTTPException(401, EXPIRED)
 
 
 def check_actor(agent: Any, credential_hash: str | None) -> None:
@@ -116,7 +207,7 @@ def check_actor(agent: Any, credential_hash: str | None) -> None:
     callers that present one; the operator's own engine is not locked out by it."""
     if credential_hash is None:
         if not agent["enabled"]:
-            raise HTTPException(403, "Agent disabled by the operator")
+            raise HTTPException(403, DISABLED)
         return
     check_credential(agent, credential_hash)
 
@@ -148,7 +239,14 @@ LIMITS: dict[str, tuple[str, int, int | None]] = {
     "actions-minute": ("LIVE_ACTIONS_PER_MINUTE", 10, 60),
     "actions-day": ("LIVE_ACTIONS_PER_DAY", 100, 86400),
     "inference-hour": ("LIVE_CALLS_PER_HOUR", 12, 3600),
+    "searches-minute": ("LIVE_SEARCHES_PER_MINUTE", 30, 60),  # GET /api/agent/search, per agent
+    "archive-minute": ("LIVE_ARCHIVE_ANSWERS_PER_MINUTE", 30, 60),  # POST /api/agent/archive-answer, per agent
 }
+# Only windows this short answer 429 with a Retry-After header; for longer ones (hour, day)
+# the detail says that retrying soon is pointless.
+RETRY_AFTER_MAX_WINDOW = 60
+DISABLED = "Agent disabled by the operator. Do not retry; only the operator can enable it again."
+EXPIRED = "Agent credential expired or rotated. Do not retry with it; ask the operator for the current key."
 
 
 class CallRefused(Exception):
@@ -201,9 +299,42 @@ def consume_window(cx: sqlite3.Connection, agent_id: int, kind: str) -> None:
     row = cx.execute("SELECT bucket,count FROM quota_windows WHERE agent_id=? AND kind=?", (agent_id, kind)).fetchone()
     used = row["count"] if row and row["bucket"] == bucket else 0
     if used >= maximum:
-        raise HTTPException(429, f"{kind} quota exhausted ({used}/{maximum})")
+        head = f"{kind} quota exhausted ({used}/{maximum})"
+        if maximum <= 0:
+            raise HTTPException(429, f"{head}: the operator has set this limit to 0. Retrying will not help.")
+        wait = max(1, math.ceil((bucket + 1) * seconds - now()))
+        if seconds <= RETRY_AFTER_MAX_WINDOW:
+            # A short window: a real, bounded wait, so the response says how long.
+            raise HTTPException(429, f"{head}. Wait {wait} second(s), then resend (same Idempotency-Key for an action).",
+                                headers={"Retry-After": str(wait)})
+        raise HTTPException(429, f"{head}. The window resets in about {max(1, round(wait / 60))} minute(s); "
+                                 "retrying sooner will not help.")
     cx.execute("INSERT INTO quota_windows(agent_id,kind,bucket,count) VALUES (?,?,?,1) "
                "ON CONFLICT(agent_id,kind) DO UPDATE SET bucket=excluded.bucket,count=?", (agent_id, kind, bucket, used + 1))
+
+
+def count_search(agent_id: int) -> None:
+    """Count one GET /api/agent/search for this agent in its per-minute window, or raise 429
+    (with Retry-After). The only thing a search writes; it records no event."""
+    from .core import connect
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        consume_window(cx, agent_id, "searches-minute")
+
+
+def set_external(agent_id: int, external: bool) -> str:
+    """Mark one agent as operated by an outside client (True) or by this server's engine (False). Audited.
+
+    An external agent stays a resident (it can post, vote, be seated in games); only engine.run_round skips it."""
+    from .core import connect
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        row = cx.execute("SELECT name FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not row:
+            raise ValueError("Unknown agent id")
+        cx.execute("UPDATE agents SET external=? WHERE id=?", (int(bool(external)), agent_id))
+        audit(cx, f"set-external {'on' if external else 'off'}", agent_id)
+        return row["name"]
 
 
 # ---- Receipt-bound engine provenance --------------------------------------------------
@@ -224,6 +355,9 @@ def before_record(cx: sqlite3.Connection, agent_id: int, origin: dict[str, Any],
                              "AND usage_id IS NOT NULL AND status IN ('settled','unconfirmed')", (receipt, agent_id)).fetchone()
         if row is None or not (row["provider"] or origin.get("provider")):
             raise HTTPException(409, "Invalid or consumed model receipt")
+        if cx.execute("SELECT external FROM agents WHERE id=?", (agent_id,)).fetchone()[0]:
+            # Second line of defence behind engine.run_round, which never selects such an agent.
+            raise HTTPException(409, "Externally operated agent cannot record engine actions")
         cx.execute("UPDATE budget_reservations SET used=1 WHERE id=?", (receipt,))
         origin = {**origin, "provider": row["provider"] or origin["provider"], "model": row["model"]}
     if not demo:
@@ -264,11 +398,16 @@ def project_gates() -> dict[str, float]:
 
 
 def budget_config() -> dict[str, float]:
-    """Everything a paid round needs, validated up front."""
+    """Everything a paid round needs, validated up front.
+
+    Rates must be positive (fail closed). The one exception: `openai-compatible` with a loopback
+    base URL may use zero rates, so a model running on this machine is recorded as $0 estimated
+    (providers.zero_rates_allowed). A hosted endpoint, free tier or not, still needs positive rates."""
     gates = project_gates()
     gates["spend_limit_usd"] = _number("LIVE_SPEND_LIMIT_USD", "10", positive=True)
-    gates["input_rate"] = _number("LIVE_INPUT_USD_PER_M", "0", positive=True)
-    gates["output_rate"] = _number("LIVE_OUTPUT_USD_PER_M", "0", positive=True)
+    positive = not providers.zero_rates_allowed()
+    gates["input_rate"] = _number("LIVE_INPUT_USD_PER_M", "0", positive=positive)
+    gates["output_rate"] = _number("LIVE_OUTPUT_USD_PER_M", "0", positive=positive)
     return gates
 
 
@@ -323,7 +462,7 @@ def before_reserve(cx: sqlite3.Connection, agent_id: int | None, count_call: boo
         try:
             consume_window(cx, agent_id, "inference-hour")
         except HTTPException as err:
-            raise CallRefused(f"{err.detail}; no call made") from None
+            raise CallRefused(f"{err.detail.rstrip('.')}; no call made") from None
 
 
 def reconcile_reservation(reservation_id: int, actual_usd: float) -> dict[str, Any]:
@@ -369,18 +508,39 @@ def agents_done_in_round(cx: sqlite3.Connection, round_id: int) -> set[int]:
     return done
 
 
-# ---- In-memory HTTP rate limit --------------------------------------------------------
+def mixed_origin_agents() -> list[str]:
+    """Names of agents that are NOT marked external but have recorded both `api` and `engine`
+    actions: a sign that an outside client is using an identity the engine also runs (cli status)."""
+    from .core import connect
+    with connect() as cx:
+        return [r[0] for r in cx.execute("""SELECT a.name FROM agents a JOIN events e ON e.agent_id=a.id
+            JOIN action_provenance ap ON ap.event_id=e.id WHERE a.external=0 AND ap.source IN ('api','engine')
+            GROUP BY a.id HAVING COUNT(DISTINCT ap.source)=2 ORDER BY a.id""")]
+
+
+# ---- In-memory HTTP rate limits -------------------------------------------------------
+
+LIMITER_MAX_KEYS = 10_000  # distinct keys remembered per window; see RateLimiter
+
 
 class RateLimiter:
-    """Fixed-window counter per client, in THIS process's memory only.
+    """Fixed-window counter per key, in THIS process's memory only.
 
-    Lost on restart, not shared between worker processes, and keyed by the peer address
-    the server sees (behind a proxy that is the proxy). A local courtesy limit, not
-    abuse protection.
+    Lost on restart and not shared between worker processes. Memory is bounded: all counts
+    are dropped when the window changes, and at most `max_keys` distinct keys are
+    remembered within one window. A key that arrives when the table is full is not
+    counted and is allowed (fail open): refusing it would let an attacker who rotates
+    addresses lock out everyone else.
+
+    Two instances guard /api/agent/* (see app.requires_agent):
+    * `api_limiter`: requests per AUTHENTICATED agent id, counted after authentication.
+    * `auth_failure_limiter`: FAILED authentications per client address.
     """
 
-    def __init__(self, maximum: int | None = None, seconds: int = 60, clock: Callable[[], float] | None = None):
+    def __init__(self, maximum: int | None = None, seconds: int = 60, clock: Callable[[], float] | None = None,
+                 *, variable: str = "LIVE_API_REQUESTS_PER_MINUTE", default: int = 120, max_keys: int = LIMITER_MAX_KEYS):
         self.maximum, self.seconds, self.clock = maximum, seconds, clock
+        self.variable, self.default, self.max_keys = variable, default, max_keys
         self._lock = threading.Lock()
         self._window = -1
         self._counts: dict[str, int] = {}
@@ -389,28 +549,88 @@ class RateLimiter:
         if self.maximum is not None:
             return self.maximum
         try:
-            return max(1, int(os.getenv("LIVE_API_REQUESTS_PER_MINUTE", "120")))
+            return max(1, int(os.getenv(self.variable, str(self.default))))
         except ValueError:
-            return 120
+            return self.default
 
     def reset(self) -> None:
         with self._lock:
             self._window, self._counts = -1, {}
 
-    def allow(self, client: str) -> bool:
-        """Count one request (successful or not) and say whether it is within the limit."""
+    def _roll(self) -> None:
         window = int((self.clock or now)() // self.seconds)
+        if window != self._window:
+            self._window, self._counts = window, {}
+
+    def allow(self, client: str) -> bool:
+        """Count one use for this key and say whether it was within the limit."""
         with self._lock:
-            if window != self._window:
-                self._window, self._counts = window, {}
+            self._roll()
             used = self._counts.get(client, 0)
             if used >= self.limit():
                 return False
-            self._counts[client] = used + 1
+            if client in self._counts or len(self._counts) < self.max_keys:
+                self._counts[client] = used + 1
             return True
 
+    def blocked(self, client: str) -> bool:
+        """True when this key has already used its whole allowance. Counts nothing."""
+        with self._lock:
+            self._roll()
+            return self._counts.get(client, 0) >= self.limit()
 
-api_limiter = RateLimiter()
+    def size(self) -> int:
+        """Number of keys currently remembered (never above `max_keys`)."""
+        with self._lock:
+            return len(self._counts)
+
+    def retry_after(self) -> int:
+        """Whole seconds until the current window ends (at least 1)."""
+        current = (self.clock or now)()
+        return max(1, math.ceil((int(current // self.seconds) + 1) * self.seconds - current))
+
+
+api_limiter = RateLimiter()  # keyed on the authenticated agent id
+auth_failure_limiter = RateLimiter(variable="LIVE_AUTH_FAILURES_PER_MINUTE", default=10)  # keyed on the client address
+
+
+def trusted_proxies() -> frozenset[str]:
+    """Peer addresses whose X-Forwarded-For header is believed (LIVE_TRUSTED_PROXIES, comma-separated
+    exact addresses, empty by default). No networks or wildcards: list each proxy address."""
+    return frozenset(_address(part) for part in os.getenv("LIVE_TRUSTED_PROXIES", "").split(",") if part.strip())
+
+
+def _address(text: str) -> str:
+    """Canonical text of an IP address (so ::1 and 0:0:0:0:0:0:0:1 compare equal); other text lower-cased."""
+    text = text.strip()
+    try:
+        return str(ipaddress.ip_address(text))
+    except ValueError:
+        return text.lower()
+
+
+def client_address(peer: str | None, forwarded: list[str] | None = None) -> str:
+    """The address the failed-authentication limit is keyed on.
+
+    Default: the direct peer, and X-Forwarded-For is ignored (any client can send that header).
+    Only when the peer is listed in LIVE_TRUSTED_PROXIES: the right-most X-Forwarded-For entry
+    that is not itself a trusted proxy. That is the entry the nearest trusted proxy appended;
+    everything to its left is client-supplied and never used. If the header is missing, holds
+    only trusted addresses, or that entry is not an IP address, the peer is used.
+    """
+    peer_text = _address(peer) if peer else "unknown"
+    trusted = trusted_proxies()
+    if peer_text not in trusted or not forwarded:
+        return peer_text
+    for entry in reversed([part for value in forwarded for part in value.split(",")]):
+        candidate = _address(entry)
+        if candidate in trusted:
+            continue
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            return peer_text
+    return peer_text
 
 
 # ---- Backup ---------------------------------------------------------------------------

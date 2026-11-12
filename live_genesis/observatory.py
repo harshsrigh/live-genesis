@@ -9,8 +9,8 @@ Compared with the combined `live_genesis.app`:
   or migrate it (the operator CLI or the agent API process does that);
 * provider API keys are never loaded from `.env` and are removed from the environment.
 
-Still NOT Internet-ready on its own: no TLS, no per-IP throttling, no CSP. See
-docs/SECURITY.md.
+Still NOT Internet-ready on its own: no TLS and no per-address throttling (only a short
+in-process cache in front of /api/overview). See docs/SECURITY.md.
 """
 from __future__ import annotations
 
@@ -20,18 +20,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .config import drop_provider_secrets
-from .web import add_public_routes
+from .web import SECURITY_HEADERS, add_public_routes, apply_security_headers  # noqa: F401 (SECURITY_HEADERS re-exported)
 
 drop_provider_secrets()  # also at import, in case the server runs with lifespan disabled
 
 SAFE_METHODS = ("GET", "HEAD")
-SECURITY_HEADERS = {
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-    "X-Frame-Options": "DENY",
-}
-
-
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     drop_provider_secrets()
@@ -49,10 +42,7 @@ async def read_only_and_headers(request: Request, call_next):
                                 headers={"Allow": ", ".join(SAFE_METHODS)})
     else:
         response = await call_next(request)
-    for name, value in SECURITY_HEADERS.items():
-        response.headers[name] = value
-    if request.url.path.startswith("/api/"):
-        response.headers["Cache-Control"] = "no-store"
+    apply_security_headers(response, request.url.path)
     return response
 
 

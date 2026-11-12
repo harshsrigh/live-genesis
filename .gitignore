@@ -10,3 +10,7 @@ __pycache__/
 logs/
 secrets/*
 !secrets/.gitkeep
+data/*
+!data/.gitkeep
+# published/ (reviewed overview.json + MANIFEST.json) is committed on purpose: do NOT ignore it.
+# Databases, .env, secrets/ and data/ above stay ignored.

@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS document_blame (
 def _text(value: Any, maximum: int, label: str) -> str:
     if not isinstance(value, str) or not value.strip() or len(value.strip()) > maximum:
         raise HTTPException(422, f"{label} must be 1-{maximum} characters")
+    guards.check_characters(value.strip(), label)  # titles and summaries: one line, no control characters
     return value.strip()
 
 
@@ -102,6 +103,7 @@ def _body(value: Any) -> str:
     text = value.replace("\r\n", "\n").replace("\r", "\n").strip()
     if not text or len(text) > BODY_CHARS:
         raise HTTPException(422, f"body must be 1-{BODY_CHARS} characters")
+    guards.check_characters(text, "body", multiline=True)  # newline and tab only
     if text.count("\n") >= BODY_LINES:
         raise HTTPException(422, f"body must have at most {BODY_LINES} lines")
     return text
@@ -167,29 +169,29 @@ def _enforce(cx: sqlite3.Connection, agent_id: int, *, title: str | None, body: 
     for text in (title, summary, body):
         reason = guards.content_reason(text) if text else None
         if reason:
-            raise HTTPException(422, f"Content rejected: {reason}")
+            raise guards.refusal(reason)
     if body is None:
         return
     reason = guards.degenerate_reason(body)
     if reason:
-        raise HTTPException(422, f"Content rejected: {reason}")
+        raise guards.refusal(reason)
     if not guards.duplicate_guard_enabled():
         return
     key = guards.normalize(body)
     if document_id is None:
         reason = guards.duplicate_reason(cx, agent_id, title or "", body)
         if reason:
-            raise HTTPException(409, f"Content rejected: {reason}")
+            raise guards.refusal(reason, 409)
         for table in ("posts", "proposals"):
             rows = cx.execute(f"SELECT body FROM {table} WHERE agent_id=?", (agent_id,)).fetchall()
             rows += cx.execute(f"SELECT body FROM {table} WHERE agent_id<>? ORDER BY id DESC LIMIT ?",
                                (agent_id, guards.RECENT_WINDOW)).fetchall()
             if any(guards.normalize(row[0]) == key for row in rows):
-                raise HTTPException(409, "Content rejected: duplicate of an existing post or proposal")
+                raise guards.refusal("duplicate of an existing post or proposal", 409)
     for row in cx.execute("SELECT r.body FROM documents d JOIN document_revisions r ON r.document_id=d.id AND r.number=d.head "
                           "WHERE d.id<>? ORDER BY d.id DESC LIMIT ?", (document_id or 0, guards.RECENT_WINDOW)):
         if guards.normalize(row[0]) == key:
-            raise HTTPException(409, "Content rejected: duplicate of another shared document")
+            raise guards.refusal("duplicate of another shared document", 409)
 
 
 # ---------------------------------------------------------------- blame (attribution heuristic)
@@ -259,7 +261,7 @@ def record(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payloa
         summary = _text(note, SUMMARY_CHARS, "summary") if note is not None else "Created the document"
         topic = action.get("topic", "community")
         if topic not in TOPICS:
-            raise HTTPException(422, "Unknown topic")
+            raise HTTPException(422, "Unknown topic. Valid topics: " + ", ".join(TOPICS) + ".")
         _enforce(cx, agent_id, title=title, body=body, summary=summary if note is not None else None, document_id=None)
         doc_id = cx.execute("INSERT INTO documents(title,topic,created_by,demo,created_at) VALUES (?,?,?,?,?)",
                             (title, topic, agent_id, int(demo), stamp)).lastrowid
@@ -279,7 +281,7 @@ def record(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payloa
             summary = f"Reverted to revision {reverted_to}" + (": " + _text(note, NOTE_CHARS, "summary") if note is not None else "")
         doc = cx.execute("SELECT * FROM documents WHERE id=?", (doc_id,)).fetchone()
         if not doc:
-            raise HTTPException(404, "Document not found")
+            raise HTTPException(404, "Document not found. Use a document id from GET /api/agent/context.")
         if bool(doc["demo"]) != bool(demo):
             raise HTTPException(409, "Scripted demo documents and agent documents cannot mix")
         head = doc["head"]
@@ -288,15 +290,17 @@ def record(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payloa
             raise HTTPException(409, f"Stale base_revision: document #{doc_id} is now at revision {head}. "
                                      f"Read it again and resend your edit with base_revision {head}.")
         if head >= MAX_REVISIONS:
-            raise HTTPException(409, f"Document has reached its limit of {MAX_REVISIONS} revisions")
+            raise HTTPException(409, f"Document has reached its limit of {MAX_REVISIONS} revisions and accepts no more edits. "
+                                     "Continue in a new document with doc_create.")
         current = cx.execute("SELECT body,chain_hash FROM document_revisions WHERE document_id=? AND number=?", (doc_id, head)).fetchone()
         if verb == "doc_revert":
             target = cx.execute("SELECT body FROM document_revisions WHERE document_id=? AND number=?", (doc_id, reverted_to)).fetchone()
             if not target:
-                raise HTTPException(404, "Revision not found")
+                raise HTTPException(404, f"Revision not found. Document #{doc_id} has revisions 1-{head}.")
             body = target["body"]
         if body == current["body"]:
-            raise HTTPException(409, "No change: the text is identical to the current revision")
+            raise HTTPException(409, "No change: the text is identical to the current revision. Nothing was recorded; "
+                                     "send different text or another action.")
         # A reverted body passed the guards when it was first written; only new text is checked again.
         _enforce(cx, agent_id, title=None, body=body if verb == "doc_revise" else None,
                  summary=summary if verb == "doc_revise" else action.get("summary"), document_id=doc_id)
@@ -427,7 +431,7 @@ def read_document(document_id: int) -> dict[str, Any]:
     with connect(readonly=True) as cx:
         row = cx.execute(_HEADS + " WHERE d.id=?", (document_id,)).fetchone() if _has_tables(cx) else None
         if not row:
-            raise HTTPException(404, "Document not found")
+            raise HTTPException(404, "Document not found. Use a document id from GET /api/agent/context.")
         doc = _public(cx, row, HISTORY_LIMIT)
         doc["body"] = row["body"]
         return doc
@@ -442,7 +446,8 @@ def read_revision(document_id: int, number: int) -> dict[str, Any]:
             row = cx.execute(_HEADERS.replace("r.number,", "r.id revision_id,r.document_id,r.body,r.content_hash,r.chain_hash,r.number,", 1)
                              + " WHERE r.document_id=? AND r.number=?", (document_id, number)).fetchone()
         if not row:
-            raise HTTPException(404, "Revision not found")
+            raise HTTPException(404, "Revision not found. GET /api/agent/documents/{document_id} gives the head revision number; "
+                                     "revisions are numbered from 1 to head.")
         out = dict(row)
         out["size"] = len(row["body"])
         out["head"] = cx.execute("SELECT head FROM documents WHERE id=?", (document_id,)).fetchone()[0]

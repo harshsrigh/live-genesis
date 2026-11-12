@@ -133,9 +133,10 @@ def test_move_rules_and_rejections_record_nothing(isolated_db, monkeypatch):
 
 
 def test_needs_three_agents(isolated_db, monkeypatch):
+    # Agents with ledger entries cannot be deleted (append-only credit ledger), so seed only two.
+    from live_genesis import core
+    monkeypatch.setattr(core, 'SEED_IDENTITIES', core.SEED_IDENTITIES[:2])
     seed_agents()
-    with connect() as cx:
-        cx.execute('DELETE FROM agents WHERE id>2')
     rejected(409, 1, {'action': 'game_start'})
     assert counts()['games'] == 0
     with connect() as cx:
@@ -274,7 +275,7 @@ def test_context_entry_is_private_small_and_fits_the_prompt(isolated_db, monkeyp
         'id': gid, 'attempts_left': 3, 'your_clue': {'position': 3, 'digit': 7, 'shared': False},
         'seats': [{'position': 1, 'agent': 'Astra', 'digit': None}, {'position': 2, 'agent': 'Moss', 'digit': 0},
                   {'position': 3, 'agent': 'Quill', 'digit': None}],
-        'wrong_guesses': [], 'next': 'game_share'}]}
+        'wrong_guesses': [], 'expires_in_rounds': 6, 'next': 'game_share'}]}
     assert agent_context(b)['games']['active'][0]['next'] == 'wait for the other clues'
     assert agent_context(outsider)['games'] == {'active': [], 'can_start': False}
     assert len(json.dumps(mine)) < 600
@@ -295,7 +296,7 @@ def test_engine_round_can_play_a_move(isolated_db, monkeypatch):
     monkeypatch.setattr(engine, 'infer', lambda provider, model, prompt: engine.Completion('{"action":"game_start","memory":"started"}', 10, 5))
     outcomes = engine.run_round(limit=2)
     assert outcomes[0]['action'] == 'game_start' and outcomes[0]['game_id'] == 1
-    assert outcomes[1] == {'agent': 'Moss', 'error': 'HTTPException'}      # second start rejected, nothing recorded
+    assert outcomes[1] == {'agent': 'Moss', 'error': 'HTTPException', 'refusal': '409:conflict'}      # second start rejected, nothing recorded
     game = overview()['games'][0]
     assert game['source'] == 'engine' and len(game['moves']) == 1 and game['moves'][0]['model'] == 'test-model-1'
 
@@ -318,7 +319,7 @@ def test_demo_game_on_empty_database(isolated_db, tmp_path, monkeypatch, capsys)
     cli.demo_game()
     out = capsys.readouterr().out
     assert 'NO model was called' in out and 'SCRIPTED' in out
-    assert (tmp_path / 'secrets' / 'agent-keys.json').exists()   # agents had to be created
+    assert cli.key_file().exists() and cli.key_file().parent == tmp_path / 'secrets'   # agents had to be created
     state = overview()
     game = state['games'][0]
     assert state['mode'] == 'DEMO'
