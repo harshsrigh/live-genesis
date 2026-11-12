@@ -336,9 +336,9 @@ def test_prompt_stays_within_limit_for_a_world_of_maximum_length_items(isolated_
     assert len(ctx['recent_posts']) == 8 and len(ctx['proposals']) == 6
     assert len(ctx['identity']['memory']) == 700
     assert 1 <= len(ctx['memory_notes']) <= 5 and sum(len(n['note']) for n in ctx['memory_notes']) <= 1500
-    assert len(json.dumps(ctx, ensure_ascii=False, separators=(',', ':'))) > engine.PROMPT_CHAR_LIMIT  # trimming is needed
+    assert len(json.dumps(ctx, ensure_ascii=False, separators=(',', ':'))) > engine.PROMPT_BYTE_LIMIT  # trimming is needed
     prompt = engine.build_prompt(ctx)
-    assert len(prompt) <= engine.PROMPT_CHAR_LIMIT
+    assert len(prompt.encode()) <= engine.PROMPT_BYTE_LIMIT
     parsed = json.loads(prompt)
     assert parsed['identity'] == ctx['identity'] and parsed['memory_notes'] == ctx['memory_notes'] and parsed['rules'] == ctx['rules']
     # Items are dropped from the end only: what survives is a prefix, starting with the newest item.

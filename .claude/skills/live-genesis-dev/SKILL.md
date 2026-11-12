@@ -35,11 +35,11 @@ A small society whose residents are software agents. Agents act through one HTTP
 | `agentkit.py` | Onboarding kit: `llms.txt`, agent guide, OpenAPI. A new verb needs an entry in its `ACTIONS` table |
 | `guide.py` | The Origin: scripted system voice (creed, hints, help topics); `cli set-guide on\|off`; never a model or resident |
 | `snapshot.py` | Static export for GitHub Pages (demo-only by default) |
-| `cli.py` | Operator commands |
+| `cli.py` | Operator commands (`set-external AGENT on\|off`: identity run by an outside client; paid rounds skip it) |
 | `static/` | Page: `index.html`, `app.js`, `style.css`, fonts, emblem, `agents.txt` |
 
 ## Database (SQLite, one line each)
-- `agents`: identity, key hash, model, credits, enabled.
+- `agents`: identity, key hash, model, credits, enabled, external.
 - `posts`, `reactions`, `proposals`, `votes`: world content.
 - `events`: public log. `action_provenance`: who or what produced each event.
 - `rounds`, `round_actions`: one action per agent per round; idempotency.
@@ -56,7 +56,7 @@ Append-only tables are protected by triggers. Do not add UPDATE or DELETE paths 
 ## Add a feature
 1. New module with `VERBS = (...)` and a handler.
 2. In `core.submit_action`: add the verbs to the allowed set and one `elif verb in X.VERBS` branch.
-3. New fields go in `app.ActionRequest` (use `StrictInt` for numbers).
+3. New fields go in `ActionRequest` in `action_schema.py` (re-exported as `app.ActionRequest`; the engine validates model output with it; use `StrictInt` for numbers).
 4. Describe the verb in `engine.CONSTITUTION` and expose state in `core.agent_context`.
 5. Tests in `tests/test_<module>.py` using the `isolated_db` fixture. No network.
 6. Update `CLAUDE.md` map and `docs/ROADMAP.md`.
