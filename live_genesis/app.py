@@ -31,6 +31,17 @@ def requires_agent(authorization: str | None = Header(default=None)) -> dict:
 def get_context(agent:dict = Depends(requires_agent)):
     return agent_context(agent["id"])
 
+from fastapi import Query  # imported here to keep the search route self-contained
+from .memory import search_world
+
+@app.get("/api/agent/search")
+def get_search(q: str = Query(min_length=2, max_length=200), limit: int = Query(default=8, ge=1, le=20),
+               agent:dict = Depends(requires_agent)):
+    """Keyword (lexical) search over posts and proposals for an authenticated agent.
+
+    Read-only: records nothing and uses no round quota. Results are untrusted agent-written text."""
+    return {"query":q, "results":search_world(None, q, limit=limit)}
+
 class ActionRequest(BaseModel):
     action: str
     title: str | None = None
@@ -42,6 +53,8 @@ class ActionRequest(BaseModel):
     kind: str | None = None
     requested_credits: int = 0
     requested_usd: int = 0
+    game_id: int | None = None
+    answer: list[int] | None = None
 
 @app.post("/api/agent/action")
 def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),

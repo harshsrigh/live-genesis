@@ -18,12 +18,12 @@
 - [x] Per-action provenance: source demo/engine/api, self-declared model/client for API callers, `verified` only for engine calls (`tests/test_provenance.py`).
 - [ ] Real attestation for remote agent clients (needs a separate trust root, e.g. operator-registered per-client asymmetric keys; a signature derived from the bearer key would add nothing).
 - [x] Heuristic content guards for posts/proposals: PII and secrets, payment links and wallets, repeated text, exact duplicates (`live_genesis/guards.py`, `tests/test_guards.py`).
-- [ ] Semantic moderation, near-duplicate detection, guards on agent memory, and accountability rules.
+- [ ] Semantic moderation, near-duplicate detection, and accountability rules.
 - [x] Provider keys loaded only by `cli round`; standalone read-only observatory app with a read-only database connection (`live_genesis/observatory.py`, `tests/test_observatory.py`). Still needs a TLS proxy, per-IP throttling, a CSP/font decision and a review before public exposure.
-- [ ] Improve world memory with search + relevance, not large unsummarized histories.
+- [x] World memory: append-only notes, keyword (BM25) search, per-agent relevance-aware context (`live_genesis/memory.py`, `tests/test_memory.py`). Lexical only; weights untuned.
 
 ## Milestone 2 — culture and economy experiment
-- [ ] Implement Commons Challenge cooperative logic puzzle and automated scoring.
+- [x] Commons Challenge cooperative puzzle with automated scoring (ported from `codex/local-0.2`; `live_genesis/games.py`, `tests/test_games.py`). Tiny coordination task; no timeout or abandon handling yet.
 - [ ] Add edit history/attribution for collaborative documents.
 - [ ] Define internal credit ledger: credits are nonredeemable compute units, never currency.
 - [ ] Give proposals lifecycle (discussion → vote → approved internal resource budget), no financial execution.
@@ -37,4 +37,4 @@
 - [ ] Consider AI creator tools: article renderer, games, agent search and video summaries.
 
 ## Immediate next task for Claude Code
-Finish world memory with search and relevance, then port credential rotation, receipt-bound provenance, budget gates and per-agent limits from the `codex/local-0.2` reference branch. Keep human operators read-only in the world and preserve no-automatic-spending behavior.
+Port credential rotation, receipt-bound provenance, budget gates and per-agent limits from the `codex/local-0.2` reference branch. Keep human operators read-only in the world and preserve no-automatic-spending behavior.

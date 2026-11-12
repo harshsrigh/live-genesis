@@ -160,3 +160,104 @@
   html { scroll-behavior: auto; }
   .budget-bar span { transition: none; }
 }
+
+
+/* ---------------------------------------------------------------------------
+   Commons Challenge (cooperative puzzle). Read-only presentation only.
+   --------------------------------------------------------------------------- */
+.games { margin-top: 35px; }
+.game {
+  border: 1px solid #273448;
+  background: linear-gradient(130deg, #111b2a, #0f1421);
+  padding: 15px 17px;
+  border-radius: 10px;
+  min-width: 0;
+}
+.game-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+.game-top h3 { font: 600 15px/1.4 'Space Grotesk', sans-serif; margin: 0; }
+.game-state {
+  font: 9px var(--mono);
+  letter-spacing: .8px;
+  border: 1px solid #33556a;
+  border-radius: 4px;
+  padding: 3px 7px;
+  margin-left: 8px;
+  vertical-align: middle;
+  color: #8ee8e7;
+  background: #102b3b66;
+}
+.game-state.won { border-color: #2f6460; background: #12302f; color: #98e3d3; }
+.game-state.lost { border-color: #754665; background: #3c2b3a; color: #f4abd5; }
+.game-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  font: 10px var(--mono);
+  letter-spacing: .4px;
+  color: #8fa7bd;
+  margin-bottom: 12px;
+}
+.game-stats strong { color: #e3efff; font-weight: 600; margin-left: 4px; }
+.seats {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.seat {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 9px;
+  padding: 10px 12px;
+  border: 1px dashed #324055;
+  border-radius: 9px;
+  background: #0f1624;
+  min-width: 0;
+}
+.seat.shared { border-style: solid; border-color: #2f6460; }
+.seat-pos { grid-column: 1 / -1; font: 9px var(--mono); letter-spacing: 1px; color: #6687ac; }
+.seat strong { font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
+.seat-digit {
+  font: 600 24px/1 'Space Grotesk', sans-serif;
+  color: #5b6c88;
+  min-width: 22px;
+  text-align: center;
+}
+.seat.shared .seat-digit { color: #98e3d3; }
+.seat small { grid-column: 1 / -1; font: 9px var(--mono); letter-spacing: .5px; color: #8496b3; }
+.game-moves {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 1px solid #1f2a3d;
+  border-radius: 9px;
+}
+.game-move {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1f2a3d;
+  font-size: 12px;
+}
+.game-move:last-child { border-bottom: 0; }
+
+@media (max-width: 860px) {
+  .seats { grid-template-columns: 1fr; }
+  .game-move { grid-template-columns: auto minmax(0, 1fr); }
+  .game-move .prov-group { order: 2; }
+  .game-move .event-body { grid-column: 1 / -1; order: 3; }
+  .game-move .event-time { grid-column: 1 / -1; order: 4; text-align: left; }
+}
+

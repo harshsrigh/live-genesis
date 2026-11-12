@@ -81,6 +81,31 @@ def demo() -> None:
     print("Added clearly labeled simulated demonstration data; NO model was called.")
 
 
+def demo_game() -> None:
+    """Offline scripted Commons Challenge playthrough. Every record is flagged demo; no model is called."""
+    init_db()
+    with connect() as cx:
+        if cx.execute('SELECT 1 FROM events WHERE demo=0 LIMIT 1').fetchone() or cx.execute('SELECT 1 FROM api_usage LIMIT 1').fetchone():
+            raise RuntimeError("Real agent activity found. To keep data honest, use a fresh DB for the scripted game: LIVE_DB=demo.db")
+        if cx.execute("SELECT 1 FROM games WHERE state='ACTIVE' AND demo=1").fetchone():
+            raise RuntimeError("An unfinished scripted game already exists in this database; use a fresh DB.")
+        starter=cx.execute('SELECT id FROM agents ORDER BY id LIMIT 1').fetchone()
+        enough=cx.execute('SELECT COUNT(*) FROM agents').fetchone()[0]>=3
+    if not enough:
+        init()  # creates agents and stores their keys; skipped (no key file touched) when agents already exist
+        with connect() as cx: starter=cx.execute('SELECT id FROM agents ORDER BY id LIMIT 1').fetchone()
+    script=dict(demo=True,cooldown=False,quota=False)
+    gid=submit_action(starter[0],{"action":"game_start"},**script)["game_id"]
+    seats=next(g for g in overview()["games"] if g["id"]==gid)["clues"]
+    for seat in seats:
+        submit_action(seat["agent_id"],{"action":"game_share","game_id":gid},**script)
+    # The script reads the answer from the PUBLIC overview: once shared, the clues are visible to everyone.
+    answer=[c["value"] for c in next(g for g in overview()["games"] if g["id"]==gid)["clues"]]
+    result=submit_action(seats[-1]["agent_id"],{"action":"game_guess","game_id":gid,"answer":answer},**script)
+    print(json.dumps({k:result[k] for k in ("game_id","state","score")}))
+    print("SCRIPTED DEMO GAME: clearly labeled simulated playthrough; NO model was called. Not evidence of autonomous collaboration.")
+
+
 def main():
     parser=argparse.ArgumentParser(description="LIVE Genesis operations")
     sub=parser.add_subparsers(dest="command",required=True)
@@ -97,10 +122,12 @@ def main():
     rec.add_argument("--note",default="",help="Where the figure came from, e.g. 'OpenAI usage page, 12 Nov'")
     rec.add_argument("--release-open",action="store_true",help="Also clear held/unconfirmed reservations (the entered figure already covers them)")
     sub.add_parser("status",help="View current counters")
+    sub.add_parser("demo-game",help="Offline SCRIPTED Commons Challenge playthrough on an empty/demo-only database (free; no model call)")
     args=parser.parse_args()
     init_db()  # idempotent; also adds tables introduced after a database was first created
     if args.command=="init": init()
     if args.command=="demo": demo()
+    if args.command=="demo-game": demo_game()
     if args.command=="round":
         if not 1<=args.agents<=10: parser.error("--agents must be between 1 and 10")
         load_provider_credentials()  # the only place .env provider API keys enter a process

@@ -85,6 +85,37 @@ function renderChronicle(events){
   setText('chronicle-count', events.length ? num(events.length)+' LATEST · NEWEST #'+text(events[0].id) : 'NO EVENTS');
 }
 
+/* Commons Challenge: read-only. An unshared clue arrives as null and is shown masked; its value is never sent to this page. */
+const MOVE_LABELS = {game_start:'START', game_share:'SHARE', game_guess:'GUESS'};
+function gameSource(g){
+  if(g.demo || g.source === 'demo') return DEMO_FLAG;
+  if(g.source === 'mixed') return '<span class="prov-group"><span class="prov prov-unknown">MIXED SOURCES · see each move</span></span>';
+  const moves = list(g.moves).filter(x => x && typeof x === 'object');
+  /* A single-source game reuses the per-record wording; the model shown is the one on its first move. */
+  return provenance({source: g.source, model: moves.length ? moves[0].model : null});
+}
+function renderGames(games, total){
+  setHTML('games-list', games.length ? games.map(g=>{
+    const state = text(g.state || 'UNKNOWN').toUpperCase();
+    const stateClass = state === 'WON' ? 'won' : state === 'LOST' ? 'lost' : 'active';
+    const max = finite(g.max_attempts) ?? 3;
+    const seats = list(g.clues).filter(x => x && typeof x === 'object');
+    const moves = list(g.moves).filter(x => x && typeof x === 'object');
+    const seatHTML = seats.map(c=>{
+      const open = c.shared && finite(c.value) != null;
+      return `<li class="seat${open ? ' shared' : ''}"><span class="seat-pos">SEAT ${esc(c.position)}</span>${avatar(c.agent,c.role)}<strong>${esc(c.agent ?? 'Unknown agent')}</strong><span class="seat-digit" aria-label="${esc(open ? 'shared digit '+c.value : 'clue not shared, hidden')}">${open ? esc(c.value) : '•'}</span><small>${open ? 'SHARED' : 'PRIVATE · NOT SHARED'}</small></li>`;
+    }).join('');
+    const moveHTML = moves.map(mv=>`<li class="game-move"><span class="event-verb">${esc(MOVE_LABELS[mv.move] || text(mv.move).toUpperCase())}</span><span class="event-body"><strong>${esc(mv.agent ?? 'Unknown agent')}</strong> ${esc(mv.detail)}</span>${provenance(mv)}<span class="event-time">${timeTag(mv.created_at)}</span></li>`).join('');
+    return `<article class="game"><div class="game-top"><h3>Challenge #${esc(g.id)} <span class="game-state ${stateClass}">${esc(state)}</span></h3>${gameSource(g)}</div>`
+      + `<div class="game-stats"><span>SCORE <strong>${esc(num(g.score))} / ${esc(num(max))}</strong></span><span>ATTEMPTS USED <strong>${esc(num(g.attempts))} / ${esc(num(max))}</strong></span><span>${timeTag(g.created_at)}</span></div>`
+      + `<ul class="seats">${seatHTML}</ul>`
+      + (moveHTML ? `<ol class="game-moves">${moveHTML}</ol>` : '')
+      + `</article>`;
+  }).join('') : empty('No Commons Challenge has been started yet.'));
+  const count = finite(total) ?? games.length;
+  setText('games-count', count ? num(count)+' GAME'+(count === 1 ? '' : 'S')+(count > games.length ? ' · LATEST '+num(games.length) : '') : 'NO GAMES');
+}
+
 async function refresh(){
   try {
     const res = await fetch('/api/overview',{cache:'no-store'});
@@ -114,6 +145,7 @@ async function refresh(){
       const topic = text(s.topic);
       return `<div class="signal"><div class="signal-name"><strong>${esc(topic.slice(0,1).toUpperCase()+topic.slice(1))}</strong><small>${esc(num(likes))} LIKE · ${esc(num(dislikes))} DISLIKE</small></div><div class="signal-rail"><span class="yes" style="width:${yes.toFixed(2)}%"></span><span class="no" style="width:${no.toFixed(2)}%"></span></div></div>`;
     }).join('') : empty('No reactions recorded yet.'));
+    renderGames(list(data.games).filter(keep), m.games);
     renderChronicle(list(data.events).filter(keep));
   } catch(err){
     setText('world-status', 'OFFLINE');

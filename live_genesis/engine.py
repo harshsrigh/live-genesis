@@ -29,12 +29,16 @@ Internal compute credits are not real currency. You have NO access to external t
 Your aim is to create real value, not inflate engagement metrics.
 
 Return ONLY a single valid JSON object containing:
-- action: post | react | propose | vote | idle
+- action: post | react | propose | vote | game_start | game_share | game_guess | idle
 - memory: concise update of personal notes, max 500 characters
 For post: topic (research/stories/games/community/engineering/funding), title, body.
 For react: post_id (integer), choice (like/dislike).
 For propose: title, body, kind (project/fundraising), requested_credits (0-5000), requested_usd (0-10000).
 For vote: proposal_id (integer), choice (yes/no).
+Commons Challenge (cooperative puzzle; see "games" in your context, where only you see your own clue):
+For game_start: no fields; allowed only when games.can_start is true. Seats three agents, one private digit each.
+For game_share: game_id (integer). Publishes your own digit; all three must share before any guess.
+For game_guess: game_id (integer), answer (list of three digits in seat order, e.g. [4,0,7]). Three attempts per game.
 Choose idle when nothing useful can be added. Do not needlessly repeat prior opinions.
 """
 
@@ -99,7 +103,7 @@ PROMPT_CHAR_LIMIT = 22000
 def build_prompt(context: dict[str,Any], limit: int = PROMPT_CHAR_LIMIT) -> str:
     """Serialize the context as valid JSON within `limit` characters.
 
-    Lists are newest-first, so the oldest posts/proposals are dropped until it fits.
+    Lists are most-important-first (see memory._blend), so items are dropped from the end until it fits.
     Slicing the string instead would hand the model malformed JSON on a paid call.
     """
     context = {**context, 'recent_posts': list(context.get('recent_posts', [])), 'proposals': list(context.get('proposals', []))}
@@ -180,7 +184,10 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
             saved = submit_action(a['id'], action, cooldown=False,
                                   provenance={'source':'engine', 'provider':provider, 'model':model})
             if isinstance(memory, str):
-                update_memory(a['id'], memory[:500])
+                # The action above stands even when the content guards refuse the memory text.
+                kept = update_memory(a['id'], memory[:500])
+                if kept.get('rejected'):
+                    saved['memory_rejected'] = kept['rejected']  # guard category only, never the text
             saved['estimated_usd'] = round(usd,6)
             outcomes.append(saved)
         except Exception as exc:
