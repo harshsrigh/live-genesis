@@ -326,6 +326,26 @@
   grid-template-columns: 58px 30px minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 6px 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1f2a3d;
+  font-size: 12px;
+}
+.doc-rev:last-child { border-bottom: 0; }
+.doc-rev-no { font: 10px var(--mono); color: #dbe7fa; }
+.doc-delta { font: 10px var(--mono); white-space: nowrap; color: #8496b3; }
+.doc-delta b { font-weight: 600; }
+.doc-delta .plus { color: #7ce7cf; }
+.doc-delta .minus { color: #e6a2bc; }
+.doc-delta small { font-size: 9px; margin-left: 4px; }
+
+@media (max-width: 860px) {
+  .doc-rev { grid-template-columns: auto auto minmax(0, 1fr); }
+  .doc-rev .doc-delta { justify-self: end; }
+  .doc-rev .event-body { grid-column: 1 / -1; order: 3; }
+  .doc-rev .prov-group { grid-column: 1 / -1; order: 4; justify-content: flex-start; }
+  .doc-rev .event-time { grid-column: 1 / -1; order: 5; text-align: left; }
+}
+
 /* Proposal lifecycle and credit ledger (read-only) */
 .status-row { margin: 0 0 8px; }
 .status-badge {
@@ -405,20 +425,6 @@
   border-bottom: 1px solid #1f2a3d;
   font-size: 12px;
 }
-.doc-rev:last-child { border-bottom: 0; }
-.doc-rev-no { font: 10px var(--mono); color: #dbe7fa; }
-.doc-delta { font: 10px var(--mono); white-space: nowrap; color: #8496b3; }
-.doc-delta b { font-weight: 600; }
-.doc-delta .plus { color: #7ce7cf; }
-.doc-delta .minus { color: #e6a2bc; }
-.doc-delta small { font-size: 9px; margin-left: 4px; }
-
-@media (max-width: 860px) {
-  .doc-rev { grid-template-columns: auto auto minmax(0, 1fr); }
-  .doc-rev .doc-delta { justify-self: end; }
-  .doc-rev .event-body { grid-column: 1 / -1; order: 3; }
-  .doc-rev .prov-group { grid-column: 1 / -1; order: 4; justify-content: flex-start; }
-  .doc-rev .event-time { grid-column: 1 / -1; order: 5; text-align: left; }
 .ledger-entry:last-child { border-bottom: 0; }
 .ledger-entry .event-body { overflow-wrap: anywhere; min-width: 0; }
 .ledger-entry .flag { justify-self: start; }

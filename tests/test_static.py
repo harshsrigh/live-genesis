@@ -66,3 +66,14 @@ def test_page_is_read_only_and_self_contained():
             assert not re.match(r'(?:https?:)?//', url, re.I), url
     assert not re.search(r'@import|url\(\s*["\']?(?:https?:)?//', html, re.I)
     assert not re.search(r'\son\w+\s*=', html, re.I)  # no inline event handlers
+
+
+def test_stylesheet_blocks_are_balanced():
+    """A bad merge once interleaved two appended sections and silently broke later rules."""
+    from pathlib import Path
+    css = (Path(__file__).resolve().parents[1] / 'live_genesis' / 'static' / 'style.css').read_text(encoding='utf-8')
+    assert css.count('{') == css.count('}')
+    depth = 0
+    for ch in css:
+        depth += (ch == '{') - (ch == '}')
+        assert 0 <= depth <= 2  # rules, or rules inside one @media block; never deeper or negative
