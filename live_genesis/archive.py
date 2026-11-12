@@ -47,6 +47,14 @@ A failed call (FAILURE RULE, printed by `archive-plan`):
   first, so a priced failure never costs a free column.
 `engine.run_round` and `study.run_study` are not touched by any of this.
 
+Repeat samples (optional; `LIVE_ARCHIVE_SAMPLES` / `archive-run --samples`, 1-5, default 1): a run may ask
+each question several times of each model. Every sample is its own call with its own hold and its own
+append-only row (`archive_answers.sample`); with pinned sampling the seed is ARCHIVE_SEED + sample - 1.
+A cell's samples are grouped by the normalised form: `agree` is the size of the largest group, `samples`
+the number of answers received, and the answer shown is the REPRESENTATIVE (largest group; ties: lowest
+sample index). `changed` compares representatives across runs. `stability` derives steady / changed /
+unsettled from that; with one sample nothing is ever unsettled and everything reads as before.
+
 `live_genesis.core` imports this module for `SCHEMA`, so the engine is imported lazily: the
 web processes must never load the engine or a provider SDK.
 """
@@ -145,7 +153,38 @@ FINISH = re.compile(r"[A-Za-z0-9_.:-]{1,40}")
 DIGEST = re.compile(r"(?:sha256:)?([0-9a-f]{64})")
 DIGEST_PUBLIC_CHARS = 12
 DIGEST_TIMEOUT_SECONDS = 2.0
+# Repeat samples: how many times a run asks each question of each model. 1 is the archive as it always was.
+SAMPLES_VARIABLE = "LIVE_ARCHIVE_SAMPLES"
+DEFAULT_SAMPLES, MAX_SAMPLES = 1, 5
+STABILITY = ("steady", "changed", "unsettled")
+SAMPLES_RULE = ("In a run with several samples each question is asked that many times of each model, every time on its own. "
+                "The samples are compared by the same plain text comparison; the answer shown is the one most samples gave "
+                "(on a tie, the earliest). A cell is unsettled when the samples did not all agree, in that run or in that "
+                "model's previous answered run: a difference there may be noise and is not counted as a change.")
 
+ANSWERS_TABLE = '''CREATE TABLE IF NOT EXISTS archive_answers (
+    id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES archive_runs(id),
+    question_set TEXT NOT NULL, question_id TEXT NOT NULL, answerer TEXT NOT NULL,
+    agent_id INTEGER REFERENCES agents(id), provider TEXT, model TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('engine','api','demo','mock')),
+    reservation_id INTEGER REFERENCES budget_reservations(id),
+    state TEXT NOT NULL CHECK(state IN ('answered','no_answer','withheld')),
+    reason TEXT NOT NULL DEFAULT '',
+    answer_text TEXT, normalised TEXT, answer_sha256 TEXT,
+    changed INTEGER CHECK(changed IN (0,1)),
+    input_tokens INTEGER, output_tokens INTEGER, estimated_usd REAL, created_at TEXT NOT NULL,
+    -- Server calls only (NULL otherwise, and NULL on rows from before these columns): the endpoint NAME (never its
+    -- URL), what the provider's response said about itself, and how the call was made and priced.
+    endpoint TEXT, reported_model TEXT, system_fingerprint TEXT, finish_reason TEXT, latency_ms INTEGER,
+    sampling TEXT, model_digest TEXT, pricing_basis TEXT, local INTEGER,
+    -- Repeat samples: one row per (run, question, answerer, sample). 1 on every row from before the column.
+    sample INTEGER NOT NULL DEFAULT 1 CHECK(sample BETWEEN 1 AND 5),
+    UNIQUE (run_id, question_id, answerer, sample),
+    CHECK ((state='answered') = (answer_text IS NOT NULL)),
+    CHECK ((source='engine') = (reservation_id IS NOT NULL) OR source='mock'),
+    CHECK ((source='api') = (agent_id IS NOT NULL))
+);
+'''
 TABLES = '''
 CREATE TABLE IF NOT EXISTS archive_sets (
     question_set TEXT PRIMARY KEY, sha256 TEXT NOT NULL, questions INTEGER NOT NULL, locked_at TEXT NOT NULL,
@@ -174,6 +213,8 @@ CREATE TABLE IF NOT EXISTS archive_runs (
     status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('running','complete','incomplete')),
     stop_reason TEXT NOT NULL DEFAULT '', max_usd REAL, max_output_tokens INTEGER,
     mock_kind TEXT NOT NULL DEFAULT '',
+    -- How many times this run asks each question of each model (repeat samples). 1 for every run from before the column.
+    samples INTEGER NOT NULL DEFAULT 1 CHECK(samples BETWEEN 1 AND 5),
     UNIQUE (kind, number)
 );
 -- What a run covered: per track, the set version and the number of questions asked (positions
@@ -184,27 +225,7 @@ CREATE TABLE IF NOT EXISTS archive_run_sets (
     question_set TEXT NOT NULL, version INTEGER NOT NULL, sha256 TEXT NOT NULL, questions INTEGER NOT NULL CHECK(questions>=1),
     PRIMARY KEY (run_id, track)
 );
-CREATE TABLE IF NOT EXISTS archive_answers (
-    id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES archive_runs(id),
-    question_set TEXT NOT NULL, question_id TEXT NOT NULL, answerer TEXT NOT NULL,
-    agent_id INTEGER REFERENCES agents(id), provider TEXT, model TEXT NOT NULL,
-    source TEXT NOT NULL CHECK(source IN ('engine','api','demo','mock')),
-    reservation_id INTEGER REFERENCES budget_reservations(id),
-    state TEXT NOT NULL CHECK(state IN ('answered','no_answer','withheld')),
-    reason TEXT NOT NULL DEFAULT '',
-    answer_text TEXT, normalised TEXT, answer_sha256 TEXT,
-    changed INTEGER CHECK(changed IN (0,1)),
-    input_tokens INTEGER, output_tokens INTEGER, estimated_usd REAL, created_at TEXT NOT NULL,
-    -- Server calls only (NULL otherwise, and NULL on rows from before these columns): the endpoint NAME (never its
-    -- URL), what the provider's response said about itself, and how the call was made and priced.
-    endpoint TEXT, reported_model TEXT, system_fingerprint TEXT, finish_reason TEXT, latency_ms INTEGER,
-    sampling TEXT, model_digest TEXT, pricing_basis TEXT, local INTEGER,
-    UNIQUE (run_id, question_id, answerer),
-    CHECK ((state='answered') = (answer_text IS NOT NULL)),
-    CHECK ((source='engine') = (reservation_id IS NOT NULL) OR source='mock'),
-    CHECK ((source='api') = (agent_id IS NOT NULL))
-);
--- One row per answerer of a run made by `archive-run`, written when the run closes: how far that model got.
+''' + ANSWERS_TABLE + '''-- One row per answerer of a run made by `archive-run`, written when the run closes: how far that model got.
 -- `skipped`: a call failed on a zero-priced endpoint and the run went on without this model. `stopped`: the run
 -- ended while this model was being asked. `reason` is a category (SKIP_REASONS), never provider text.
 CREATE TABLE IF NOT EXISTS archive_run_answerers (
@@ -234,6 +255,8 @@ ADDED_COLUMNS = (
     ("archive_answers", "model_digest", "TEXT"),
     ("archive_answers", "pricing_basis", "TEXT"),
     ("archive_answers", "local", "INTEGER"),
+    # Repeat samples. `archive_answers.sample` is not listed: it changes the table's UNIQUE rule, so migrate() rebuilds.
+    ("archive_runs", "samples", "INTEGER NOT NULL DEFAULT 1 CHECK(samples BETWEEN 1 AND 5)"),
 )
 RULES = '''
 CREATE INDEX IF NOT EXISTS archive_answers_series ON archive_answers(answerer, question_id, run_id);
@@ -276,6 +299,10 @@ CREATE TRIGGER IF NOT EXISTS archive_answers_kind BEFORE INSERT ON archive_answe
     WHEN (SELECT kind FROM archive_runs WHERE id=NEW.run_id) IS NOT
          CASE NEW.source WHEN 'demo' THEN 'demo' WHEN 'mock' THEN 'mock' ELSE 'real' END
     BEGIN SELECT RAISE(ABORT, 'archive answer source does not match the kind of its run'); END;
+-- A sample index never exceeds what its run asks for, and an outside client's answer is always sample 1.
+CREATE TRIGGER IF NOT EXISTS archive_answers_sample BEFORE INSERT ON archive_answers
+    WHEN NEW.sample > (SELECT samples FROM archive_runs WHERE id=NEW.run_id) OR (NEW.source='api' AND NEW.sample!=1)
+    BEGIN SELECT RAISE(ABORT, 'archive answer sample index is outside what its run asks for'); END;
 -- A real answer is an answer to a locked question.
 CREATE TRIGGER IF NOT EXISTS archive_answers_real_question BEFORE INSERT ON archive_answers
     WHEN (SELECT kind FROM archive_runs WHERE id=NEW.run_id)='real' AND NOT EXISTS
@@ -309,23 +336,58 @@ CREATE TRIGGER IF NOT EXISTS archive_runs_close_only BEFORE UPDATE ON archive_ru
       OR NEW.question_set IS NOT OLD.question_set OR NEW.set_sha256 IS NOT OLD.set_sha256
       OR NEW.started_at IS NOT OLD.started_at OR NEW.max_usd IS NOT OLD.max_usd
       OR NEW.max_output_tokens IS NOT OLD.max_output_tokens OR NEW.mock_kind IS NOT OLD.mock_kind
+      OR NEW.samples IS NOT OLD.samples
     BEGIN SELECT RAISE(ABORT, 'archive_runs is append-only: a running run can only be closed, once'); END;
 '''
 SCHEMA = TABLES + RULES
 
 
+def _rebuild_answers(cx) -> None:
+    """Give `archive_answers` its `sample` column. The column is part of the table's UNIQUE rule, which
+    SQLite cannot alter, so the table is rebuilt once: a new table, every row copied with its id and every
+    value as it was (sample 1), the old table dropped, the new one renamed. One transaction; the row
+    count is checked before the old table goes. The table's index and triggers are recreated by RULES."""
+    cx.commit()
+    cx.execute("BEGIN IMMEDIATE")
+    try:
+        columns = [row[1] for row in cx.execute("PRAGMA table_info(archive_answers)")]
+        if "sample" in columns:          # another process did it while this one waited for the lock
+            cx.rollback()
+            return
+        names = ",".join(columns)
+        cx.execute(ANSWERS_TABLE.replace("CREATE TABLE IF NOT EXISTS archive_answers (", "CREATE TABLE archive_answers_rebuild (", 1))
+        cx.execute(f"INSERT INTO archive_answers_rebuild({names}) SELECT {names} FROM archive_answers ORDER BY id")
+        before, after = (cx.execute(f"SELECT COUNT(*),COALESCE(MAX(id),0) FROM {table}").fetchone()[:]
+                         for table in ("archive_answers", "archive_answers_rebuild"))
+        if tuple(before) != tuple(after):
+            raise RuntimeError("archive_answers could not be upgraded: the copy does not hold every row. Nothing was changed.")
+        cx.execute("DROP TABLE archive_answers")
+        cx.execute("ALTER TABLE archive_answers_rebuild RENAME TO archive_answers")
+        cx.commit()
+    except BaseException:
+        cx.rollback()
+        raise
+
+
 def migrate(cx) -> None:
     """Create the tables and rules, and bring an older database up to date in place: one from before
-    the trending track, or one from before named endpoints (its answers gain nullable columns that
-    stay NULL, and the per-run answerer table is created empty).
+    the trending track, one from before named endpoints (its answers gain nullable columns that
+    stay NULL, and the per-run answerer table is created empty), or one from before repeat samples
+    (`archive_runs.samples` and `archive_answers.sample`, both 1 on every existing row).
     Nothing recorded is rewritten: columns are added with defaults, the one lock an older database
     can hold is copied into the version table as version 1, and the trigger that tied a real run
-    to `archive_sets` is replaced by the same rule against the version table."""
+    to `archive_sets` is replaced by the same rule against the version table. `archive_answers` is
+    rebuilt once for its sample column (`_rebuild_answers`): same ids, same values."""
     cx.executescript(TABLES)
     for table, column, declaration in ADDED_COLUMNS:
         if column not in {row[1] for row in cx.execute(f"PRAGMA table_info({table})")}:
             cx.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
-    cx.executescript("DROP TRIGGER IF EXISTS archive_runs_real_needs_lock;" + RULES)
+    if "sample" not in {row[1] for row in cx.execute("PRAGMA table_info(archive_answers)")}:
+        _rebuild_answers(cx)
+    stale = cx.execute("SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='archive_runs_close_only' "
+                       "AND sql NOT LIKE '%NEW.samples%'").fetchone()   # from before repeat samples: recreated below
+    cx.executescript("DROP TRIGGER IF EXISTS archive_runs_real_needs_lock;"
+                     + ("DROP TRIGGER IF EXISTS archive_runs_close_only;" if stale else "") + RULES)
     cx.execute("INSERT INTO archive_set_versions(question_set,version,sha256,questions,locked_at) "
                "SELECT question_set,1,sha256,questions,locked_at FROM archive_sets s WHERE NOT EXISTS "
                "(SELECT 1 FROM archive_set_versions v WHERE v.question_set=s.question_set)")
@@ -372,6 +434,67 @@ def classify(text: Any, stop: str = "end") -> tuple[str, str, str | None]:
     if not normalise(text):
         return "no_answer", EMPTY, None
     return "answered", "", text
+
+
+# ---- Repeat samples: agreement within a run, stability across runs --------------------------------
+
+def sample_count(value: Any = None) -> int:
+    """How many times a run asks each question of each model: `value` (--samples) when given, otherwise
+    LIVE_ARCHIVE_SAMPLES, otherwise 1. A whole number from 1 to 5; anything else is refused, not clamped,
+    because the number is part of the method."""
+    raw = os.getenv(SAMPLES_VARIABLE, "").strip() if value is None else value
+    if raw == "":
+        return DEFAULT_SAMPLES
+    try:
+        if isinstance(raw, (bool, float)):
+            raise ValueError
+        count = int(raw)
+    except (TypeError, ValueError):
+        count = 0
+    if not DEFAULT_SAMPLES <= count <= MAX_SAMPLES:
+        raise ArchiveRefused(f"{SAMPLES_VARIABLE} / --samples must be a whole number from 1 to {MAX_SAMPLES} "
+                             "(how many times each question is asked of each model in one run)")
+    return count
+
+
+def sampling_for(sample: int) -> dict:
+    """The pinned sampling of one sample: temperature 0 and the seed ARCHIVE_SEED + sample - 1, so that
+    sample 1 is sent exactly what a single-sample run sends and later samples are not trivially the same
+    call on a server that honours the seed. What was sent is recorded per answer (`sampling`)."""
+    return {**SAMPLING, "seed": ARCHIVE_SEED + sample - 1}
+
+
+def representative(rows: list[dict]) -> tuple[dict, int, int, list[dict]]:
+    """One cell's sample rows (each: sample, state, answer_sha256, answer_text) -> (the row shown,
+    answers received, size of the largest group, the other distinct answers as {text, count}).
+    Answered samples are grouped by the hash of their normalised form. The row shown is the lowest
+    sample of the largest group; on a tie, the group that holds the lowest sample index. With no
+    answered sample it is the first row, and both counts are 0."""
+    ordered = sorted(rows, key=lambda row: row.get("sample") or 1)
+    groups: dict[str, list[dict]] = {}
+    for row in ordered:
+        if row["state"] == "answered":
+            groups.setdefault(row["answer_sha256"], []).append(row)
+    if not groups:
+        return ordered[0], 0, 0, []
+    ranked = sorted(groups.values(), key=lambda group: -len(group))   # stable: equal sizes stay in sample order
+    return (ranked[0][0], sum(len(group) for group in ranked), len(ranked[0]),
+            [{"text": group[0]["answer_text"], "count": len(group)} for group in ranked[1:]])
+
+
+def split(answer: dict | None) -> bool:
+    """True when a public answer's samples did not all agree. Always False for a single-sample answer."""
+    return answer is not None and answer.get("agree", 1) < answer.get("samples", 1)
+
+
+def stability(answer: dict, previous: dict | None) -> str:
+    """The derived label of one ANSWERED public cell (see SAMPLES_RULE), given that answerer's previous
+    answered cell for the question (None for the first): `unsettled` when the samples disagreed in
+    either, otherwise `changed` when the representative differs, otherwise `steady`. Computed, never
+    stored. With one sample per run it is `changed` exactly when `changed` is true."""
+    if split(answer) or split(previous):
+        return "unsettled"
+    return "changed" if answer["changed"] else "steady"
 
 
 # ---- Question files and locks ----------------------------------------------------------------
@@ -779,7 +902,7 @@ def resolve(models: list[dict], tokens_out: int) -> tuple[list[dict], dict]:
     return sorted(out, key=lambda a: a["basis"] not in ZERO_PRICED), budget
 
 
-def plan(only: str | None = None, question_set: str | None = None) -> dict:
+def plan(only: str | None = None, question_set: str | None = None, samples: Any = None) -> dict:
     """Free. Questions, models, number of calls and the worst-case estimate at each model's rates.
     Raises ArchiveRefused / controls.ConfigError when settings are unusable. Contacts no provider.
 
@@ -790,9 +913,12 @@ def plan(only: str | None = None, question_set: str | None = None) -> dict:
 
     `holds` prices each question at the global rates and output limit (0 when no listed model uses
     them); `holds_by_model` holds what a run reserves: per label, per question, at that model's
-    own rates and output limit."""
+    own rates and output limit, for ONE call. `samples` (--samples; default LIVE_ARCHIVE_SAMPLES, else 1)
+    multiplies the calls and every total: each question is asked that many times of each model."""
+    count = sample_count(samples)
     with core.connect() as cx:
         states = [track_state(cx, track) for track in select_tracks(question_set)]
+        last = cx.execute("SELECT samples FROM archive_runs WHERE kind='real' ORDER BY number DESC LIMIT 1").fetchone()
     any_locked = any(state["locked"] for state in states)
     for state in states:
         state["asked"] = bool(state["questions"]) and (state["locked"] or not any_locked)
@@ -806,7 +932,7 @@ def plan(only: str | None = None, question_set: str | None = None) -> dict:
     holds = {q["id"]: call_hold(q["prompt"], budget["input_rate"] or 0.0, budget["output_rate"] or 0.0, tokens_out) for q in questions}
     by_model = {a["label"]: {q["id"]: call_hold(q["prompt"], a["input_rate"], a["output_rate"], a["max_output_tokens"])
                              for q in questions} for a in models}
-    per_model = {label: math.fsum(values.values()) for label, values in by_model.items()}
+    per_model = {label: math.fsum(values.values()) * count for label, values in by_model.items()}
     groups: list[dict] = []   # per endpoint: what the plan prints
     for answerer in models:
         group = next((g for g in groups if g["endpoint"] == answerer["endpoint"]), None)
@@ -815,14 +941,14 @@ def plan(only: str | None = None, question_set: str | None = None) -> dict:
                      "worst_case_usd": 0.0, "input_rate": answerer["input_rate"], "output_rate": answerer["output_rate"],
                      "pause_seconds": answerer["pause_seconds"], "labels": []}
             groups.append(group)
-        group["calls"] += len(questions)
+        group["calls"] += len(questions) * count
         group["worst_case_usd"] += per_model[answerer["label"]]
         group["labels"].append(answerer["label"])
     lead = asked[0]
     return {"question_set": lead["question_set"], "sha256": lead["sha256"], "status": lead["status"],
             "questions": questions, "groups": lead["groups"], "tracks": states, "models": models,
-            "max_output_tokens": tokens_out,
-            "calls": len(questions) * len(models), "input_rate": budget["input_rate"], "output_rate": budget["output_rate"],
+            "max_output_tokens": tokens_out, "samples": count, "previous_samples": int(last[0]) if last else None,
+            "calls": len(questions) * len(models) * count, "input_rate": budget["input_rate"], "output_rate": budget["output_rate"],
             "spend_limit_usd": budget["spend_limit_usd"], "holds": holds, "holds_by_model": by_model, "endpoints": groups,
             "worst_case_usd_per_model": max(per_model.values()),
             "worst_case_usd": math.fsum(per_model.values()),
@@ -854,8 +980,18 @@ def render_plan(planned: dict, *, locked: dict | None = None) -> str:
                          f"To add them: python -m live_genesis.cli archive-lock{flag}")
     lines.append("Models (label = provider or endpoint:model), in the order they are asked:")
     lines += [f"  {a['label']} = {a['endpoint']}:{a['model']}" for a in planned["models"]]
-    lines.append(f"Calls per run: {planned['calls']} ({len(planned['questions'])} questions x {len(planned['models'])} models), "
+    samples = planned.get("samples", 1)
+    times = f" x {samples} samples" if samples > 1 else ""
+    lines.append(f"Calls per run: {planned['calls']} ({len(planned['questions'])} questions x {len(planned['models'])} models{times}), "
                  f"output limit {planned['max_output_tokens']} tokens each unless an endpoint sets its own.")
+    if samples > 1:
+        lines.append(f"Samples: each question is asked {samples} times of each model ({SAMPLES_VARIABLE} / --samples), each time as "
+                     f"its own call with its own hold. Every call count and estimate here is {samples} times that of a "
+                     "single-sample run.")
+    previous = planned.get("previous_samples")
+    if previous is not None and previous != samples:
+        lines.append(f"WARNING: the last real run asked {previous} sample(s) per question and this one would ask {samples}. "
+                     "The number of samples is part of the method: choose it before the first real run and keep it.")
     lines.append("Per endpoint (calls, worst-case estimate, pricing basis):")
     for group in planned["endpoints"]:
         detail = {providers.BASIS_RATES: f"rates ${group['input_rate']:.2f} in / ${group['output_rate']:.2f} out per million tokens",
@@ -883,14 +1019,14 @@ def render_plan(planned: dict, *, locked: dict | None = None) -> str:
 # ---- Storage -----------------------------------------------------------------------------------
 
 def _open_run(cx, kind: str, tracks: list[dict], *, max_usd: float | None = None, tokens: int | None = None,
-              mock_kind: str = "", started_at: str | None = None) -> tuple[int, int]:
+              mock_kind: str = "", started_at: str | None = None, samples: int = 1) -> tuple[int, int]:
     """Open a run over `tracks` (each: track, question_set, sha256, version, questions). The run
     row names the first; archive_run_sets records each with the number of questions asked."""
     number = int(cx.execute("SELECT COALESCE(MAX(number),0)+1 FROM archive_runs WHERE kind=?", (kind,)).fetchone()[0])
     run_id = int(cx.execute(
-        "INSERT INTO archive_runs(number,kind,question_set,set_sha256,started_at,max_usd,max_output_tokens,mock_kind) "
-        "VALUES (?,?,?,?,?,?,?,?)", (number, kind, tracks[0]["question_set"], tracks[0]["sha256"], started_at or core.utcnow(),
-                                     max_usd, tokens, mock_kind)).lastrowid)
+        "INSERT INTO archive_runs(number,kind,question_set,set_sha256,started_at,max_usd,max_output_tokens,mock_kind,samples) "
+        "VALUES (?,?,?,?,?,?,?,?,?)", (number, kind, tracks[0]["question_set"], tracks[0]["sha256"], started_at or core.utcnow(),
+                                       max_usd, tokens, mock_kind, samples)).lastrowid)
     for part in tracks:
         cx.execute("INSERT INTO archive_run_sets(run_id,track,question_set,version,sha256,questions) VALUES (?,?,?,?,?,?)",
                    (run_id, part["track"], part["question_set"], part.get("version", 0), part["sha256"], len(part["questions"])))
@@ -911,29 +1047,33 @@ def _store(cx, run_id: int, question_set: str, question_id: str, answerer: str, 
            state: str, reason: str = "", text: str | None = None, provider: str | None = None,
            agent_id: int | None = None, reservation: int | None = None, input_tokens: int | None = None,
            output_tokens: int | None = None, usd: float | None = None, created_at: str | None = None,
-           call: dict | None = None) -> dict:
-    """Insert one answer row. `changed` compares with this answerer's previous ANSWERED row for
+           call: dict | None = None, sample: int = 1) -> dict:
+    """Insert one answer row. `changed` compares with this answerer's previous ANSWERED cell for
     the same question in an earlier run of the same kind: None for the first, and None for a
     row that holds no answer. A run with no answer in between is skipped, not counted as a change.
-    `call` (server calls only) holds the columns of `_call_record`."""
+    The earlier cell is compared through its REPRESENTATIVE (`representative`): for a single-sample
+    run that is its one row, as it always was. So the `changed` stored on the row that turns out to be
+    this cell's representative is the comparison of the two representatives.
+    `call` (server calls only) holds the columns of `_call_record`; `sample` is the sample index."""
     call = call or {}
     kind, number = cx.execute("SELECT kind,number FROM archive_runs WHERE id=?", (run_id,)).fetchone()
     normalised = digest = changed = None
     if state == "answered":
         normalised = normalise(text or "")
         digest = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
-        previous = cx.execute(
-            "SELECT a.answer_sha256 FROM archive_answers a JOIN archive_runs r ON r.id=a.run_id "
+        earlier = [dict(zip(("number", "sample", "state", "answer_sha256", "answer_text"), row)) for row in cx.execute(
+            "SELECT r.number,a.sample,a.state,a.answer_sha256,a.answer_text FROM archive_answers a JOIN archive_runs r ON r.id=a.run_id "
             "WHERE r.kind=? AND r.number<? AND a.question_set=? AND a.question_id=? AND a.answerer=? AND a.state='answered' "
-            "ORDER BY r.number DESC LIMIT 1", (kind, number, question_set, question_id, answerer)).fetchone()
-        changed = None if previous is None else int(previous[0] != digest)
+            "ORDER BY r.number DESC,a.sample LIMIT ?", (kind, number, question_set, question_id, answerer, MAX_SAMPLES))]
+        previous = representative([row for row in earlier if row["number"] == earlier[0]["number"]])[0] if earlier else None
+        changed = None if previous is None else int(previous["answer_sha256"] != digest)
     cx.execute("INSERT INTO archive_answers(run_id,question_set,question_id,answerer,agent_id,provider,model,source,"
                "reservation_id,state,reason,answer_text,normalised,answer_sha256,changed,input_tokens,output_tokens,"
                "estimated_usd,created_at,endpoint,reported_model,system_fingerprint,finish_reason,latency_ms,sampling,"
-               "model_digest,pricing_basis,local) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+               "model_digest,pricing_basis,local,sample) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                (run_id, question_set, question_id, answerer, agent_id, provider, model, source, reservation, state, reason,
                 text if state == "answered" else None, normalised, digest, changed, input_tokens, output_tokens, usd,
-                created_at or core.utcnow(), *(call.get(key) for key in CALL_COLUMNS)))
+                created_at or core.utcnow(), *(call.get(key) for key in CALL_COLUMNS), sample))
     return {"state": state, "changed": None if changed is None else bool(changed)}
 
 
@@ -1054,6 +1194,8 @@ def _summary(run_id: int) -> dict:
                "status": shown_status(run["status"], per_answerer), "stop_reason": run["stop_reason"], "question_set": run["question_set"],
                "questions_asked": asked,
                "answers": counts, "estimated_usd": round(float(usd), 6), "max_usd": run["max_usd"]}
+    if run["samples"] > 1:
+        summary["samples"] = run["samples"]   # `answers` then counts sample rows: one per call recorded
     if per_answerer:
         summary["answerers"] = per_answerer
     return summary
@@ -1075,7 +1217,7 @@ def _check_ready(models: list[dict]) -> None:
 
 
 def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0,
-                question_set: str | None = None) -> dict:
+                question_set: str | None = None, samples: Any = None) -> dict:
     """PAID when `engine.infer` is the real adapter. Run only on the operator's explicit instruction.
 
     Asks every locked question of every track; `question_set` ("core" or "trending") limits it
@@ -1099,6 +1241,11 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
     changed: the run STOPS (status `incomplete`, no further call) on a failed inference, and its
     hold stays `unconfirmed`. The run also stops on a refused reservation or usage above a hold.
     Nothing is retried and an interrupted run is never resumed.
+
+    `samples` (--samples; default LIVE_ARCHIVE_SAMPLES, else 1) asks each question that many times of
+    each model: every sample is its own call (reserve -> infer -> settle), stored as its own row, and
+    with pinned sampling its seed is ARCHIVE_SEED + sample - 1 (`sampling_for`). The failure rule applies
+    to each call. The number is recorded on the run (`archive_runs.samples`).
     A run made through a replaced `engine.infer` is stored as mock and is never public.
     """
     from . import engine  # lazy: see module docstring
@@ -1107,7 +1254,7 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
         raise ArchiveRefused("Explicit opt-in required for paid calls: set LIVE_ALLOW_PAID_CALLS=YES")
     if isinstance(max_usd, bool) or not isinstance(max_usd, (int, float)) or not math.isfinite(max_usd) or max_usd <= 0:
         raise ArchiveRefused("--max-usd is required and must be a finite positive number. No paid call was made.")
-    planned = plan(only, question_set)  # validates the question files, the locks, the endpoints and the budget settings (fail closed)
+    planned = plan(only, question_set, samples)  # validates the question files, the locks, the endpoints and the budget settings (fail closed)
     models = planned["models"]
     _check_ready(models)
     asked = [state for state in planned["tracks"] if state["asked"]]
@@ -1140,7 +1287,7 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
     with core.connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
         run_id, number = _open_run(cx, kind, asked, max_usd=float(max_usd), tokens=planned["max_output_tokens"],
-                                   mock_kind="" if real else "patched-infer")
+                                   mock_kind="" if real else "patched-infer", samples=planned["samples"])
     status, reason = "incomplete", "interrupted before the run finished"
     spent: list[float] = []
     unconfirmed = ("Check provider billing, then run: cli reconcile --receipt {0} --actual-usd <charged amount>")
@@ -1168,12 +1315,13 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
             extra: dict[str, Any] = {}   # only what this call needs: a resident-style call passes neither
             if record is not None:
                 extra["endpoint"] = record
-            if answerer["send_sampling"]:
-                extra["sampling"] = dict(SAMPLING)
             wait = max(float(pause_seconds or 0.0), answerer["pause_seconds"], 0.0)
             state_of["outcome"] = "stopped"   # until this model's last question is stored
-            for question in planned["questions"]:
+            # One loop over (question, sample): every sample is a call of its own, and a break ends this model.
+            for question, sample in ((q, k) for q in planned["questions"] for k in range(1, planned["samples"] + 1)):
                 hold = planned["holds_by_model"][answerer["label"]][question["id"]]
+                if answerer["send_sampling"]:
+                    extra["sampling"] = sampling_for(sample)
                 if math.fsum(spent) + hold > max_usd + study.EPSILON_USD:
                     reason = "run cap reached; no further calls made"
                     break
@@ -1234,7 +1382,7 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
                     _store(cx, run_id, question["question_set"], question["id"], answerer["label"], model=answerer["model"],
                            source=source, state=state, reason=why, text=kept, provider=answerer["provider"],
                            reservation=reservation, input_tokens=tokens_in, output_tokens=tokens_out, usd=usd,
-                           call=_call_record(answerer, result, latency_ms, digest))
+                           call=_call_record(answerer, result, latency_ms, digest), sample=sample)
                 state_of["recorded"] += 1
                 if usd > hold:
                     reason = (f"recorded usage exceeded the hold; reservation {reservation} is unconfirmed. "
@@ -1270,18 +1418,23 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
 
 # ---- Dry run (free; built-in fake answers) -----------------------------------------------------
 
-def fake_answer(run_number: int, label: str, question: dict) -> str:
+def fake_answer(run_number: int, label: str, question: dict, sample: int = 1) -> str:
     """DRY-RUN FAKE ANSWER. Not a model: a hash picks one of three canned lines, so repeated dry
-    runs produce both same and changed cells. It ignores the question."""
+    runs produce both same and changed cells. It ignores the question. A later sample gives the line
+    of sample 1 except in about one cell in four, so a multi-sample dry run shows disagreement too."""
     pick = int(hashlib.sha256(f"{run_number // 2}:{label}:{question['id']}".encode()).hexdigest(), 16) % 3
+    if sample > 1 and int(hashlib.sha256(f"{label}:{question['id']}:{sample}".encode()).hexdigest(), 16) % 4 == 0:
+        pick = (pick + 1) % 3
     return ("DRY-RUN FAKE OUTPUT (no model was called): " + ("first canned line.", "second canned line.", "third canned line.")[pick])
 
 
-def dry_run(only: str | None = None, question_set: str | None = None) -> dict:
+def dry_run(only: str | None = None, question_set: str | None = None, samples: Any = None) -> dict:
     """Free plumbing check. No provider, no key, no reservation, no `api_usage` row, no lock needed.
     Stored as a mock run with source `mock`: never exported, never rendered. Uses the configured
     labels when LIVE_ARCHIVE_MODELS is set, otherwise three placeholder labels. Covers the
-    questions in both files as they are now (locked or not) unless `question_set` names one."""
+    questions in both files as they are now (locked or not) unless `question_set` names one.
+    `samples` as for `run_archive`: that many fake rows per question and label."""
+    count = sample_count(samples)
     tracks = [data for data in (load_questions(track=track) for track in select_tracks(question_set)) if data["questions"]]
     if not tracks:
         raise ArchiveRefused("There is no question to ask in the chosen question file.")
@@ -1293,13 +1446,14 @@ def dry_run(only: str | None = None, question_set: str | None = None) -> dict:
         labels = ["fake-a", "fake-b", "fake-c"]
     with core.connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
-        run_id, number = _open_run(cx, "mock", tracks, mock_kind="dry-run-fake-model")
+        run_id, number = _open_run(cx, "mock", tracks, mock_kind="dry-run-fake-model", samples=count)
         for label in labels:
             for data in tracks:
                 for question in data["questions"]:
-                    state, why, kept = classify(fake_answer(number, label, question))
-                    _store(cx, run_id, data["question_set"], question["id"], label, model=DRY_RUN_MODEL, source="mock",
-                           state=state, reason=why, text=kept)
+                    for sample in range(1, count + 1):
+                        state, why, kept = classify(fake_answer(number, label, question, sample))
+                        _store(cx, run_id, data["question_set"], question["id"], label, model=DRY_RUN_MODEL, source="mock",
+                               state=state, reason=why, text=kept, sample=sample)
     _close_run(run_id, "complete", "")
     return _summary(run_id)
 
@@ -1491,7 +1645,8 @@ def submit_api_answer(agent: dict, run: int, question_id: str, answer: Any, mode
 
     Stored with source `api`, labelled with the agent's name; `model` is whatever the caller put
     in X-Agent-Model (shape-checked, never verified). The text passes the character rule and the
-    content guards (refused with 422, nothing stored). One answer per (run, question, agent).
+    content guards (refused with 422, nothing stored). One answer per (run, question, agent): always
+    sample 1, also in a run that asks its own models several times.
     Uses no round quota; counted in the `archive-minute` window."""
     if model is None or not core.declared_ok(model):
         raise HTTPException(422, f"X-Agent-Model is required for an archive answer and {core.DECLARED_RULE}.")
@@ -1590,7 +1745,12 @@ def public_payload(readonly: bool = True) -> dict:
     """Everything the public pages show. Mock rows and runs are never included. Questions come
     from the locked copy in the database when there is one, otherwise from the file (draft).
     Each run says how many questions of each track it asked (`asked`): a trending question added
-    later has no cell in the runs before it."""
+    later has no cell in the runs before it.
+
+    One answer per (run, question, answerer). In a run with several samples it is the representative
+    (`representative`), and it carries `samples` (answers received), `agree` (size of the largest group)
+    and `others` (the other distinct answers with their counts); the run carries `samples` (asked).
+    None of these keys exists for a single-sample run."""
     with core.connect(readonly=readonly) as cx:
         tables = {r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'archive_%'")}
         current = {"archive_sets", "archive_set_versions", "archive_run_sets"} <= tables
@@ -1602,14 +1762,25 @@ def public_payload(readonly: bool = True) -> dict:
             locked = dict(row) if row else None
         runs, answers, questions, groups, covered, skipped = [], [], [], [], {}, {}
         if "archive_runs" in tables:
-            runs = [dict(r) for r in cx.execute("SELECT id,number,kind,started_at FROM archive_runs WHERE kind!='mock' ORDER BY number")]
-            # a.* and .get: a database opened read-only before migrate() ran has no endpoint columns yet.
+            # * and .get: a database opened read-only before migrate() ran has no endpoint or sample columns yet.
+            runs = [dict(r) for r in cx.execute("SELECT * FROM archive_runs WHERE kind!='mock' ORDER BY number")]
+            asked_samples = {r["number"]: r.get("samples") or 1 for r in runs}
             stored = [dict(r) for r in cx.execute(
                 "SELECT a.*,r.number AS run FROM archive_answers a JOIN archive_runs r ON r.id=a.run_id "
                 "WHERE r.kind!='mock' AND a.source!='mock' ORDER BY r.number,a.id")]
-            answers = [{"id": a["id"], "run": a["run"], "question": a["question_id"], "answerer": a["answerer"], "model": a["model"],
-                        "source": a["source"], "state": a["state"], "reason": a["reason"], "text": a["answer_text"],
-                        "changed": a["changed"], "created_at": a["created_at"], **_public_call(a)} for a in stored]
+            cells: dict[tuple, list[dict]] = {}   # one public answer per (run, question, answerer), in the order of its first row
+            for row in stored:
+                cells.setdefault((row["run"], row["question_id"], row["answerer"]), []).append(row)
+            for group in cells.values():
+                a, received, agree, others = representative(group)
+                answer = {"id": a["id"], "run": a["run"], "question": a["question_id"], "answerer": a["answerer"], "model": a["model"],
+                          "source": a["source"], "state": a["state"], "reason": a["reason"], "text": a["answer_text"],
+                          "changed": a["changed"], "created_at": a["created_at"], **_public_call(a)}
+                # Only in a run that asked several samples, and never for an outside client's single answer: a
+                # single-sample archive has none of these keys, so its payload is what it always was.
+                if asked_samples[a["run"]] > 1 and a["source"] != "api":
+                    answer.update(samples=received, agree=agree, others=others)
+                answers.append(answer)
         if "archive_run_answerers" in tables:
             for row in cx.execute("SELECT run_id,answerer,reason FROM archive_run_answerers WHERE outcome='skipped'"):
                 skipped.setdefault(row["run_id"], {})[row["answerer"]] = row["reason"] or "other"
@@ -1643,7 +1814,9 @@ def public_payload(readonly: bool = True) -> dict:
                       "asked": {track: covered.get(r["id"], legacy).get(track, 0) for track in TRACKS},
                       # Models dropped from this run after a failed call, with the reason category. Only models
                       # that have a recorded answer somewhere are listed (the others have no column to show).
-                      "skipped": {label: why for label, why in skipped.get(r["id"], {}).items() if label in labels}} for r in runs],
+                      "skipped": {label: why for label, why in skipped.get(r["id"], {}).items() if label in labels},
+                      # Present only on a run that asked each question more than once.
+                      **({"samples": asked_samples[r["number"]]} if asked_samples[r["number"]] > 1 else {})} for r in runs],
             "answers": answers, "answers_by_source": by_source}
 
 
@@ -1699,10 +1872,36 @@ def _call_problem(answer: dict) -> str | None:
     return None
 
 
+SAMPLE_FIELDS = ("samples", "agree", "others")
+
+
+def _samples_problem(answer: dict, asked: int) -> str | None:
+    """The repeat-sample fields of one public answer, when it has any: all three present, only in a run
+    that asked several samples and never on a self-declared answer, and consistent with each other
+    (`agree` is the largest group, and the groups add up to `samples`)."""
+    if not any(key in answer for key in SAMPLE_FIELDS):
+        return None
+    if asked < 2 or answer["source"] == "api" or any(key not in answer for key in SAMPLE_FIELDS):
+        return "an answer carries sample counts that do not belong to it"
+    samples, agree, others = (answer[key] for key in SAMPLE_FIELDS)
+    if type(samples) is not int or type(agree) is not int or not isinstance(others, list) or not 0 <= agree <= samples <= asked:
+        return "an answer's sample counts are invalid"
+    if (answer["state"] == "answered") != (agree >= 1):
+        return "an answer's sample counts do not fit its state"
+    for other in others:
+        if not isinstance(other, dict) or set(other) != {"text", "count"} or not isinstance(other["text"], str) or not other["text"] \
+                or len(other["text"]) > ANSWER_CHARS or type(other["count"]) is not int or not 1 <= other["count"] <= agree:
+            return "an answer's list of other sampled answers is invalid"
+    if agree + sum(other["count"] for other in others) != samples:
+        return "an answer's sample counts do not add up"
+    return None
+
+
 def export_problem(data: dict) -> str | None:
     """Stricter than payload_problem, for a file that is to be published (snapshot --export / --check):
     every answer carries all its endpoint fields, an answer that was not a server call has none set,
-    and every run says which models it skipped. `data` already passed payload_problem."""
+    every run says which models it skipped, and in a run with several samples every answer this server
+    recorded carries its sample counts. `data` already passed payload_problem."""
     for answer in data["answers"]:
         if any(key not in answer for key in PUBLIC_CALL_FIELDS):
             return "an answer lacks its endpoint fields"
@@ -1710,6 +1909,9 @@ def export_problem(data: dict) -> str | None:
             return "a self-declared answer carries endpoint fields; only a server call has them"
     if any("skipped" not in run for run in data["runs"]):
         return "a run does not say which models it skipped"
+    several = {run["number"] for run in data["runs"] if run.get("samples", 1) > 1}
+    if any(answer["run"] in several and answer["source"] != "api" and "samples" not in answer for answer in data["answers"]):
+        return "an answer of a run with several samples lacks its sample counts"
     return None
 
 
@@ -1750,7 +1952,7 @@ def payload_problem(data: object) -> str | None:
     if trending["locked"] != (trending["version"] >= 1) or trending["version"] < 0:
         return "trending: version does not fit its lock state"
     place = {i: ("core", n) for n, i in enumerate(ids, 1)} | {i: ("trending", n) for n, i in enumerate(trending_ids, 1)}
-    asked = {}
+    asked, sampled = {}, {}
     for run in data["runs"]:
         if type(run.get("number")) is not int or not isinstance(run.get("date"), str) or not _DATE.fullmatch(run["date"]) \
                 or not isinstance(run.get("demo"), bool):
@@ -1761,7 +1963,10 @@ def payload_problem(data: object) -> str | None:
             return "a run does not say how many questions of each track it asked"
         if run["number"] in asked:
             return "run numbers repeat"
+        if "samples" in run and (type(run["samples"]) is not int or not 1 <= run["samples"] <= MAX_SAMPLES):
+            return "a run's sample count is not a whole number from 1 to %d" % MAX_SAMPLES
         asked[run["number"]] = counts
+        sampled[run["number"]] = run.get("samples", 1)
         gaps = run.get("skipped", {})
         if not isinstance(gaps, dict) or any(label not in data["answerers"] or why not in SKIP_REASONS for label, why in gaps.items()):
             return "a run's list of skipped models is missing or invalid"
@@ -1775,7 +1980,7 @@ def payload_problem(data: object) -> str | None:
             return "an answer has a missing or invalid field"
         if (answer["state"] == "answered") != isinstance(answer.get("text"), str) or (answer["state"] != "answered" and answer.get("text") is not None):
             return "an answer's text does not fit its state"
-        problem = _call_problem(answer)
+        problem = _call_problem(answer) or _samples_problem(answer, sampled[answer["run"]])
         if problem:
             return problem
         track, position = place[answer["question"]]
@@ -1811,7 +2016,7 @@ def status() -> dict:
     with core.connect() as cx:
         locked, trending = _locked(cx, "core"), _locked(cx, "trending")
         runs = [dict(r) for r in cx.execute(
-            "SELECT r.number,r.kind,r.status,r.started_at,r.stop_reason,COUNT(a.id) AS answers,"
+            "SELECT r.number,r.kind,r.status,r.started_at,r.stop_reason,r.samples,COUNT(a.id) AS answers,"
             "COALESCE(SUM(a.estimated_usd),0) AS estimated_usd FROM archive_runs r LEFT JOIN archive_answers a ON a.run_id=r.id "
             "GROUP BY r.id ORDER BY r.kind,r.number")]
         versions = [dict(r) for r in cx.execute(
@@ -1839,7 +2044,9 @@ def status() -> dict:
             "models_configured": os.getenv("LIVE_ARCHIVE_MODELS", "").strip() or None,
             "endpoints_configured": os.getenv(config.ENDPOINTS_VARIABLE, "").strip() or None, "runs": runs,
             "last_run_answerers": last_run,
-            "note": "mock runs are never published; estimated_usd is " + study.COST_CAVEAT
+            "samples_configured": os.getenv(SAMPLES_VARIABLE, "").strip() or None,
+            "note": "mock runs are never published; `samples` is how many times a run asked each question of each model, and "
+                    "`answers` counts one row per sample; estimated_usd is " + study.COST_CAVEAT
                     + "; a declared-free endpoint is the operator's unverified statement and always shows $0"}
 
 
@@ -1853,12 +2060,15 @@ def add_parsers(sub) -> None:
     lock_p.add_argument("--set", dest="question_set", choices=TRACKS, default="core", help="Which question file to lock (default: core)")
     plan_p = sub.add_parser("archive-plan", help="Answers Over Time: list questions, models, calls and the worst-case estimated cost (free; no provider contact)")
     dry = sub.add_parser("archive-dry-run", help="Answers Over Time plumbing check with built-in FAKE answers (free; stored as mock; never published)")
-    run = sub.add_parser("archive-run", help="PAID: ask every locked question of every configured model once. Needs the operator's explicit decision, the paid opt-in and a key")
+    run = sub.add_parser("archive-run", help="PAID: ask every locked question of every configured model once (or --samples times). Needs the operator's explicit decision, the paid opt-in and a key")
     run.add_argument("--max-usd", type=float, required=True, help="Hard cap on this run's estimated USD; the worst case must fit under it before the first call")
     run.add_argument("--pause", type=float, default=0.0, help="Seconds to wait between calls (an endpoint's own _PAUSE_SECONDS applies when it is longer)")
     for parser in (plan_p, dry, run):
         parser.add_argument("--models", help="Comma-separated labels from LIVE_ARCHIVE_MODELS (default: all)")
         parser.add_argument("--set", dest="question_set", choices=TRACKS, default=None, help="Only this question set (default: both)")
+        parser.add_argument("--samples", type=int, default=None,
+                            help=f"Ask each question this many times of each model, 1-{MAX_SAMPLES} (default: {SAMPLES_VARIABLE}, else 1). "
+                                 "It multiplies the calls and the cost; choose it before the first real run and keep it")
     sub.add_parser("archive-status", help="Answers Over Time: lock state, question file state and runs as JSON (free; read-only)")
     sub.add_parser("demo-archive", help="Offline SCRIPTED answer archive (3 fictional models, 8 dated runs, scripted trending questions) on an empty/demo-only database (free; no model call)")
 
@@ -1879,18 +2089,19 @@ def handle_command(args, parser) -> bool:
                 print("Recorded in the operator audit log. A locked question must never change or be removed; "
                       "add new ones at the end of the file and lock again.")
         elif args.command == "archive-plan":
-            print(render_plan(plan(args.models, args.question_set)))
+            print(render_plan(plan(args.models, args.question_set, args.samples)))
         elif args.command == "archive-dry-run":
             print(MOCK_BANNER)
-            print(json.dumps(dry_run(args.models, args.question_set), indent=2))
+            print(json.dumps(dry_run(args.models, args.question_set, args.samples), indent=2))
             print(MOCK_BANNER)
         elif args.command == "archive-run":
-            print(render_plan(plan(args.models, args.question_set)))
+            print(render_plan(plan(args.models, args.question_set, args.samples)))
             print("PAID RUN: provider requests follow. A failed call is handled by the rule printed above (\"If a call fails\").")
             config.load_provider_credentials()  # with `cli round` and `cli study-run`, the only place .env provider keys enter a process
             # Answers are plain sentences, not JSON objects: JSON mode is for resident turns only.
             os.environ["LIVE_COMPAT_JSON_MODE"] = "off"
-            done = run_archive(max_usd=args.max_usd, only=args.models, pause_seconds=args.pause, question_set=args.question_set)
+            done = run_archive(max_usd=args.max_usd, only=args.models, pause_seconds=args.pause, question_set=args.question_set,
+                               samples=args.samples)
             print(json.dumps(done, indent=2))
             if done["mock"]:
                 print(MOCK_BANNER)
