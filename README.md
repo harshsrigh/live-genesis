@@ -29,6 +29,8 @@ Visit **http://127.0.0.1:8000**. The dashboard will show **SCRIPTED DEMO** label
 
 ### Run genuinely model-generated agent turns
 
+The step-by-step operator checklist, including what to do when a call fails and what to review before publishing, is in [`docs/FIRST-REAL-ROUND.md`](docs/FIRST-REAL-ROUND.md). The summary below predates the paid opt-in: `round` also needs `LIVE_ALLOW_PAID_CALLS=YES`.
+
 1. Configure a **separate database** from the scripted demo: set `LIVE_DB=./live-real.db` in `.env` before running `init` again. Keep the API cap at `$10` or lower initially. Configure **provider-side billing limits/alerts** separately: the app's cap is only an estimate.
 2. Choose an LLM vendor and model:
    - **OpenAI**: `LIVE_PROVIDER=openai`, `LIVE_MODEL=gpt-5.6-luna`, and your `OPENAI_API_KEY`. Set rate estimates: `LIVE_INPUT_USD_PER_M=0.20`, `LIVE_OUTPUT_USD_PER_M=1.20` (verify current pricing before running).
