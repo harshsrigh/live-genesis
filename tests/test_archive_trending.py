@@ -232,7 +232,7 @@ def test_a_run_asks_every_locked_question_of_both_sets_and_set_limits_it(ready, 
     assert [r['changed'] for r in t1] == [None, 0, 0, 0]
     # The public payload says what each run asked; a trending question has no cell before its first run.
     payload = archive.public_payload()
-    assert archive.payload_problem(payload) is None and payload['schema'] == 'live-genesis-archive/2'
+    assert archive.payload_problem(payload) is None and payload['schema'] == 'live-genesis-archive/3'
     assert [r['asked'] for r in payload['runs']] == [{'core': 20, 'trending': 0}, {'core': 20, 'trending': 2}, {'core': 0, 'trending': 2},
                                                      {'core': 20, 'trending': 0}, {'core': 20, 'trending': 2}, {'core': 20, 'trending': 3}]
     assert payload['trending']['locked'] is True and payload['trending']['version'] == 2
@@ -421,11 +421,11 @@ def test_export_and_check_understand_both_sets(ready, tmp_path, monkeypatch):
     manifest = snapshot.export_published(out)
     assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']        # still one archive file
     trend_hash = rows("SELECT sha256 FROM archive_set_versions WHERE question_set='trending'")[0]['sha256']
-    assert manifest['schema'] == 'live-genesis-published/3' and manifest['archive']['runs'] == 2
+    assert manifest['schema'] == 'live-genesis-published/4' and manifest['archive']['runs'] == 2
     assert manifest['archive']['trending'] == {'questions': 2, 'question_set': 'trending', 'set_hash': trend_hash, 'version': 1}
     assert manifest['archive']['answers_by_source'] == {'engine': 84, 'api': 0, 'demo': 0, 'mock': 0}
     exported = json.loads((out / 'archive.json').read_bytes())
-    assert exported == json.loads(json.dumps(archive.public_payload())) and exported['schema'] == 'live-genesis-archive/2'
+    assert exported == json.loads(json.dumps(archive.public_payload())) and exported['schema'] == 'live-genesis-archive/3'
     snapshot.approve_published(out, confirmed=True)
     good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
     site = tmp_path / 'site'
@@ -470,7 +470,7 @@ def test_export_and_check_understand_both_sets(ready, tmp_path, monkeypatch):
         snapshot.check_published(out)
     manifest = json.loads(good['MANIFEST.json']); manifest['schema'] = 'live-genesis-published/2'
     (out / 'MANIFEST.json').write_text(json.dumps(manifest))
-    with pytest.raises(RuntimeError, match='not a live-genesis-published/3 manifest'):                       # an export made before the upgrade
+    with pytest.raises(RuntimeError, match='not a live-genesis-published/4 manifest'):                       # an export made before the upgrade
         snapshot.check_published(out)
 
 
@@ -708,7 +708,7 @@ def test_snapshot_holds_trending_pages_and_cards_at_the_same_addresses(ready, tm
     assert names == sorted(['index.html', 'trending.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)] + [f't/T00{n}.html' for n in (1, 2, 3)]
                            + [f'card/Q{n:02d}.html' for n in range(1, 21)] + [f'card/T00{n}.html' for n in (1, 2, 3)])
     payload = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
-    assert payload['schema'] == 'live-genesis-archive/2' and len(payload['trending']['questions']) == 3
+    assert payload['schema'] == 'live-genesis-archive/3' and len(payload['trending']['questions']) == 3
     assert (out / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8') == archive_pages.render_card(payload, 'T001')
     assert (out / 'archive' / 'trending.html').read_text(encoding='utf-8') == archive_pages.render_trending(payload)
     for html in (out / 'archive').rglob('*.html'):                               # every relative address resolves inside the snapshot

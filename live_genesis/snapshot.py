@@ -42,7 +42,7 @@ from .web import CONTENT_SECURITY_POLICY
 
 STATIC = Path(__file__).resolve().parent / "static"
 PUBLISHED = Path(__file__).resolve().parent.parent / "published"   # reviewed data, committed by the owner
-SCHEMA = "live-genesis-published/3"   # /2: the folder also holds archive.json; /3: archive.json carries the trending track
+SCHEMA = "live-genesis-published/4"   # /2: the folder also holds archive.json; /3: archive.json carries the trending track; /4: per answer, endpoint name, reported model, digest, pricing basis
 DATA_FILE, ARCHIVE_FILE, MANIFEST_FILE = "overview.json", "archive.json", "MANIFEST.json"
 FILES = (DATA_FILE, ARCHIVE_FILE, MANIFEST_FILE)
 SOURCES = ("demo", "api", "engine", "unknown")
@@ -340,6 +340,9 @@ def _archive_problem(answers: object) -> str | None:
         return problem
     if any(a["source"] == "mock" for a in answers["answers"]):
         return "it holds mock answers, which are never published"
+    problem = archive.export_problem(answers)   # the endpoint fields: present on every answer, set on server calls only
+    if problem:
+        return problem
     if any(a["source"] == "demo" for a in answers["answers"]) or any(run["demo"] for run in answers["runs"]):
         return "it holds scripted demo answers; the demo is published without review"
     if answers["answers"] and not answers["locked"] and not answers["trending"]["locked"]:

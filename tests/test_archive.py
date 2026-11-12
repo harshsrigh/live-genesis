@@ -706,7 +706,7 @@ def test_export_round_trip_with_archive_json(ready, tmp_path, monkeypatch):
     assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']
     raw = (out / 'archive.json').read_bytes()
     assert raw.isascii() and b'Caf\\u00e9' in raw
-    assert manifest['schema'] == 'live-genesis-published/3'
+    assert manifest['schema'] == 'live-genesis-published/4'
     assert manifest['archive'] == {'file': 'archive.json', 'sha256': hashlib.sha256(raw).hexdigest(), 'runs': 1, 'questions': 20,
                                    'answers_by_source': {'engine': 40, 'api': 0, 'demo': 0, 'mock': 0},
                                    'question_set': 'basic-1', 'set_hash': archive.load_questions()['sha256'],

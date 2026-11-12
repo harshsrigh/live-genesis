@@ -28,6 +28,12 @@ NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 
                 10: "ten", 11: "eleven", 12: "twelve", 15: "fifteen", 20: "twenty", 25: "twenty-five", 30: "thirty",
                 40: "forty"}
 SOURCE_LABELS = {"engine": "server call", "api": "self-declared", "demo": "scripted demo"}
+# Why a model has no answers in a run it was dropped from (archive.SKIP_REASONS), in plain words.
+SKIP_WORDS = {"rate_limited": "the service limited the number of requests", "not_found": "the service did not know this model",
+              "auth": "the service refused the key", "timeout": "the call timed out", "server_error": "the service reported an error",
+              "no_usage": "the service sent no token counts", "not_ready": "the local setup was not ready",
+              "other": "the call failed"}
+NATIVE = ("openai", "anthropic", "openai-compatible")   # not a named endpoint: nothing to add to the label
 MAX_COLUMNS = archive.MAX_ANSWERERS + 10   # layout classes exist up to this many answer columns
 FOLDER = {"core": "q", "trending": "t"}
 CARD_MODELS = 3
@@ -113,9 +119,24 @@ class _View:
             return "Scripted demo answers and dates · no model was called"
         return "Recorded answers · model output, may be wrong"
 
-    def previous_model(self, question_id: str, label: str, run_number: int) -> str | None:
+    def model_change(self, question_id: str, label: str, run_number: int) -> tuple[str, str, str, str] | None:
+        """(short tag, what changed, before, now) when the model behind this answer is not the one behind
+        this answerer's previous recorded answer: a different model ID was requested, the service reported
+        a different model name, or the local model file has a different digest. A value is compared only
+        when it was recorded on both sides."""
+        now = self.cell.get((question_id, label, run_number))
         earlier = [a for a in self.by_series.get((question_id, label), ()) if a["run"] < run_number]
-        return earlier[-1]["model"] if earlier else None
+        if now is None or not earlier:
+            return None
+        before = earlier[-1]
+        if before["model"] != now["model"]:
+            return "new model ID", "model ID", before["model"], now["model"]
+        for key, tag, what in (("reported_model", "new model ID", "model ID reported by the service"),
+                               ("model_digest", "new model file", "local model file (digest)")):
+            old, new = before.get(key), now.get(key)
+            if old and new and old != new:
+                return tag, what, old, new
+        return None
 
 
 def _kind(answer: dict | None) -> str:
@@ -252,16 +273,15 @@ def _moved(view: _View, question_id: str) -> str:
             answer = view.cell.get((question_id, label, run["number"]))
             if answer is None:
                 continue
-            before = view.previous_model(question_id, label, run["number"])
-            new_model = before is not None and before != answer["model"]
+            change = view.model_change(question_id, label, run["number"])
             when = month_year(run["date"])
             if _kind(answer) == "changed":
                 text = f"{label}'s answer changed."
-                if new_model:
-                    text += f" Its model ID changed from {before} to {answer['model']}."
+                if change:
+                    text += f" Its {change[1]} changed from {change[2]} to {change[3]}."
                 items.append((when, text))
-            elif new_model:
-                items.append((when, f"{label}'s model ID changed from {before} to {answer['model']}; "
+            elif change:
+                items.append((when, f"{label}'s {change[1]} changed from {change[2]} to {change[3]}; "
                                     + ("the answer stayed the same." if _kind(answer) == "same" else "no answer was recorded.")))
     for label in view.labels:
         series = [a for _run, a in view.series(question_id, label) if a is not None and a["state"] == "answered"]
@@ -276,10 +296,11 @@ def _moved(view: _View, question_id: str) -> str:
 def _cell(view: _View, question_id: str, label: str, run: dict) -> str:
     answer = view.cell.get((question_id, label, run["number"]))
     if answer is None:
-        return '<div class="cell cell-none" role="cell">No answer recorded in this run</div>'
-    source = SOURCE_LABELS[answer["source"]]
-    before = view.previous_model(question_id, label, run["number"])
-    meta = f"{answer['model']} · {source}" + (" · new model ID" if before is not None and before != answer["model"] else "")
+        why = SKIP_WORDS.get(run.get("skipped", {}).get(label, ""))
+        return ('<div class="cell cell-none" role="cell">No answer recorded in this run'
+                + (f': this model was skipped after a failed call ({esc(why)})' if why else '') + '</div>')
+    change = view.model_change(question_id, label, run["number"])
+    meta = f"{answer['model']} · {_where(answer)}{SOURCE_LABELS[answer['source']]}" + (f" · {change[0]}" if change else "")
     if answer["state"] == "withheld":
         return (f'<div class="cell cell-none" role="cell"><span>Withheld by content check ({esc(answer["reason"])})</span>'
                 f'<span class="cell-meta mono">{esc(meta)}</span></div>')
@@ -291,6 +312,17 @@ def _cell(view: _View, question_id: str, label: str, run: dict) -> str:
                 f'<span class="cell-text">{esc(answer["text"])}</span><span class="cell-meta mono">{esc(meta)}</span></div>')
     return (f'<div class="cell cell-same" role="cell"><span class="cell-text">{esc(answer["text"])}</span>'
             f'<span class="cell-meta mono">{esc(meta)}</span></div>')
+
+
+def _where(answer: dict) -> str:
+    """Where a server call's model ran, as far as the record says: on the operator's own machine, or
+    through a named endpoint. Says nothing about who made the model or how open it is."""
+    if answer["source"] != "engine":
+        return ""
+    if answer.get("local"):
+        return "run locally · "
+    endpoint = answer.get("endpoint")
+    return f"via {endpoint} · " if endpoint and endpoint not in NATIVE else ""
 
 
 def _honesty(view: _View) -> str:
@@ -354,7 +386,9 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
                '    <span><strong>server call</strong> means this server called the model and holds the receipt.</span>\n'
                '    <span><strong>self-declared</strong> means an outside client sent the answer and named its own model. That name is not checked.</span>\n'
                + ('    <span><strong>scripted demo</strong> means the answer and its date were written by hand as a sample. No model was called.</span>\n'
-                  if view.demo else '')
+                  if view.demo else
+                  '    <span><strong>run locally</strong> or <strong>via</strong> a name says where the model ran. A model run locally or hosted '
+                  'by a third party is not the same as its maker\'s own chat app, and can answer differently.</span>\n')
                + '  </div>\n</aside>\n</div>\n')
     back = ('<a class="back" href="../trending.html">All trending questions</a>' if trending
             else f'<a class="back" href="../index.html">All {esc(count_word(len(view.questions)))} questions</a>')

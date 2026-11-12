@@ -342,7 +342,7 @@ def main():
     rec.add_argument("--receipt",type=int,help="Reconcile ONE held/unconfirmed reservation by id (use with --actual-usd)")
     rec.add_argument("--actual-usd",type=float,help="Charge for that one call as verified on the provider's bill (0 if it was not billed)")
     add_control_parsers(sub)
-    providers.add_parser(sub)  # check-provider (free; no model call)
+    providers.add_parser(sub)  # check-provider and archive-check-endpoints (free; no model call)
     study.add_parsers(sub)  # study-plan, study-dry-run, study-report (free) and study-run (PAID)
     archive.add_parsers(sub)  # archive-lock, archive-plan, archive-dry-run, archive-status, demo-archive (free) and archive-run (PAID)
     trends.add_parsers(sub)  # archive-trends (free; no model; prints candidates only)

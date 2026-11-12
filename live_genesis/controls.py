@@ -397,14 +397,22 @@ def project_gates() -> dict[str, float]:
             "available_usd": min(project - other, PRE_VALIDATION_GATE_USD - other)}
 
 
+def spend_config() -> dict[str, float]:
+    """The ceilings without the price rates: project gates plus LIVE_SPEND_LIMIT_USD, validated. For an archive
+    run whose every model is on a named endpoint with its own rates (the global pair is then not used)."""
+    gates = project_gates()
+    gates["spend_limit_usd"] = _number("LIVE_SPEND_LIMIT_USD", "10", positive=True)
+    return gates
+
+
 def budget_config() -> dict[str, float]:
     """Everything a paid round needs, validated up front.
 
     Rates must be positive (fail closed). The one exception: `openai-compatible` with a loopback
     base URL may use zero rates, so a model running on this machine is recorded as $0 estimated
-    (providers.zero_rates_allowed). A hosted endpoint, free tier or not, still needs positive rates."""
-    gates = project_gates()
-    gates["spend_limit_usd"] = _number("LIVE_SPEND_LIMIT_USD", "10", positive=True)
+    (providers.zero_rates_allowed). A hosted endpoint, free tier or not, still needs positive rates here.
+    (An Answers Over Time named endpoint carries its own rates and is not priced by this pair: providers.endpoints.)"""
+    gates = spend_config()
     positive = not providers.zero_rates_allowed()
     gates["input_rate"] = _number("LIVE_INPUT_USD_PER_M", "0", positive=positive)
     gates["output_rate"] = _number("LIVE_OUTPUT_USD_PER_M", "0", positive=positive)

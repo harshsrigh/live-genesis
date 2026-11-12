@@ -1,6 +1,8 @@
 import pytest
 
-from live_genesis import controls, web
+import os
+
+from live_genesis import archive, controls, web
 from live_genesis.core import init_db
 
 
@@ -40,5 +42,12 @@ def isolated_db(tmp_path,monkeypatch):
     for name in ('OPENAI_COMPATIBLE_API_KEY','LIVE_COMPAT_BASE_URL','LIVE_COMPAT_JSON_MODE','LIVE_COMPAT_REASONING_EFFORT',
                  'LIVE_INFER_TIMEOUT_SECONDS','LIVE_MODEL'):
         monkeypatch.delenv(name,raising=False)  # provider settings from the developer's shell or .env never leak in
+    for name in [n for n in os.environ if n.startswith('LIVE_ARCHIVE_')]:
+        monkeypatch.delenv(name)  # archive models and named endpoints: only what a test sets itself
+    # The one HTTP request live_genesis/archive.py can make (a loopback Ollama's model list) never happens in a test
+    # unless the test replaces this again with its own fake.
+    def no_network(*args, **kwargs):
+        raise AssertionError('archive._fetch_tags must be replaced in a test: no real request')
+    monkeypatch.setattr(archive, '_fetch_tags', no_network)
     init_db()
     return path
