@@ -59,7 +59,10 @@ def test_read_routes_and_headers(isolated_db):
             assert response.headers['x-content-type-options'] == 'nosniff'
             assert response.headers['referrer-policy'] == 'no-referrer'
             assert response.headers['x-frame-options'] == 'DENY'
-            assert 'content-security-policy' not in response.headers  # deliberately deferred
+            policy = response.headers['content-security-policy']
+            assert "default-src 'none'" in policy and "script-src 'self'" in policy and "frame-ancestors 'none'" in policy
+            assert 'unsafe-eval' not in policy and 'http' not in policy and '*' not in policy
+            assert "'unsafe-inline'" not in policy.replace("style-src-attr 'unsafe-inline'", '')
         assert page.headers.get('cache-control') != 'no-store'  # only the API payload is uncacheable
 
 

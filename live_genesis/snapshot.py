@@ -16,6 +16,7 @@ import shutil
 from pathlib import Path
 
 from .core import overview, utcnow
+from .web import CONTENT_SECURITY_POLICY
 
 STATIC = Path(__file__).resolve().parent / "static"
 
@@ -38,6 +39,11 @@ def build(outdir: str | Path, *, allow_non_demo: bool = False) -> dict:
         if old not in html:
             raise RuntimeError(f"index.html no longer contains {old!r}; update snapshot.py")
         html = html.replace(old, new)
+    # A static host sends no headers of ours, so the policy travels in the page itself.
+    marker = '<meta charset='
+    if html.count(marker) != 1:
+        raise RuntimeError("index.html must contain exactly one <meta charset>; update snapshot.py")
+    html = html.replace(marker, f'<meta http-equiv="Content-Security-Policy" content="{CONTENT_SECURITY_POLICY}" />\n  ' + marker)
     out.mkdir(parents=True, exist_ok=True)
     shutil.copytree(STATIC, out / "static", ignore=shutil.ignore_patterns("index.html"))
     (out / "index.html").write_text(html, encoding="utf-8")

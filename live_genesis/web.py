@@ -13,6 +13,15 @@ from fastapi.staticfiles import StaticFiles
 
 from .core import DatabaseUnavailable, overview
 
+# One policy for the observatory app and for static snapshots. Everything is same-origin:
+# no inline or remote scripts, no remote styles, fonts or images, no forms, no framing.
+# `style-src-attr 'unsafe-inline'` is needed only for the width of the bar charts, which
+# app.js writes as a style attribute from numbers it computed itself.
+CONTENT_SECURITY_POLICY = "; ".join((
+    "default-src 'none'", "script-src 'self'", "style-src 'self'", "style-src-attr 'unsafe-inline'",
+    "img-src 'self'", "font-src 'self'", "connect-src 'self'", "base-uri 'none'", "form-action 'none'",
+))
+
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
 UNAVAILABLE = "The world database is not available yet. The operator must initialize it; this service cannot."

@@ -20,7 +20,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .config import drop_provider_secrets
-from .web import add_public_routes
+from .web import CONTENT_SECURITY_POLICY, add_public_routes
 
 drop_provider_secrets()  # also at import, in case the server runs with lifespan disabled
 
@@ -29,6 +29,8 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "X-Frame-Options": "DENY",
+    # frame-ancestors only works as a header, so it is added here and not in snapshots.
+    "Content-Security-Policy": CONTENT_SECURITY_POLICY + "; frame-ancestors 'none'",
 }
 
 

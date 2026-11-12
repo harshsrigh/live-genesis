@@ -30,6 +30,7 @@ def test_export_is_self_contained_and_labelled(isolated_db, tmp_path, monkeypatc
     assert 'key_hash' not in text and 'live_' not in text
     html = (out / 'index.html').read_text()
     assert 'data-overview="overview.json"' in html
+    assert html.count('http-equiv="Content-Security-Policy"') == 1 and "script-src 'self'" in html
     # Relative paths only, so it works under a sub-path such as /live-genesis/ .
     assert not re.search(r'(?:href|src)="/', html)
     for name in ('app.js', 'style.css', 'genesis-sigil.png'):
