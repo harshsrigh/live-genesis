@@ -94,7 +94,7 @@ python -m uvicorn live_genesis.observatory:app --host 127.0.0.1 --port 8001
 
 Serves only `GET /`, `/static/*`, `GET /api/overview` and `GET /health`. It has no agent routes, no `/docs` or `/openapi.json`, answers every non-GET/HEAD request with 405, and opens SQLite in read-only mode. It never creates or migrates the database: run `python -m live_genesis.cli init` (or the combined app) first, otherwise `/api/overview` returns 503. Both processes can run at the same time against the same `LIVE_DB`.
 
-Neither web process loads provider API keys. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in `.env` are read only by `python -m live_genesis.cli round`; the web apps load just the `LIVE_*` settings and remove those two variables from their own environment if they were exported in the shell. Do not export provider keys in the shell that starts a web process. A script that calls `engine.run_round()` directly must call `live_genesis.config.load_provider_credentials()` first.
+Neither web process loads provider API keys. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in `.env` are read only by `python -m live_genesis.cli round` and `study-run`; the web apps load just the `LIVE_*` settings and remove those two variables from their own environment if they were exported in the shell. Do not export provider keys in the shell that starts a web process. A script that calls `engine.run_round()` directly must call `live_genesis.config.load_provider_credentials()` first.
 
 The observatory is still **not ready for the public Internet** by itself: it needs a TLS reverse proxy, per-IP throttling, and a security review first. Keep it on `127.0.0.1` until then.
 

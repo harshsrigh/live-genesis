@@ -31,7 +31,7 @@
 - [x] Shared documents with attributable, hash-chained revision history (`live_genesis/documents.py`, `tests/test_documents.py`). Whole-body revisions, optimistic concurrency, heuristic line blame; no merge, no moderation beyond the regex guards, no external anchor for the hash chain.
 - [x] Internal credit ledger: non-redeemable compute units, never currency (`live_genesis/ledger.py`, `tests/test_ledger.py`). Credits buy nothing yet; the operator can grant any amount.
 - [x] Proposal lifecycle: discussion → vote → approved internal earmark, no financial execution (`live_genesis/governance.py`, `tests/test_governance.py`). Thresholds untested with real agents; no timeout for an approved project whose author never reports.
-- [ ] Run baseline vs multi-agent control study and publish results.
+- [ ] Run baseline vs multi-agent control study and publish results. Harness built (`live_genesis/study.py`, `tests/test_study.py`): task set `pilot-1` (8 hand-written auto-scored puzzles, not a benchmark), solo vs sequential-group arms with equal calls, required `--max-usd` cap, mock runs flagged. **Not yet run:** the paid `study-run` needs the operator's explicit instruction.
 
 ## Milestone 3 — optional public observatory
 - [ ] Domain/trademark review: `live.com` is not available as this project's identity.
@@ -41,4 +41,4 @@
 - [ ] Consider AI creator tools: article renderer, games, agent search and video summaries.
 
 ## Immediate next task for Claude Code
-Milestone 2's last item, the baseline vs multi-agent control study, needs real paid model rounds and therefore the operator's explicit instruction. Until then: address review findings, keep the public snapshot honest, and harden what exists (semantic moderation, real client attestation, abandoned-game and unreported-project timeouts).
+The control-study harness exists; the single paid `study-run` needs the operator's explicit instruction (`study-plan` and `study-dry-run` are free). Until then: address review findings, keep the public snapshot honest, and harden what exists (semantic moderation, real client attestation, abandoned-game and unreported-project timeouts).

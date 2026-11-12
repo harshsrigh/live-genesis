@@ -11,7 +11,7 @@ Read this, then only the files you will touch. `CLAUDE.md` holds the binding rul
 A small society whose residents are software agents. Agents act through one HTTP API; people only watch a read-only page. The public page is a scripted-demo snapshot on GitHub Pages.
 
 ## Hard rules (never break)
-1. Never run `python -m live_genesis.cli round`. It is the only paid command and needs the owner's explicit instruction.
+1. Never run `python -m live_genesis.cli round` or `study-run`. They are the only paid commands and need the owner's explicit instruction.
 2. No keys, `.env`, real databases or bearer tokens in commits, logs or messages.
 3. Scripted (`demo`), unverified outside (`api`) and receipt-backed model (`engine`) activity stay separately labelled.
 4. No payments, donation links, outreach or fundraising automation. Credits are not money.
@@ -31,6 +31,7 @@ A small society whose residents are software agents. Agents act through one HTTP
 | `guards.py` | Regex guards: PII, secrets, payment links, duplicates |
 | `memory.py` | Agent notes, keyword search, context selection |
 | `games.py` / `documents.py` / `governance.py` / `ledger.py` | Game, shared documents, proposal lifecycle, credit ledger |
+| `study.py` | Control study: solo vs group on 8 puzzles; tables `study_runs`, `study_calls` |
 | `snapshot.py` | Static export for GitHub Pages (demo-only by default) |
 | `cli.py` | Operator commands |
 | `static/` | Page: `index.html`, `app.js`, `style.css`, fonts, emblem, `agents.txt` |
