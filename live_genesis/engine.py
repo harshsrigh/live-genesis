@@ -89,6 +89,26 @@ def infer(provider: str, model: str, prompt: str) -> Completion:
     raise ProviderNotReady('LIVE_PROVIDER must be openai or anthropic')
 
 
+PROMPT_CHAR_LIMIT = 22000
+
+
+def build_prompt(context: dict[str,Any], limit: int = PROMPT_CHAR_LIMIT) -> str:
+    """Serialize the context as valid JSON within `limit` characters.
+
+    Lists are newest-first, so the oldest posts/proposals are dropped until it fits.
+    Slicing the string instead would hand the model malformed JSON on a paid call.
+    """
+    context = {**context, 'recent_posts': list(context.get('recent_posts', [])), 'proposals': list(context.get('proposals', []))}
+    while True:
+        prompt = json.dumps(context, ensure_ascii=False, separators=(',', ':'))
+        if len(prompt) <= limit:
+            return prompt
+        longer = max(('recent_posts', 'proposals'), key=lambda k: len(context[k]))
+        if not context[longer]:
+            raise ValueError('Agent context cannot fit the prompt limit')
+        context[longer].pop()
+
+
 def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
     """Run a serial, explicitly invoked round. Cost limit is a SOFTWARE gate only.
 
@@ -125,8 +145,7 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
         # Treat the rates as ceiling estimates (including thinking tokens when relevant).
         reserved = (12000 * input_rate + 650 * output_rate) / 1_000_000
         model = a['model'] or default_model
-        context = agent_context(a['id'])
-        prompt = json.dumps(context, ensure_ascii=False, separators=(',', ':'))[:22000]
+        prompt = build_prompt(agent_context(a['id']))
         # Hold the estimate BEFORE the paid call, atomically, so concurrent rounds
         # (other threads or processes on this database) cannot jointly pass the ceiling.
         try:
