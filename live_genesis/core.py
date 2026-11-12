@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import config, controls, documents, games, governance, guards, ledger
+from . import config, controls, documents, games, governance, guards, ledger, study
 
 ROOT = config.ROOT
 # Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
@@ -168,6 +168,7 @@ def init_db() -> None:
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
             cx.execute("INSERT INTO rounds(source,opened_at) VALUES ('init',?)", (utcnow(),))
         governance.migrate(cx)  # proposal lifecycle columns, transitions table, triggers (needs a round)
+        cx.executescript(study.SCHEMA)  # control-study runs and calls (operator-side; never resident actions)
 
 IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 

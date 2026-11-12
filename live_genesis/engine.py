@@ -80,15 +80,17 @@ def parse_object(text: str) -> dict:
     return result
 
 
-def infer(provider: str, model: str, prompt: str) -> Completion:
+def infer(provider: str, model: str, prompt: str, *, system: str = CONSTITUTION, max_output_tokens: int = 650) -> Completion:
+    """One provider request. `system` and `max_output_tokens` default to the resident turn's values;
+    only live_genesis/study.py passes others (its calls are not resident turns)."""
     if provider == 'openai':
         if not os.getenv('OPENAI_API_KEY'):
             raise ProviderNotReady('OPENAI_API_KEY missing')
         from openai import OpenAI
         client = OpenAI(timeout=35, max_retries=0)
         response = client.responses.create(
-            model=model, instructions=CONSTITUTION,
-            input=prompt, max_output_tokens=650,
+            model=model, instructions=system,
+            input=prompt, max_output_tokens=max_output_tokens,
         )
         usage = response.usage
         if usage is None:
@@ -103,12 +105,17 @@ def infer(provider: str, model: str, prompt: str) -> Completion:
             raise ProviderNotReady('Install optional Anthropic SDK: pip install -r requirements-anthropic.txt') from err
         client = Anthropic(timeout=35, max_retries=0)
         response = client.messages.create(
-            model=model, max_tokens=650, system=CONSTITUTION,
+            model=model, max_tokens=max_output_tokens, system=system,
             messages=[{'role':'user', 'content':prompt}],
         )
         texts = [part.text for part in response.content if getattr(part, 'type', '') == 'text']
         return Completion('\n'.join(texts), int(response.usage.input_tokens), int(response.usage.output_tokens))
     raise ProviderNotReady('LIVE_PROVIDER must be openai or anthropic')
+
+
+# The unpatched adapter. study.py compares `engine.infer` with this to flag any run made
+# through a replaced `infer` (tests, experiments) as mock, so it can never be reported as a result.
+REAL_INFER = infer
 
 
 PROMPT_CHAR_LIMIT = 22000

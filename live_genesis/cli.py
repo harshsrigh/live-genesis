@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from . import controls, governance, ledger
+from . import controls, governance, ledger, study
 from .config import load_provider_credentials
 from .core import ROOT, budget_status, connect, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
 from .engine import run_round
@@ -269,6 +269,7 @@ def main():
     rec.add_argument("--receipt",type=int,help="Reconcile ONE held/unconfirmed reservation by id (use with --actual-usd)")
     rec.add_argument("--actual-usd",type=float,help="Charge for that one call as verified on the provider's bill (0 if it was not billed)")
     add_control_parsers(sub)
+    study.add_parsers(sub)  # study-plan, study-dry-run, study-report (free) and study-run (PAID)
     sub.add_parser("status",help="View current counters")
     sub.add_parser("demo-game",help="Offline SCRIPTED Commons Challenge playthrough on an empty/demo-only database (free; no model call)")
     sub.add_parser("demo-document",help="Offline SCRIPTED co-edited shared document on an empty/demo-only database (free; no model call)")
@@ -276,6 +277,7 @@ def main():
     args=parser.parse_args()
     init_db()  # idempotent; also adds tables introduced after a database was first created
     if handle_control_command(args,parser): return
+    if study.handle_command(args,parser): return
     if args.command=="init": init()
     if args.command=="demo": demo()
     if args.command=="demo-game": demo_game()
