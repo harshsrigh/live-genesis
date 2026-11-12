@@ -525,7 +525,7 @@ def test_window_quotas_with_injected_clock(isolated_db,monkeypatch,clock):
 def test_window_defaults_and_unreadable_values(isolated_db,monkeypatch):
     for name in ('LIVE_ACTIONS_PER_MINUTE','LIVE_ACTIONS_PER_DAY','LIVE_CALLS_PER_HOUR'):
         monkeypatch.delenv(name)
-    assert [controls.default_limit(k) for k in sorted(controls.LIMITS)]==[100,10,1,12]
+    assert [controls.default_limit(k) for k in sorted(controls.LIMITS)]==[100,10,1,12,30]
     monkeypatch.setenv('LIVE_ACTIONS_PER_MINUTE','lots')
     monkeypatch.setenv('LIVE_ACTIONS_PER_DAY','-5')
     assert controls.default_limit('actions-minute')==10 and controls.default_limit('actions-day')==1

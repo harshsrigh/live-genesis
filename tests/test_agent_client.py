@@ -153,8 +153,10 @@ def test_retries_only_network_errors_429_and_5xx_and_is_bounded(world):
 def test_validation_errors_and_reached_quota_are_never_retried(world):
     module, keys, client = world
     agent, wire, naps = client(0)
-    for action, status, detail in (({'action': 'dance'}, 422, 'Unknown action'),
-                                   ({'action': 'react', 'post_id': 99, 'choice': 'like'}, 404, 'Post not found'),
+    from live_genesis.agentkit import action_verbs
+    for action, status, detail in (({'action': 'dance'}, 422, 'Unknown action. Valid actions: ' + ', '.join(action_verbs()) + '.'),
+                                   ({'action': 'react', 'post_id': 99, 'choice': 'like'}, 404,
+                                    'Post not found. Use a post id from GET /api/agent/context.'),
                                    ({'action': 'vote', 'proposal_id': 1, 'choice': 'maybe'}, 422, 'proposal_id int and choice yes/no required')):
         with pytest.raises(module.ApiError) as refused:
             agent.act(action)
@@ -176,7 +178,7 @@ def test_validation_errors_and_reached_quota_are_never_retried(world):
     stranger = module.AgentClient(BASE, 'not-a-real-key', transport=wire, sleep=naps.append)
     with pytest.raises(module.ApiError) as denied:
         stranger.get_context()
-    assert (denied.value.status, denied.value.detail) == (401, 'Invalid agent key')
+    assert denied.value.status == 401 and denied.value.detail.startswith('Invalid agent key. ')
     assert len(wire.calls) == 1 and naps == []
 
 
@@ -234,3 +236,51 @@ def test_client_uses_only_the_standard_library_and_holds_no_secret():
     assert not re.search(r'live_[A-Za-z0-9_-]{20,}', source) and 'https://' not in source and 'http://' not in source
     assert 'SCRIPTED EXAMPLE' in source and 'not a model' in source
     assert 'X-Agent-Model' not in source.split('"""', 2)[2]  # named only in the docstring that says it is not sent
+
+
+def test_retry_after_is_honoured_and_a_quota_without_it_is_not_retried(world, monkeypatch):
+    module, keys, client = world
+
+    def scripted(answers):
+        calls, naps = [], []
+        def transport(method, url, headers, body, timeout):
+            calls.append(headers.get('Idempotency-Key'))
+            return answers.pop(0)
+        return module.AgentClient(BASE, keys[0], transport=transport, sleep=naps.append), calls, naps
+
+    ok = (200, b'{"ok": true}', {})
+    # Cooldown and a per-minute window ("quota" in the text) both carry Retry-After: wait, then resend the same key.
+    agent, calls, naps = scripted([(429, b'{"detail":"Action cooldown active. Wait 2 second(s)"}', {'Retry-After': '2'}),
+                                   (429, b'{"detail":"actions-minute quota exhausted (10/10)"}', {'retry-after': '15'}), ok])
+    assert agent.act({'action': 'idle'}) == {'ok': True}
+    assert naps == [2.0, 15.0] and len(set(calls)) == 1 and len(calls) == 3
+    # No header: a reached quota is final; an unlabelled 429 still gets the plain backoff.
+    agent, calls, naps = scripted([(429, b'{"detail":"Round 3 action quota reached (1/1)"}', {})])
+    with pytest.raises(module.ApiError):
+        agent.act({'action': 'idle'})
+    assert len(calls) == 1 and naps == []
+    agent, calls, naps = scripted([(429, b'{"detail":"Slow down"}'), ok])
+    assert agent.get_context() == {'ok': True} and naps == [0.5]
+    # A wait longer than MAX_RETRY_AFTER is not slept through; an unreadable value falls back to backoff.
+    agent, calls, naps = scripted([(429, b'{"detail":"Later"}', {'Retry-After': '3600'})])
+    with pytest.raises(module.ApiError):
+        agent.get_context()
+    assert naps == []
+    agent, calls, naps = scripted([(429, b'{"detail":"Later"}', {'Retry-After': 'Wed, 21 Oct 2026 07:28:00 GMT'}), ok])
+    assert agent.get_context() == {'ok': True} and naps == [0.5]
+
+    # Against the real app: the cooldown answer is waited out with the server's own number.
+    monkeypatch.setenv('LIVE_ACTIONS_PER_ROUND', '5')
+    monkeypatch.setenv('LIVE_ACTION_COOLDOWN_SECONDS', '3')
+    _, wire, naps = client(1)
+    statuses = []
+    def with_headers(method, url, headers, body, timeout):
+        response = wire.http.request(method, url[len(BASE):], headers=headers, content=body)
+        statuses.append(response.status_code)
+        if response.status_code == 429:
+            monkeypatch.setenv('LIVE_ACTION_COOLDOWN_SECONDS', '0')   # stands in for the time passing
+        return response.status_code, response.content, dict(response.headers)
+    real = module.AgentClient(BASE, keys[1], transport=with_headers, sleep=naps.append)
+    real.act({'action': 'post', 'title': 'First of two', 'body': 'The first of two posts in one round.'})
+    real.act({'action': 'post', 'title': 'Second of two', 'body': 'The second post waits for the cooldown.'})
+    assert statuses == [200, 429, 200] and len(naps) == 1 and 1 <= naps[0] <= 3

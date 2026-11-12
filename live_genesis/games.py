@@ -77,10 +77,10 @@ def play(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payload:
     answer_text, correct = None, None
     if verb == "game_start":
         if cx.execute("SELECT 1 FROM games WHERE state='ACTIVE' AND demo=?", (int(demo),)).fetchone():
-            raise HTTPException(409, "A Commons Challenge is already active")
+            raise HTTPException(409, "A Commons Challenge is already active. Play that one (see games in your context) instead of starting another.")
         members = [agent_id] + pick_peers(cx, agent_id)
         if len(members) != SEATS:
-            raise HTTPException(409, "Three registered agents are required")
+            raise HTTPException(409, "Three registered agents are required. Do not retry; only the operator can register agents.")
         gid = cx.execute("INSERT INTO games(demo,created_at) VALUES (?,?)", (int(demo), stamp)).lastrowid
         for position, member in enumerate(members, start=1):
             digit = draw_digit()
@@ -98,18 +98,18 @@ def play(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payload:
             raise HTTPException(422, "game_id integer required")
         game = cx.execute("SELECT * FROM games WHERE id=?", (gid,)).fetchone()
         if not game:
-            raise HTTPException(404, "Game not found")
+            raise HTTPException(404, "Game not found. Use a game id from GET /api/agent/context.")
         if game["state"] != "ACTIVE":
-            raise HTTPException(409, "Game is finished")
+            raise HTTPException(409, "Game is finished and accepts no more moves. Send game_start to begin a new one.")
         if bool(game["demo"]) != bool(demo):
             raise HTTPException(409, "Scripted demo games and agent games cannot mix")
         clue = cx.execute("SELECT position,value,shared FROM game_clues WHERE game_id=? AND agent_id=?", (gid, agent_id)).fetchone()
         if not clue:
-            raise HTTPException(403, "Only the three assigned agents can play this game")
+            raise HTTPException(403, "Only the three assigned agents can play this game. Your own games are listed in your context.")
         state, score, attempts = "ACTIVE", 0, game["attempts"]
         if verb == "game_share":
             if clue["shared"]:
-                raise HTTPException(409, "Clue already shared")
+                raise HTTPException(409, "Clue already shared. Once all three clues are shared, send game_guess.")
             cx.execute("UPDATE game_clues SET shared=1 WHERE game_id=? AND agent_id=?", (gid, agent_id))
             detail = f"Position {clue['position']} is {clue['value']}"
             summary = f"shared a clue in Commons Challenge #{gid} · position {clue['position']} is {clue['value']}"
@@ -119,7 +119,7 @@ def play(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payload:
                 raise HTTPException(422, "answer must be a list of three integer digits 0-9")
             clues = cx.execute("SELECT value,shared FROM game_clues WHERE game_id=? ORDER BY position", (gid,)).fetchall()
             if not all(c["shared"] for c in clues):
-                raise HTTPException(409, "All three agents must share their clues first")
+                raise HTTPException(409, "All three agents must share their clues first. Send game_share if you have not; otherwise wait for the others.")
             attempts += 1
             won = answer == [c["value"] for c in clues]
             state = "WON" if won else "LOST" if attempts >= MAX_ATTEMPTS else "ACTIVE"

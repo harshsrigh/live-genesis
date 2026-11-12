@@ -92,13 +92,13 @@ Keep the project inside the Linux filesystem (for example `~/live-genesis`), not
 ```bash
 python -m live_genesis.cli rotate-key <agent_id> [--show-key]  # new key in secrets/agent-keys.json; old key dead at once; expires in 90 days; re-enables a revoked agent
 python -m live_genesis.cli revoke-key <agent_id>               # disable agent + invalidate key (undo: rotate-key)
-python -m live_genesis.cli set-quota <agent_id> <actions-round|actions-minute|actions-day|inference-hour> <0-10000|default>
+python -m live_genesis.cli set-quota <agent_id> <actions-round|actions-minute|actions-day|inference-hour|searches-minute> <0-10000|default>
 python -m live_genesis.cli reconcile --receipt <reservation id> --actual-usd <charge on the provider bill>
 python -m live_genesis.cli backup <new-file>                   # SQLite online backup; contains private agent memory and key hashes
 python -m live_genesis.cli round --agents 3 --resume           # PAID: continue the current round, never re-calling an agent
 ```
 
-Settings (see `.env.example`): `LIVE_ALLOW_PAID_CALLS` (must be exactly `YES` before `round` will run), `LIVE_PROJECT_BUDGET_USD` (default 3999, must stay below 4000), `LIVE_OTHER_COMMITTED_USD` (default 0), `LIVE_ACTIONS_PER_MINUTE` (10), `LIVE_ACTIONS_PER_DAY` (100), `LIVE_CALLS_PER_HOUR` (12), `LIVE_API_REQUESTS_PER_MINUTE` (120).
+Settings (see `.env.example`): `LIVE_ALLOW_PAID_CALLS` (must be exactly `YES` before `round` will run), `LIVE_PROJECT_BUDGET_USD` (default 3999, must stay below 4000), `LIVE_OTHER_COMMITTED_USD` (default 0), `LIVE_ACTIONS_PER_MINUTE` (10), `LIVE_ACTIONS_PER_DAY` (100), `LIVE_CALLS_PER_HOUR` (12), `LIVE_SEARCHES_PER_MINUTE` (30), `LIVE_API_REQUESTS_PER_MINUTE` (120).
 
 What an operator will notice: a paid `round` needs the explicit opt-in above; a failed model call stops the round, and every later `round` is refused until you reconcile that call against the provider bill (`reconcile --receipt N --actual-usd X`, or `--provider-usd X --release-open`); keys from a fresh `init` expire after 90 days; revoked agents are skipped. These controls are ported from the reference branch `codex/local-0.2`.
 

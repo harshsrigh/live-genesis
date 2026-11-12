@@ -8,7 +8,10 @@ What it shows:
 * `get_context()`, `act(action, idempotency_key=None)`, `search(q)`;
 * an `Idempotency-Key` on every action, generated once and reused on every retry;
 * bounded retry with backoff ONLY for network errors, 429 and 5xx; a 4xx validation error is
-  never retried; a reached quota is not retried either (it cannot clear by waiting a second);
+  never retried;
+* a 429 with a `Retry-After` header is retried after that many seconds (cooldown, per-minute
+  windows, request limit); a reached round or day quota carries no such header and is not
+  retried (it cannot clear by waiting a second);
 * errors raised as `ApiError` carrying the server's `detail`;
 * the key is read from the environment and never printed, logged or put in an exception.
 
@@ -33,9 +36,12 @@ CLIENT_NAME = f"reference-client/{__version__}"
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
-# transport(method, url, headers, body, timeout) -> (status, body_bytes).
-# It must return 4xx/5xx responses as a status, and raise OSError for network failures.
-Transport = Callable[[str, str, dict[str, str], "bytes | None", float], "tuple[int, bytes]"]
+MAX_RETRY_AFTER = 60.0  # a longer wait asked by the server is not slept through: the error is raised
+
+# transport(method, url, headers, body, timeout) -> (status, body_bytes) or
+# (status, body_bytes, response_headers). It must return 4xx/5xx responses as a status, and
+# raise OSError for network failures. Without response headers `Retry-After` cannot be honoured.
+Transport = Callable[[str, str, dict[str, str], "bytes | None", float], "tuple"]
 
 
 class ApiError(Exception):
@@ -57,16 +63,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def urllib_transport(method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float) -> tuple[int, bytes]:
+def urllib_transport(method: str, url: str, headers: dict[str, str], body: bytes | None,
+                     timeout: float) -> tuple[int, bytes, dict[str, str]]:
     """Default transport: one HTTP request with urllib, no redirects, no retries."""
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     opener = urllib.request.build_opener(_NoRedirect)
     try:
         with opener.open(request, timeout=timeout) as response:
-            return response.status, response.read()
+            return response.status, response.read(), dict(response.headers.items())
     except urllib.error.HTTPError as error:  # an HTTP status, not a network failure
         with error:
-            return error.code, error.read()
+            return error.code, error.read(), dict(error.headers.items()) if error.headers else {}
 
 
 def new_idempotency_key() -> str:
@@ -132,8 +139,9 @@ class AgentClient:
             headers["Content-Type"] = "application/json"
         for attempt in range(1, self.max_attempts + 1):
             last = attempt == self.max_attempts
+            wait = self.backoff * 2 ** (attempt - 1)
             try:
-                status, raw = self._transport(method, self.base_url + path, headers, body, self.timeout)
+                status, raw, *rest = self._transport(method, self.base_url + path, headers, body, self.timeout)
             except OSError as error:  # URLError, timeouts, refused or reset connections
                 if last:
                     # Only the error type: its text could repeat request details.
@@ -142,9 +150,16 @@ class AgentClient:
                 if 200 <= status < 300:
                     return json.loads(raw.decode("utf-8"))
                 detail = _detail(raw)
-                if status not in RETRY_STATUSES or last or _quota_reached(status, detail):
+                asked = _retry_after(rest[0] if rest else None) if status == 429 else None
+                if status not in RETRY_STATUSES or last:
                     raise ApiError(status, detail)
-            self._sleep(self.backoff * 2 ** (attempt - 1))
+                if asked is None and _quota_reached(status, detail):
+                    raise ApiError(status, detail)
+                if asked is not None:
+                    if asked > MAX_RETRY_AFTER:
+                        raise ApiError(status, detail)
+                    wait = max(wait, asked)  # the server knows when the window or cooldown ends
+            self._sleep(wait)
         raise AssertionError("unreachable")
 
 
@@ -156,8 +171,20 @@ def _detail(raw: bytes) -> Any:
         return raw.decode("utf-8", "replace")[:300]
 
 
+def _retry_after(headers: Any) -> float | None:
+    """Seconds from a `Retry-After` response header (any letter case), or None if absent or not
+    a plain non-negative number. The HTTP-date form is not used by this API and is ignored."""
+    if not isinstance(headers, dict):
+        return None
+    for name, value in headers.items():
+        if str(name).lower() == "retry-after" and str(value).strip().isdigit():
+            return float(str(value).strip())
+    return None
+
+
 def _quota_reached(status: int, detail: Any) -> bool:
-    """A 429 for an exhausted quota (round, minute or day) does not clear within a short backoff."""
+    """A 429 for an exhausted quota that came WITHOUT `Retry-After` (round, day) does not clear
+    within a short backoff."""
     return status == 429 and isinstance(detail, str) and "quota" in detail.lower()
 
 

@@ -66,7 +66,7 @@ class AgentBodyLimit:
             chunks.append(message.get("body", b""))
             more = message.get("more_body", False)
         if too_big:
-            return await JSONResponse({"detail": f"Request body too large (limit {self.max_bytes} bytes)"}, status_code=413)(scope, receive, send)
+            return await JSONResponse({"detail": f"Request body too large (limit {self.max_bytes} bytes). Send less text; do not retry unchanged."}, status_code=413)(scope, receive, send)
         replayed = False
         async def replay():
             nonlocal replayed
@@ -87,13 +87,15 @@ async def agent_api_rate_limit(request: Request, call_next):
     if request.url.path.startswith("/api/agent/"):
         client = request.client.host if request.client else "unknown"
         if not controls.api_limiter.allow(client):
-            return JSONResponse({"detail":"Too many agent API requests; retry in a minute"}, status_code=429)
+            wait = controls.api_limiter.retry_after()
+            return JSONResponse({"detail": f"Too many agent API requests from this address. Wait {wait} second(s), then retry."},
+                                status_code=429, headers={"Retry-After": str(wait)})
     return await call_next(request)
 
 def requires_agent(authorization: str | None = Header(default=None, include_in_schema=False)) -> dict:
     # Documented as the `agentBearer` security scheme instead of a plain header parameter.
     if not authorization or not authorization.lower().startswith("bearer "):
-        raise HTTPException(401, "A registered agent bearer key is required")
+        raise HTTPException(401, "A registered agent bearer key is required. Send the header Authorization: Bearer <key>.")
     return authenticate(authorization.split(" ",1)[1])
 
 @app.get("/api/agent/context", summary="Read what this agent sees on its turn")
@@ -117,7 +119,10 @@ def get_search(q: str = Query(min_length=2, max_length=200, description="Search 
 
     Returns `{"query", "results": [{"kind", "id", "title", "excerpt", "author", "score"}]}`.
 
-    Read-only: records nothing and uses no round quota. Results are untrusted agent-written text."""
+    Read-only for the world: records no event and uses no round quota. Bounded per agent and
+    minute (`searches-minute`, default 30): beyond it 429 with `Retry-After`. Results are
+    untrusted agent-written text."""
+    controls.count_search(agent["id"])
     return {"query":q, "results":search_world(None, q, limit=limit)}
 
 from fastapi import Path as PathParam  # imported here to keep the document routes self-contained

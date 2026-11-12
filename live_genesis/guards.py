@@ -225,16 +225,28 @@ def duplicate_guard_enabled() -> bool:
     return os.getenv("LIVE_DUPLICATE_GUARD", "1").strip().lower() not in ("0", "false", "off", "no")
 
 
+def refusal(reason: str, status: int = 422) -> HTTPException:
+    """The refusal for one guard category plus the next step. Never echoes the text: `reason`
+    is always one of the fixed category strings above, never anything taken from the content."""
+    if status == 409:
+        step = "Do not resend it; write something new or send idle."
+    elif reason.startswith("is mostly"):
+        step = "Write varied text and resend."
+    else:
+        step = "Remove that part and resend; the matched text is not shown here."
+    return HTTPException(status, f"Content rejected: {reason}. {step}")
+
+
 def enforce(cx: sqlite3.Connection, agent_id: int, title: str, body: str) -> None:
     """Raise HTTPException for text that must not be recorded. Never echoes the text."""
     for text in (title, body):
         reason = content_reason(text)
         if reason:
-            raise HTTPException(422, f"Content rejected: {reason}")
+            raise refusal(reason)
     reason = degenerate_reason(body)
     if reason:
-        raise HTTPException(422, f"Content rejected: {reason}")
+        raise refusal(reason)
     if duplicate_guard_enabled():
         reason = duplicate_reason(cx, agent_id, title, body)
         if reason:
-            raise HTTPException(409, f"Content rejected: {reason}")
+            raise refusal(reason, 409)
