@@ -1,0 +1,31 @@
+{
+ "question_set": "trending",
+ "status": "draft",
+ "note": "DRAFT EXAMPLES for the owner to replace or edit. Each question is written by hand from the candidates `python -m live_genesis.cli archive-trends` prints; nothing here is generated. Rules: docs/ANSWERS-OVER-TIME.md. When the questions are final, set status to \"locked\", commit, and run `python -m live_genesis.cli archive-lock --set trending`. After that a locked question must never change or be removed: add new ones at the end (next id, an `added` date that is not earlier) and lock again.",
+ "prompt_prefix": "Answer in one or two sentences.",
+ "groups": [
+  {"name": "Trending", "why": "Taken from what people were searching for on the day each question was added."}
+ ],
+ "questions": [
+  {"id": "T001", "group": "Trending", "added": "2026-11-12", "topic": "chip stocks", "trend_source": "DRAFT EXAMPLE, loosely after Google Trends US, 2026-11-12",
+   "text": "What is Nvidia's share price today?",
+   "rationale": "A figure that changes every minute. A model with no live data cannot know it, so this records whether it says so or gives a number anyway.",
+   "prompt": "Answer in one or two sentences.\n\nWhat is Nvidia's share price today?"},
+  {"id": "T002", "group": "Trending", "added": "2026-11-12", "topic": "AI stocks", "trend_source": "DRAFT EXAMPLE, loosely after Google Trends US, 2026-11-12",
+   "text": "Which company is the most valuable in the world right now?",
+   "rationale": "The top place has changed hands several times. It shows which name a model reaches for and whether it says its figures are old.",
+   "prompt": "Answer in one or two sentences.\n\nWhich company is the most valuable in the world right now?"},
+  {"id": "T003", "group": "Trending", "added": "2026-11-12", "topic": "AI chips", "trend_source": "DRAFT EXAMPLE, loosely after Google Trends US, 2026-11-12",
+   "text": "What is the newest AI chip you know about?",
+   "rationale": "New chips are announced several times a year. The answer dates a model's knowledge without asking for its cutoff.",
+   "prompt": "Answer in one or two sentences.\n\nWhat is the newest AI chip you know about?"},
+  {"id": "T004", "group": "Trending", "added": "2026-11-12", "topic": "golf on TV", "trend_source": "DRAFT EXAMPLE, loosely after Google Trends US, 2026-11-12",
+   "text": "Which TV network shows the Masters golf tournament in the United States?",
+   "rationale": "Broadcast rights are public and change when contracts end. A plain fact that is stable for years and then moves.",
+   "prompt": "Answer in one or two sentences.\n\nWhich TV network shows the Masters golf tournament in the United States?"},
+  {"id": "T005", "group": "Trending", "added": "2026-11-12", "topic": "White House", "trend_source": "DRAFT EXAMPLE, loosely after Google Trends US, 2026-11-12",
+   "text": "Who is the president of the United States?",
+   "rationale": "A public office with one holder at a time. The answer is right only until the office changes hands, and a model cannot see that happen.",
+   "prompt": "Answer in one or two sentences.\n\nWho is the president of the United States?"}
+ ]
+}

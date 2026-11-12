@@ -97,6 +97,16 @@ def has_forbidden_character(text: str, *, multiline: bool = False) -> bool:
     return any(_refused(text, index, multiline) for index in range(len(text)))
 
 
+def strip_forbidden_characters(text: str) -> str:
+    """`text` without the characters the rule above refuses; a control character becomes a space
+    so words do not run together. For untrusted text that is only displayed to the operator
+    (a fetched feed); agent-written text is refused instead, never repaired."""
+    if text.isascii() and text.isprintable():
+        return text
+    return "".join((" " if text[index] < " " or text[index] == "\x7f" else "") if _refused(text, index, False) else text[index]
+                   for index in range(len(text)))
+
+
 def check_characters(text: str, label: str, *, multiline: bool = False) -> None:
     """422 for a forbidden character. Never echoes the text or the character."""
     if has_forbidden_character(text, multiline=multiline):
