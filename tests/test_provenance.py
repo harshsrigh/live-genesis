@@ -1,5 +1,6 @@
 """Per-action provenance: demo / engine / api. Offline; no model calls."""
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from live_genesis import engine
@@ -92,9 +93,15 @@ def test_invalid_declaration_is_rejected_and_nothing_recorded(isolated_db,header
 
 def test_malformed_provenance_is_refused_and_verified_is_never_caller_supplied(isolated_db):
     a=authenticate(seed_agents()[0]['key'])
-    for bad in ({'source':'engine'},{'source':'api','verified':1},{'source':'demo'},{'source':'operator'},'engine'):
+    for bad in ({'source':'api','verified':1},{'source':'demo'},{'source':'operator'},'engine'):
         with pytest.raises(ValueError):
             submit_action(a['id'],POST,provenance=bad)
+    # Receipt-bound (ported from codex/local-0.2): declaring 'engine' is not enough, with or
+    # without provider/model. Without a settled reservation of this agent it is refused (409).
+    for claimed in ({'source':'engine'},{'source':'engine','provider':'openai','model':'m'}):
+        with pytest.raises(HTTPException) as err:
+            submit_action(a['id'],POST,provenance=claimed)
+        assert err.value.status_code==409
     with pytest.raises(ValueError):
         submit_action(a['id'],POST,demo=True,quota=False,provenance={'source':'api'})
     assert rows()==[] and overview()['metrics']['posts']==0

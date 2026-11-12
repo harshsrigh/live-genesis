@@ -16,8 +16,9 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .core import (BudgetExceeded, agent_context, close_reservation, connect, open_round, reserve_budget,
-                   settle_reservation, submit_action, update_memory)
+from . import controls
+from .core import (BudgetExceeded, ReconciliationRequired, agent_context, close_reservation, connect, current_round,
+                   open_round, reserve_budget, settle_reservation, submit_action, update_memory)
 
 CONSTITUTION = """You are a persistent software agent living in LIVE Genesis, a small
 agent-only digital society. Humans are outside operators, not citizens.
@@ -113,11 +114,15 @@ def build_prompt(context: dict[str,Any], limit: int = PROMPT_CHAR_LIMIT) -> str:
         context[longer].pop()
 
 
-def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
+def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> list[dict[str,Any]]:
     """Run a serial, explicitly invoked round. Cost limit is a SOFTWARE gate only.
 
     Set a HARD budget and/or alerts in the provider billing account independently.
     Stop on provider errors, keeping response details out of the public dashboard.
+
+    resume=True continues the CURRENT round instead of opening one, skipping every agent
+    that already acted in it or already has a paid call reserved in it, so an interrupted
+    round never calls (and pays for) the same agent twice.
     """
     if not 1 <= limit <= 10:
         raise ValueError('Between 1 and 10 agents may be run per round')
@@ -127,22 +132,35 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
     required_key = 'OPENAI_API_KEY' if provider == 'openai' else 'ANTHROPIC_API_KEY'
     if not os.getenv(required_key):
         raise RuntimeError(f'{required_key} missing. For a free illustrated sample, run: python -m live_genesis.cli demo')
-    spend_limit = float(os.getenv('LIVE_SPEND_LIMIT_USD', '10'))
-    input_rate = float(os.getenv('LIVE_INPUT_USD_PER_M', '0'))
-    output_rate = float(os.getenv('LIVE_OUTPUT_USD_PER_M', '0'))
-    if min(spend_limit, input_rate, output_rate) <= 0:
-        raise RuntimeError('Specify positive LIVE_SPEND_LIMIT_USD and provider-appropriate token price estimates')
+    # A key lying in the environment is not consent to spend.
+    if os.getenv('LIVE_ALLOW_PAID_CALLS') != 'YES':
+        raise RuntimeError('Explicit opt-in required for paid calls: set LIVE_ALLOW_PAID_CALLS=YES')
+    # Fail closed on unusable budget settings (non-numeric, NaN, infinite, zero, negative,
+    # project budget of $4,000 or more) before a round is opened or a provider is contacted.
+    budget = controls.budget_config()
+    spend_limit, input_rate, output_rate = budget['spend_limit_usd'], budget['input_rate'], budget['output_rate']
     if provider == 'openai':
         default_model = 'gpt-5.6-luna'
     else:
         default_model = 'claude-haiku-5-5'
     with connect() as cx:
-        agents = [dict(x) for x in cx.execute('SELECT id,name,model FROM agents ORDER BY id LIMIT ?', (limit,))]
+        # Revoked agents are never called. As before, the first `limit` (enabled) agents by id.
+        agents = [dict(x) for x in cx.execute('SELECT id,name,model FROM agents WHERE enabled=1 ORDER BY id LIMIT ?', (limit,))]
+        pending = controls.unconfirmed_ids(cx)
     if not agents:
-        raise RuntimeError('No agents registered. Run: python -m live_genesis.cli init')
-    # Each invocation is one round: every agent's action quota starts fresh, and the
-    # quota in submit_action stops any agent from recording more than its share.
-    open_round('engine')
+        raise RuntimeError('No enabled agents registered. Run: python -m live_genesis.cli init')
+    if pending:
+        # An earlier call may have been billed. Nothing is called and no round is opened.
+        return [{'error': controls.reconcile_message(pending)}]
+    if resume:
+        round_id = current_round()
+        with connect() as cx:
+            done = controls.agents_done_in_round(cx, round_id)
+        agents = [a for a in agents if a['id'] not in done]
+    else:
+        # Each invocation is one round: every agent's action quota starts fresh, and the
+        # quota in submit_action stops any agent from recording more than its share.
+        round_id = open_round('engine')
     outcomes: list[dict[str,Any]] = []
     for a in agents:
         # Conservative input upper bound and 650 output tokens. Not a vendor-side hard cap.
@@ -152,11 +170,19 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
         prompt = build_prompt(agent_context(a['id']))
         # Hold the estimate BEFORE the paid call, atomically, so concurrent rounds
         # (other threads or processes on this database) cannot jointly pass the ceiling.
+        # The rates and round are stored on the reservation; its id is the action's receipt.
         try:
-            reservation = reserve_budget(a['id'], model, reserved, spend_limit)
+            reservation = reserve_budget(a['id'], model, reserved, spend_limit, provider=provider, round_id=round_id,
+                                         input_rate=input_rate, output_rate=output_rate, count_call=True)
+        except ReconciliationRequired as exc:
+            outcomes.append({'agent':a['name'], 'error':str(exc)})
+            break
         except BudgetExceeded:
             outcomes.append({'agent':a['name'], 'error':'Local estimated spending ceiling reached; no further calls made'})
             break
+        except controls.CallRefused as exc:
+            outcomes.append({'agent':a['name'], 'error':str(exc)})  # this agent only; others continue
+            continue
         try:
             try:
                 result = infer(provider, model, prompt)
@@ -164,27 +190,27 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
                 close_reservation(reservation, 'released')  # nothing was sent
                 raise
             except Exception:
-                # The request may have been billed. Keep counting the hold until the
-                # operator checks the provider's billing page and runs `reconcile`.
+                # The request may have been billed. Keep counting the hold and STOP the round:
+                # no further paid call until the operator checks the bill and runs `reconcile`.
                 close_reservation(reservation, 'unconfirmed')
-                outcomes.append({'agent':a['name'], 'error':'inference failed',
-                                 'budget':f'${reserved:.6f} kept as unconfirmed; check provider billing, then run: cli reconcile'})
-                if pause_seconds:
-                    time.sleep(max(0.0,pause_seconds))
-                continue
+                outcomes.append({'agent':a['name'], 'error':'inference failed', 'reservation':reservation,
+                                 'budget':f'${reserved:.6f} kept as unconfirmed; round stopped. Check provider billing, then run: '
+                                          f'cli reconcile --receipt {reservation} --actual-usd <charged amount>'})
+                break
             # Record usage even if JSON is malformed or action validation later fails.
             usd = settle_reservation(reservation, result.input_tokens, result.output_tokens)
             action = parse_object(result.text)
             memory = action.pop('memory', None)
-            # Provenance: this process made the call above; `model` is the id it requested.
-            saved = submit_action(a['id'], action, cooldown=False,
-                                  provenance={'source':'engine', 'provider':provider, 'model':model})
+            # Provenance: the settled reservation is the receipt. submit_action records the action
+            # as `engine` only if it belongs to this agent and was never used, and marks it used.
+            saved = submit_action(a['id'], action, cooldown=False, receipt=reservation)
             if isinstance(memory, str):
                 # The action above stands even when the content guards refuse the memory text.
                 kept = update_memory(a['id'], memory[:500])
                 if kept.get('rejected'):
                     saved['memory_rejected'] = kept['rejected']  # guard category only, never the text
             saved['estimated_usd'] = round(usd,6)
+            saved['reservation'] = reservation
             outcomes.append(saved)
         except Exception as exc:
             # Never echo provider exception text; it can contain secrets or user data.

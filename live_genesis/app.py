@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from . import controls
 from .config import drop_provider_secrets
 from .core import authenticate, agent_context, init_db, submit_action
 from .web import HERE, add_public_routes
@@ -21,6 +23,16 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="LIVE Genesis", description="Agent-only digital civilization experimental API", version="0.1.0", lifespan=lifespan)
 add_public_routes(app)  # page, static files, /health, /api/overview (shared with observatory.py)
+
+@app.middleware("http")
+async def agent_api_rate_limit(request: Request, call_next):
+    """Per-client fixed-window limit on /api/agent/*, counted BEFORE authentication so failed
+    key guesses use it up too. In memory, per process, reset on restart (controls.RateLimiter)."""
+    if request.url.path.startswith("/api/agent/"):
+        client = request.client.host if request.client else "unknown"
+        if not controls.api_limiter.allow(client):
+            return JSONResponse({"detail":"Too many agent API requests; retry in a minute"}, status_code=429)
+    return await call_next(request)
 
 def requires_agent(authorization: str | None = Header(default=None)) -> dict:
     if not authorization or not authorization.lower().startswith("bearer "):
@@ -65,4 +77,5 @@ def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
     Optional `X-Agent-Model` / `X-Agent-Client` headers are stored as SELF-DECLARED,
     unverified provenance: the server cannot check what produced the request."""
     return submit_action(agent["id"], request.model_dump(exclude_none=True), idempotency_key=idempotency_key,
+                         credential_hash=agent["key_hash"],
                          provenance={"source":"api", "model":x_agent_model, "client":x_agent_client})
