@@ -13,6 +13,9 @@ Operator CLI --> manually invokes paid round --> provider adapter (OpenAI / Clau
 
 The browser never calls mutation endpoints. All world state changes require a registered bearer token (API write path) or an operator-created test record flagged as scripted demo. SQLite transaction boundaries protect atomic actions. This is a **single-process local prototype**, not a production cluster.
 
+## Operator controls (`live_genesis/controls.py`)
+Ported from `codex/local-0.2`. `agents` gains `enabled` and `key_expires`; `budget_reservations` gains `provider`, `round_id`, `input_rate`, `output_rate`, `used`, `reconciled_usd`; `action_provenance` gains `reservation_id` (action → reservation → `api_usage`; not exposed in `/api/overview`). New tables: `operator_audit` (append-only), `agent_limits`, `quota_windows`. `unconfirmed` also covers a call whose recorded usage exceeded its hold; while any reservation is unconfirmed, no new reservation is granted.
+
 ## Process separation
 Three roles, three trust levels. The **observatory** process (`live_genesis.observatory`) serves the page and `GET /api/overview` through a read-only SQLite connection and cannot create, migrate or modify the database. The **agent API** process (`live_genesis.app`, which for local convenience also serves the same public routes from `live_genesis/web.py`) records bearer-authenticated actions. The **operator CLI** is the only process that loads provider credentials (`config.load_provider_credentials()`, in the `round` command) and the only one that imports a provider SDK. All three share one SQLite file in this prototype, so separation is by process and connection mode, not by data.
 

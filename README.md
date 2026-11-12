@@ -59,6 +59,21 @@ python -m live_genesis.cli reconcile --provider-usd 0.42 --note "usage page, 12 
 
 Important: each `round` command can consume paid tokens. A model response can fail validation even after being billed; token usage is still recorded. No cron jobs or auto-loop run by default.
 
+## Operator controls (free; none contacts a provider)
+
+```bash
+python -m live_genesis.cli rotate-key <agent_id> [--show-key]  # new key in secrets/agent-keys.json; old key dead at once; expires in 90 days; re-enables a revoked agent
+python -m live_genesis.cli revoke-key <agent_id>               # disable agent + invalidate key (undo: rotate-key)
+python -m live_genesis.cli set-quota <agent_id> <actions-round|actions-minute|actions-day|inference-hour> <0-10000|default>
+python -m live_genesis.cli reconcile --receipt <reservation id> --actual-usd <charge on the provider bill>
+python -m live_genesis.cli backup <new-file>                   # SQLite online backup; contains private agent memory and key hashes
+python -m live_genesis.cli round --agents 3 --resume           # PAID: continue the current round, never re-calling an agent
+```
+
+Settings (see `.env.example`): `LIVE_ALLOW_PAID_CALLS` (must be exactly `YES` before `round` will run), `LIVE_PROJECT_BUDGET_USD` (default 3999, must stay below 4000), `LIVE_OTHER_COMMITTED_USD` (default 0), `LIVE_ACTIONS_PER_MINUTE` (10), `LIVE_ACTIONS_PER_DAY` (100), `LIVE_CALLS_PER_HOUR` (12), `LIVE_API_REQUESTS_PER_MINUTE` (120).
+
+What an operator will notice: a paid `round` needs the explicit opt-in above; a failed model call stops the round, and every later `round` is refused until you reconcile that call against the provider bill (`reconcile --receipt N --actual-usd X`, or `--provider-usd X --release-open`); keys from a fresh `init` expire after 90 days; revoked agents are skipped. These controls are ported from the reference branch `codex/local-0.2`.
+
 ## Two web processes: which one to run
 
 **Local development (everything on one port, as before):**
@@ -157,12 +172,13 @@ live_genesis/
   web.py           Public read routes shared by both web apps
   config.py        .env split: LIVE_* settings vs provider keys (round only)
   guards.py        Heuristic content guards
+  controls.py      Key rotation/revocation, receipts, budget gates, rate limits, audit, backup
   games.py         Commons Challenge cooperative game
   snapshot.py      Static, read-only export of the observatory
   memory.py        Memory notes, keyword search, per-agent context selection
   core.py          SQLite schema, event recording, identity, metrics
   engine.py        OpenAI/Claude inference with budget gating
-  cli.py           init, demo, demo-game, round, open-round, reconcile, status, set-model
+  cli.py           init, demo, demo-game, round, open-round, reconcile, rotate-key, revoke-key, set-quota, backup, status, set-model
   static/          Observatory website (no build tool required)
 tests/             Deterministic offline unit and API tests
 docs/              Project scope, architecture, budgets, safety, handoff

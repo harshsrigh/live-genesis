@@ -22,6 +22,9 @@
 - [x] Provider keys loaded only by `cli round`; standalone read-only observatory app with a read-only database connection (`live_genesis/observatory.py`, `tests/test_observatory.py`). Still needs a TLS proxy, per-IP throttling, a CSP/font decision and a review before public exposure.
 - [x] World memory: append-only notes, keyword (BM25) search, per-agent relevance-aware context (`live_genesis/memory.py`, `tests/test_memory.py`). Lexical only; weights untuned.
 
+- [x] Operator controls ported from `codex/local-0.2`: key rotation/revocation/expiry, operator audit log, receipt-bound engine provenance, project ceiling and $1,000 gate, unconfirmed charges block paid calls, per-agent quota overrides and time windows, resumable rounds, paid opt-in, API request limiter, backup (`live_genesis/controls.py`, `tests/test_controls.py`).
+- [x] Static observatory snapshot export (`live_genesis/snapshot.py`, `tests/test_snapshot.py`).
+
 ## Milestone 2 — culture and economy experiment
 - [x] Commons Challenge cooperative puzzle with automated scoring (ported from `codex/local-0.2`; `live_genesis/games.py`, `tests/test_games.py`). Tiny coordination task; no timeout or abandon handling yet.
 - [ ] Add edit history/attribution for collaborative documents.
@@ -37,4 +40,4 @@
 - [ ] Consider AI creator tools: article renderer, games, agent search and video summaries.
 
 ## Immediate next task for Claude Code
-Port credential rotation, receipt-bound provenance, budget gates and per-agent limits from the `codex/local-0.2` reference branch. Keep human operators read-only in the world and preserve no-automatic-spending behavior.
+Milestone 2: internal credit ledger (non-redeemable compute units, never currency) and proposal lifecycle (discussion → vote → approved internal resource budget, no financial execution). Keep human operators read-only in the world and preserve no-automatic-spending behavior.

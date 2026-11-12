@@ -72,7 +72,10 @@ def test_failed_inference_stays_counted_as_unconfirmed(isolated_db,monkeypatch):
     out=engine.run_round(limit=2)
     assert out[0]['error']=='inference failed' and 'unconfirmed' in out[0]['budget']
     assert 'secret' not in json.dumps(out)
-    assert out[1]['action']=='post'
+    # Rule ported from codex/local-0.2: an unconfirmed charge STOPS the round. (This test used
+    # to expect the second agent to be called.) Nothing more is called until `reconcile`.
+    assert len(out)==1 and out[0]['reservation']==1
+    assert 'reconcile' in engine.run_round(limit=2)[0]['error']
     status=budget_status()
     assert status['open_reservations']==1
     assert status['reserved_usd']==pytest.approx(0.00318)
@@ -80,7 +83,7 @@ def test_failed_inference_stays_counted_as_unconfirmed(isolated_db,monkeypatch):
     metrics=overview()['metrics']
     assert metrics['reserved_usd']==status['reserved_usd'] and metrics['provider_reported_usd'] is None
     with connect() as cx:
-        assert [r[0] for r in cx.execute('SELECT status FROM budget_reservations ORDER BY id')]==['unconfirmed','settled']
+        assert [r[0] for r in cx.execute('SELECT status FROM budget_reservations ORDER BY id')]==['unconfirmed']
 
 
 def test_setup_error_releases_the_hold(isolated_db,monkeypatch):

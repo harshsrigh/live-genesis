@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import config, games, guards
+from . import config, controls, games, guards
 
 ROOT = config.ROOT
 # Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
@@ -161,6 +161,7 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS memory_notes_agent ON memory_notes(agent_id, id);
         ''')
         cx.executescript(games.SCHEMA)  # Commons Challenge tables live with the game code
+        controls.migrate(cx)  # additive columns/tables: credentials, receipts, limits, audit
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
             cx.execute("INSERT INTO rounds(source,opened_at) VALUES ('init',?)", (utcnow(),))
@@ -172,27 +173,34 @@ IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 #   demo   -> scripted sample data, no model involved (verified=0, no model)
 #   engine -> this server made the provider call itself in engine.run_round; `model` is the
 #             id the server REQUESTED. verified=1 means only that, nothing about autonomy.
+#             Obtainable ONLY with a receipt: the id of this agent's own budget reservation,
+#             closed with recorded provider usage and never used before (controls.before_record).
 #   api    -> an external program holding a bearer key. `model`/`client` are whatever the
 #             caller typed into X-Agent-Model / X-Agent-Client: self-declared, verified=0.
 # Events recorded before this table existed have no row and read as 'demo' (demo flag) or 'unknown'.
 PROVENANCE_SOURCES = ("demo", "engine", "api")
 DECLARED = re.compile(r"[A-Za-z0-9._:/-][A-Za-z0-9 ._:/-]{0,79}")
 
-def _provenance(provenance: dict[str,Any] | None, demo: bool) -> dict[str,Any]:
-    """Normalize a provenance declaration. `verified` is derived from the source, never accepted from a caller."""
+def _provenance(provenance: dict[str,Any] | None, demo: bool, receipt: int | None = None) -> dict[str,Any]:
+    """Normalize a provenance declaration. `verified` is derived from the source, never accepted from a caller.
+
+    `engine` exists only together with a receipt, which is checked and consumed inside the write transaction."""
     if provenance is None:
         provenance = {}
     if not isinstance(provenance, dict) or set(provenance) - {"source", "provider", "model", "client"}:
         raise ValueError("provenance must be a dict with source/provider/model/client")
-    source = provenance.get("source", "demo" if demo else "api")
+    source = provenance.get("source", "engine" if receipt is not None else "demo" if demo else "api")
+    if receipt is not None and (demo or source != "engine"):
+        raise HTTPException(409, "Only a non-demo engine action can carry a model receipt")
     if source not in PROVENANCE_SOURCES or (source == "demo") != bool(demo):
         raise ValueError("provenance source must be demo (scripted records only), engine or api")
-    out: dict[str,Any] = {"source": source, "provider": None, "model": None, "client": None, "verified": int(source == "engine")}
+    out: dict[str,Any] = {"source": source, "provider": None, "model": None, "client": None, "verified": int(source == "engine"), "receipt": receipt}
     if source == "engine":
-        # Operator configuration, not caller input: record exactly what the server requested.
-        if not provenance.get("provider") or not provenance.get("model"):
-            raise ValueError("engine provenance requires the provider and the requested model")
-        out["provider"], out["model"] = str(provenance["provider"]), str(provenance["model"])
+        if receipt is None:
+            raise HTTPException(409, "engine provenance requires the receipt of a settled budget reservation")
+        # Provider and model are copied from the reservation later; a declared provider is
+        # only a fallback for a reservation that recorded none.
+        out["provider"] = str(provenance["provider"]) if provenance.get("provider") else None
     elif source == "api":
         for field, header in (("model", "X-Agent-Model"), ("client", "X-Agent-Client")):
             value = provenance.get(field)
@@ -231,8 +239,9 @@ def seed_agents(model: str | None = None) -> list[dict[str,str]]:
             if cx.execute("SELECT id FROM agents WHERE name=?", (name,)).fetchone():
                 continue
             key = "live_" + secrets.token_urlsafe(32)
-            cx.execute("INSERT INTO agents(name,role,persona,key_hash,model,created_at) VALUES (?,?,?,?,?,?)",
-                       (name,role,persona,hashlib.sha256(key.encode()).hexdigest(),model,utcnow()))
+            # New keys expire after 90 days (controls.KEY_LIFETIME_SECONDS); renew with `cli rotate-key`.
+            cx.execute("INSERT INTO agents(name,role,persona,key_hash,model,created_at,key_expires) VALUES (?,?,?,?,?,?,?)",
+                       (name,role,persona,hashlib.sha256(key.encode()).hexdigest(),model,utcnow(),controls.now()+controls.KEY_LIFETIME_SECONDS))
             new.append({"name":name,"key":key})
     return new
 
@@ -244,6 +253,7 @@ def authenticate(token: str | None) -> dict:
         agent = cx.execute("SELECT * FROM agents WHERE key_hash=?", (keyhash,)).fetchone()
     if agent is None:
         raise HTTPException(401, "Invalid agent key")
+    controls.check_credential(agent)  # 403 if disabled by the operator, 401 if the key has expired
     return dict(agent)
 
 def clean(value: Any, maximum: int, label: str) -> str:
@@ -253,7 +263,8 @@ def clean(value: Any, maximum: int, label: str) -> str:
 
 def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, cooldown: bool=True,
                   quota: bool=True, idempotency_key: str | None=None,
-                  provenance: dict[str,Any] | None=None) -> dict:
+                  provenance: dict[str,Any] | None=None, receipt: int | None=None,
+                  credential_hash: str | None=None) -> dict:
     """Single transaction for one recorded action. No AI reasoning on server side.
 
     quota: enforce the per-agent, per-round action quota (only the scripted demo opts out).
@@ -261,6 +272,10 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
     with the same action returns the first result without recording anything again.
     provenance: where the action came from (see _provenance). Default: 'demo' for scripted
     records, otherwise 'api' with nothing declared. Stored with the event, never on a replay.
+    receipt: id of this agent's settled, unused budget reservation; the only way to be recorded
+    as 'engine'. Missing, foreign, unsettled or already used: 409 and nothing is recorded.
+    credential_hash: key hash the caller authenticated with, re-checked inside the transaction
+    so a request authenticated just before a key rotation is not recorded after it.
     """
     if not isinstance(action, dict):
         raise HTTPException(422, "Expected JSON object")
@@ -269,13 +284,14 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         raise HTTPException(422, "Unknown action")
     if idempotency_key is not None and not (isinstance(idempotency_key, str) and IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
         raise HTTPException(422, "Idempotency-Key must be 8-128 characters of A-Z a-z 0-9 . _ : -")
-    origin = _provenance(provenance, demo)
+    origin = _provenance(provenance, demo, receipt)
     request_hash = hashlib.sha256(json.dumps(action, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
     with connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
         agent = cx.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
         if not agent:
             raise HTTPException(404,"Agent not found")
+        controls.check_actor(agent, credential_hash)
         round_id = _current_round(cx)
         if idempotency_key is not None:
             seen = cx.execute("SELECT request_hash,response FROM round_actions WHERE agent_id=? AND idempotency_key=?",
@@ -286,12 +302,14 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
                 return {**json.loads(seen["response"]), "replayed": True}
         if quota and verb != "idle":
             used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
-            if used >= actions_per_round():
-                raise HTTPException(429, f"Round {round_id} action quota reached ({used}/{actions_per_round()})")
+            allowed = controls.limit(cx, agent_id, "actions-round")  # per-agent override, else LIVE_ACTIONS_PER_ROUND
+            if used >= allowed:
+                raise HTTPException(429, f"Round {round_id} action quota reached ({used}/{allowed})")
         if cooldown and verb != "idle":
             row = cx.execute("SELECT created_at FROM events WHERE agent_id=? ORDER BY id DESC LIMIT 1", (agent_id,)).fetchone()
             if row and datetime.now(timezone.utc) - datetime.fromisoformat(row[0]) < timedelta(seconds=float(os.getenv("LIVE_ACTION_COOLDOWN_SECONDS", "2"))):
                 raise HTTPException(429, "Action cooldown active")
+        origin = controls.before_record(cx, agent_id, origin, demo)  # consume receipt; minute/day windows
         stamp = utcnow()
         payload: dict[str,Any] = {"action":verb, "agent":agent["name"]}
         if verb == "post":
@@ -349,8 +367,8 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             return payload
         cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (?,?,?,?,?)",
                    (agent_id,verb,summary,int(demo),stamp))
-        cx.execute("INSERT INTO action_provenance(event_id,source,provider,model,client,verified,kind,ref_id) VALUES (last_insert_rowid(),?,?,?,?,?,?,?)",
-                   (origin["source"],origin["provider"],origin["model"],origin["client"],origin["verified"],verb,payload.get("id", payload.get("move_id"))))
+        cx.execute("INSERT INTO action_provenance(event_id,source,provider,model,client,verified,kind,ref_id,reservation_id) VALUES (last_insert_rowid(),?,?,?,?,?,?,?,?)",
+                   (origin["source"],origin["provider"],origin["model"],origin["client"],origin["verified"],verb,payload.get("id", payload.get("move_id")),origin["receipt"]))
         payload["summary"] = summary
         payload["round"] = round_id
         if not demo:
@@ -380,7 +398,7 @@ def agent_context(agent_id: int) -> dict:
         return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
                 "memory_notes":world["memory_notes"],
                 "games":game_view,
-                "round":{"id":round_id,"actions_used":used,"actions_allowed":actions_per_round()},
+                "round":{"id":round_id,"actions_used":used,"actions_allowed":controls.limit(cx, agent_id, "actions-round")},
                 "rules":["Agents only. No humans can participate as residents.",
                          "Respect others. No spam, impersonation, or fraudulent claims.",
                          "Funding proposals are ideas only and must be approved externally.",
@@ -441,9 +459,13 @@ def overview(readonly: bool = False) -> dict:
                        "provider_reported_usd":(budget["last_reconciliation"] or {}).get("provider_reported_usd"),
                        "spend_limit_usd":float(os.getenv("LIVE_SPEND_LIMIT_USD","10"))}}
 
-def _insert_usage(cx: sqlite3.Connection, agent_id:int, model:str, input_tokens:int, output_tokens:int) -> tuple[int,float]:
-    input_rate = float(os.getenv("LIVE_INPUT_USD_PER_M", "0.40"))
-    output_rate = float(os.getenv("LIVE_OUTPUT_USD_PER_M", "1.50"))
+def _insert_usage(cx: sqlite3.Connection, agent_id:int, model:str, input_tokens:int, output_tokens:int,
+                  input_rate: float | None = None, output_rate: float | None = None) -> tuple[int,float]:
+    # Rates fixed on a reservation win; otherwise (direct record_usage) the current settings apply.
+    if input_rate is None:
+        input_rate = float(os.getenv("LIVE_INPUT_USD_PER_M", "0.40"))
+    if output_rate is None:
+        output_rate = float(os.getenv("LIVE_OUTPUT_USD_PER_M", "1.50"))
     amount = input_tokens*input_rate/1e6+output_tokens*output_rate/1e6
     cur = cx.execute("INSERT INTO api_usage(agent_id,model,input_tokens,output_tokens,estimated_usd,created_at) VALUES (?,?,?,?,?,?)",
                      (agent_id,model,input_tokens,output_tokens,amount,utcnow()))
@@ -468,15 +490,21 @@ def spent_usd() -> float:
 #   held        -> call in flight (or the process died mid-call)
 #   settled     -> usage recorded; the actual estimate replaces the hold
 #   released    -> no provider request was made, or the operator cleared it
-#   unconfirmed -> the call failed after it may have reached the provider; still counted
+#   unconfirmed -> needs the operator: the call failed after it may have reached the provider
+#                  (hold still counted), or its recorded usage exceeded the hold (usage counted,
+#                  hold not counted twice). While one exists, no new reservation is made.
 # This remains a SOFTWARE estimate. Only the provider's billing page shows real charges.
 
 class BudgetExceeded(Exception):
     """Raised when a reservation would push committed spend above the local ceiling."""
 
+class ReconciliationRequired(BudgetExceeded):
+    """An unconfirmed charge exists: no paid call until the operator runs `reconcile`."""
+
 def _budget(cx: sqlite3.Connection) -> dict[str,Any]:
     estimated = float(cx.execute('SELECT COALESCE(SUM(estimated_usd),0) FROM api_usage').fetchone()[0])
-    open_usd, open_count = cx.execute("SELECT COALESCE(SUM(reserved_usd),0),COUNT(*) FROM budget_reservations WHERE status IN ('held','unconfirmed')").fetchone()
+    # An overrun (unconfirmed WITH usage) is already inside `estimated`: its hold is not added again.
+    open_usd, open_count = cx.execute("SELECT COALESCE(SUM(CASE WHEN usage_id IS NULL THEN reserved_usd ELSE 0 END),0),COUNT(*) FROM budget_reservations WHERE status IN ('held','unconfirmed')").fetchone()
     rec = cx.execute('SELECT * FROM cost_reconciliations ORDER BY id DESC LIMIT 1').fetchone()
     basis = estimated
     reported = None
@@ -488,32 +516,57 @@ def _budget(cx: sqlite3.Connection) -> dict[str,Any]:
         # Never let a lower operator figure reduce the gate below the local estimate.
         basis = max(estimated, rec["provider_reported_usd"] + since)
     return {"estimated_usd":round(estimated,6),"open_reservations":int(open_count),"reserved_usd":round(float(open_usd),6),
-            "committed_usd":round(basis+float(open_usd),6),"last_reconciliation":reported}
+            "committed_usd":round(basis+float(open_usd),6),"last_reconciliation":reported,
+            "unconfirmed_reservations":controls.unconfirmed_ids(cx),"ceilings":controls.ceiling_report()}
 
 def budget_status() -> dict[str,Any]:
     with connect() as cx:
         return _budget(cx)
 
-def reserve_budget(agent_id: int | None, model: str, amount_usd: float, limit_usd: float) -> int:
-    """Atomically hold amount_usd against the ceiling. Raises BudgetExceeded when it does not fit."""
-    if amount_usd <= 0:
+def reserve_budget(agent_id: int | None, model: str, amount_usd: float, limit_usd: float, *,
+                   provider: str | None = None, round_id: int | None = None,
+                   input_rate: float | None = None, output_rate: float | None = None,
+                   count_call: bool = False) -> int:
+    """Atomically hold amount_usd against the ceiling. Raises BudgetExceeded when it does not fit.
+
+    The ceiling is the lowest of limit_usd, LIVE_PROJECT_BUDGET_USD - LIVE_OTHER_COMMITTED_USD and
+    $1,000 - LIVE_OTHER_COMMITTED_USD. Invalid settings raise controls.ConfigError (fail closed).
+    Raises ReconciliationRequired while any reservation is unconfirmed, and controls.CallRefused
+    for a disabled agent or (count_call=True) an exhausted inference-hour quota.
+    The price rates are stored on the reservation and used again at settlement.
+    """
+    if isinstance(amount_usd, bool) or not isinstance(amount_usd, (int, float)) or not 0 < amount_usd < float("inf"):
         raise ValueError("Reservation must be positive")
+    ceiling = controls.effective_ceiling(limit_usd)
+    input_rate, output_rate = controls.reservation_rates(input_rate, output_rate)
     with connect() as cx:
         cx.execute("BEGIN IMMEDIATE")  # write lock: serializes concurrent reservers
-        if _budget(cx)["committed_usd"] + amount_usd > limit_usd:
+        pending = controls.unconfirmed_ids(cx)
+        if pending:
+            raise ReconciliationRequired(controls.reconcile_message(pending))
+        if _budget(cx)["committed_usd"] + amount_usd > ceiling:
             raise BudgetExceeded("Local estimated spending ceiling reached")
-        return int(cx.execute("INSERT INTO budget_reservations(agent_id,model,reserved_usd,status,created_at) VALUES (?,?,?,'held',?)",
-                              (agent_id,model,amount_usd,utcnow())).lastrowid)
+        controls.before_reserve(cx, agent_id, count_call)
+        return int(cx.execute("INSERT INTO budget_reservations(agent_id,model,reserved_usd,status,created_at,provider,round_id,input_rate,output_rate) VALUES (?,?,?,'held',?,?,?,?,?)",
+                              (agent_id,model,amount_usd,utcnow(),provider,round_id,input_rate,output_rate)).lastrowid)
 
 def settle_reservation(reservation_id: int, input_tokens: int, output_tokens: int) -> float:
-    """Record reported usage and close the hold in one transaction. Returns the estimated USD."""
+    """Record reported usage and close the hold in one transaction. Returns the estimated USD.
+
+    Priced with the rates stored at reserve time. If that exceeds the hold, the reservation
+    becomes 'unconfirmed' (usage recorded once) and blocks new calls until reconciled.
+    """
+    if any(type(n) is not int or n < 0 for n in (input_tokens, output_tokens)):
+        raise ValueError("Invalid provider usage")
     with connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
         row = cx.execute("SELECT * FROM budget_reservations WHERE id=?", (reservation_id,)).fetchone()
         if not row or row["status"] != "held":
             raise ValueError("Reservation is not open")
-        usage_id, amount = _insert_usage(cx, row["agent_id"], row["model"], input_tokens, output_tokens)
-        cx.execute("UPDATE budget_reservations SET status='settled',usage_id=?,closed_at=? WHERE id=?", (usage_id,utcnow(),reservation_id))
+        usage_id, amount = _insert_usage(cx, row["agent_id"], row["model"], input_tokens, output_tokens,
+                                         row["input_rate"], row["output_rate"])
+        status = "settled" if amount <= row["reserved_usd"] else "unconfirmed"
+        cx.execute("UPDATE budget_reservations SET status=?,usage_id=?,closed_at=? WHERE id=?", (status,usage_id,utcnow(),reservation_id))
         return amount
 
 def close_reservation(reservation_id: int, status: str) -> None:
@@ -540,7 +593,9 @@ def record_reconciliation(provider_reported_usd: float, note: str = "", *, relea
         cx.execute("INSERT INTO cost_reconciliations(provider_reported_usd,estimated_usd,last_usage_id,note,created_at) VALUES (?,?,?,?,?)",
                    (float(provider_reported_usd),estimated,last_usage,note.strip()[:300],utcnow()))
         if release_open:
-            cx.execute("UPDATE budget_reservations SET status='released',closed_at=? WHERE status IN ('held','unconfirmed')", (utcnow(),))
+            # An overrun already has its usage row: it becomes settled, not released.
+            cx.execute("UPDATE budget_reservations SET status=CASE WHEN usage_id IS NULL THEN 'released' ELSE 'settled' END,closed_at=? WHERE status IN ('held','unconfirmed')", (utcnow(),))
+            controls.audit(cx, "reconcile cumulative: release-open")
         return _budget(cx)
 
 def update_memory(agent_id: int, memory: str) -> dict[str,Any]:

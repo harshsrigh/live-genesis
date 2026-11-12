@@ -8,10 +8,17 @@ from fastapi.testclient import TestClient
 
 from live_genesis import cli, engine, games
 from live_genesis.app import app
-from live_genesis.core import agent_context, connect, init_db, open_round, overview, seed_agents, submit_action
+from live_genesis.core import (agent_context, connect, init_db, open_round, overview, reserve_budget, seed_agents,
+                               settle_reservation, submit_action)
 
 POST = {'action': 'post', 'title': 'Not a game move', 'body': 'An ordinary post.', 'topic': 'games'}
-ENGINE = {'source': 'engine', 'provider': 'openai', 'model': 'test-model-1'}
+
+
+def engine_receipt(agent_id):
+    """A settled, unused budget reservation: the only way an action may be labelled 'engine'."""
+    receipt = reserve_budget(agent_id, 'test-model-1', 0.4, 10, provider='openai')
+    settle_reservation(receipt, 10, 10)
+    return receipt
 
 
 def deal(monkeypatch, *digits):
@@ -176,10 +183,11 @@ def test_idempotent_replay_of_a_move(isolated_db, monkeypatch):
 
 
 def test_provenance_rows_and_mixed_source_label(isolated_db, monkeypatch):
-    gid, a, b, c, _ = start(monkeypatch, provenance=ENGINE)
+    seed_agents()
+    gid, a, b, c, _ = start(monkeypatch, receipt=engine_receipt(ids()[0]))
     assert overview()['games'][0]['source'] == 'engine'
     submit_action(b, {'action': 'game_share', 'game_id': gid}, provenance={'source': 'api', 'model': 'declared-model', 'client': 'bot/1'})
-    share_all(gid, c, provenance=ENGINE)
+    share_all(gid, c, receipt=engine_receipt(c))
     with connect() as cx:
         rows = [dict(r) for r in cx.execute('''SELECT ap.*,e.verb,e.demo FROM action_provenance ap
             JOIN events e ON e.id=ap.event_id ORDER BY ap.event_id''')]
@@ -379,3 +387,13 @@ def test_http_round_trip_and_validation(isolated_db, monkeypatch):
         assert final['metrics']['games'] == 1 and final['games'][0]['state'] == 'WON'
         page = client.get('/').text
         assert 'id="games"' in page and 'id="games-list"' in page
+
+
+def test_revoked_agents_are_never_seated(isolated_db, monkeypatch):
+    from live_genesis import controls
+    seed_agents()
+    controls.rotate_key(ids()[1], revoke=True)
+    deal(monkeypatch, 1, 2, 3)
+    game = submit_action(ids()[0], {'action': 'game_start'})
+    seats = [c['agent_id'] for c in overview()['games'][0]['clues']]
+    assert seats == [ids()[0], ids()[2], ids()[3]] and game['state'] == 'ACTIVE'

@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from . import controls
 from .config import load_provider_credentials
 from .core import ROOT, budget_status, connect, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
 from .engine import run_round
@@ -106,6 +107,62 @@ def demo_game() -> None:
     print("SCRIPTED DEMO GAME: clearly labeled simulated playthrough; NO model was called. Not evidence of autonomous collaboration.")
 
 
+def key_file() -> Path:
+    return ROOT / "secrets" / "agent-keys.json"
+
+
+def add_control_parsers(sub) -> None:
+    """Operator controls ported from codex/local-0.2. All free; none contacts a provider."""
+    rot=sub.add_parser("rotate-key",help="Give one agent a new bearer key (old key stops working at once; expires in 90 days; re-enables a revoked agent)")
+    rot.add_argument("agent_id",type=int)
+    rot.add_argument("--show-key",action="store_true",help="Also print the new key once to this terminal (default: only written to secrets/agent-keys.json)")
+    rev=sub.add_parser("revoke-key",help="Disable one agent and invalidate its key (undo with rotate-key)")
+    rev.add_argument("agent_id",type=int)
+    lim=sub.add_parser("set-quota",help='Override one agent quota; "default" clears the override, 0 blocks that kind')
+    lim.add_argument("agent_id",type=int)
+    lim.add_argument("kind",choices=sorted(controls.LIMITS))
+    lim.add_argument("maximum",help='Integer 0-10000, or "default"')
+    bak=sub.add_parser("backup",help="SQLite online backup to a NEW file (the copy contains private agent memory and key hashes)")
+    bak.add_argument("destination")
+
+
+def handle_control_command(args,parser) -> bool:
+    if args.command in ("rotate-key","revoke-key"):
+        try: key=controls.rotate_key(args.agent_id,revoke=args.command=="revoke-key")
+        except ValueError as err: parser.error(str(err))
+        with connect() as cx:
+            name=cx.execute("SELECT name FROM agents WHERE id=?",(args.agent_id,)).fetchone()[0]
+        secrets_file=key_file()
+        secrets_file.parent.mkdir(exist_ok=True)
+        keys=json.loads(secrets_file.read_text()) if secrets_file.exists() else {}
+        keys.pop(name,None)
+        if key: keys[name]=key
+        secrets_file.write_text(json.dumps(keys,indent=2))
+        try: os.chmod(secrets_file,0o600)
+        except OSError: pass
+        if key:
+            print(f"Rotated the key of agent {args.agent_id} ({name}). The old key no longer works; the new one expires in 90 days.")
+            print("New key stored in:",secrets_file)
+            if args.show_key: print("New key (shown this once; also in the file above):",key)
+        else:
+            print(f"Revoked agent {args.agent_id} ({name}): disabled, key invalidated and removed from {secrets_file}.")
+            print("Its earlier posts and votes stay in the record. Undo with: rotate-key",args.agent_id)
+        return True
+    if args.command=="set-quota":
+        if args.maximum!="default" and not args.maximum.isdigit(): parser.error('maximum must be an integer or "default"')
+        try: controls.set_limit(args.agent_id,args.kind,None if args.maximum=="default" else int(args.maximum))
+        except ValueError as err: parser.error(str(err))
+        print(f"Agent {args.agent_id} {args.kind} quota set to {args.maximum}.")
+        return True
+    if args.command=="backup":
+        try: saved=controls.backup(args.destination)
+        except (FileExistsError,FileNotFoundError) as err: parser.error(str(err))
+        print("Backup saved:",saved)
+        print("WARNING: the copy contains private agent memory and agent key hashes. Keep it out of git and public folders.")
+        return True
+    return False
+
+
 def main():
     parser=argparse.ArgumentParser(description="LIVE Genesis operations")
     sub=parser.add_subparsers(dest="command",required=True)
@@ -114,6 +171,7 @@ def main():
     run=sub.add_parser("round",help="Run real OpenAI-powered autonomous agent turns")
     run.add_argument("--agents",type=int,default=3,help="Number of agents this round (1-10, default 3)")
     run.add_argument("--pause",type=float,default=0.0)
+    run.add_argument("--resume",action="store_true",help="Continue the current round; agents already called or recorded in it are skipped (never paid twice)")
     edit=sub.add_parser("set-model",help="Update saved model for existing agent identities")
     edit.add_argument("model",help="Exact model ID, e.g. claude-haiku-5-5")
     sub.add_parser("open-round",help="Start a new round so each agent's action quota resets (free; no model call)")
@@ -121,17 +179,21 @@ def main():
     rec.add_argument("--provider-usd",type=float,help="Cumulative spend to date as shown on the provider's billing page")
     rec.add_argument("--note",default="",help="Where the figure came from, e.g. 'OpenAI usage page, 12 Nov'")
     rec.add_argument("--release-open",action="store_true",help="Also clear held/unconfirmed reservations (the entered figure already covers them)")
+    rec.add_argument("--receipt",type=int,help="Reconcile ONE held/unconfirmed reservation by id (use with --actual-usd)")
+    rec.add_argument("--actual-usd",type=float,help="Charge for that one call as verified on the provider's bill (0 if it was not billed)")
+    add_control_parsers(sub)
     sub.add_parser("status",help="View current counters")
     sub.add_parser("demo-game",help="Offline SCRIPTED Commons Challenge playthrough on an empty/demo-only database (free; no model call)")
     args=parser.parse_args()
     init_db()  # idempotent; also adds tables introduced after a database was first created
+    if handle_control_command(args,parser): return
     if args.command=="init": init()
     if args.command=="demo": demo()
     if args.command=="demo-game": demo_game()
     if args.command=="round":
         if not 1<=args.agents<=10: parser.error("--agents must be between 1 and 10")
         load_provider_credentials()  # the only place .env provider API keys enter a process
-        print(json.dumps(run_round(limit=args.agents,pause_seconds=args.pause),indent=2,ensure_ascii=False))
+        print(json.dumps(run_round(limit=args.agents,pause_seconds=args.pause,resume=args.resume),indent=2,ensure_ascii=False))
     if args.command=="set-model":
         if not args.model.strip() or len(args.model) > 100: parser.error("Invalid model name")
         with connect() as cx:
@@ -140,13 +202,18 @@ def main():
     if args.command=="open-round":
         print(f"Opened round {open_round('operator')}. Each agent may record {overview()['metrics']['actions_per_round']} action(s) in it.")
     if args.command=="reconcile":
-        if args.provider_usd is None:
+        if (args.receipt is None)!=(args.actual_usd is None): parser.error("--receipt and --actual-usd must be given together")
+        if args.receipt is not None:
+            if args.provider_usd is not None or args.release_open or args.note: parser.error("--receipt/--actual-usd cannot be combined with --provider-usd, --release-open or --note")
+            try: report=controls.reconcile_reservation(args.receipt,args.actual_usd)
+            except ValueError as err: parser.error(str(err))
+        elif args.provider_usd is None:
             if args.release_open or args.note: parser.error("--release-open and --note require --provider-usd")
             report=budget_status()
         else:
             if args.provider_usd<0: parser.error("--provider-usd must be zero or more")
             report=record_reconciliation(args.provider_usd,args.note,release_open=args.release_open)
-        report["spend_limit_usd"]=float(os.getenv("LIVE_SPEND_LIMIT_USD","10"))
+        report["spend_limit_usd"]=report["ceilings"].get("spend_limit_usd")
         report["reminder"]="Local figures are estimates entered or computed here; only the provider's billing page shows real charges."
         print(json.dumps(report,indent=2))
     if args.command=="status": print(json.dumps(overview()["metrics"],indent=2))

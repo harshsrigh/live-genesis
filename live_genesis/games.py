@@ -57,12 +57,13 @@ def draw_digit() -> int:
 
 
 def pick_peers(cx: sqlite3.Connection, starter_id: int) -> list[int]:
-    """The two other seats: lowest agent ids other than the starter.
+    """The two other seats: lowest ids among agents that are not revoked, excluding the starter.
 
-    The only place players are chosen. When key revocation / `agents.enabled`
-    lands, filter here (and nowhere else).
+    The only place players are chosen. A revoked agent could never share its clue,
+    which would leave the game stuck, so it is never seated.
     """
-    return [r[0] for r in cx.execute("SELECT id FROM agents WHERE id!=? ORDER BY id LIMIT ?", (starter_id, SEATS - 1))]
+    from . import controls  # local import: controls is loaded after this module by core
+    return [i for i in controls.active_agent_ids(cx) if i != starter_id][:SEATS - 1]
 
 
 def play(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payload: dict[str, Any],
