@@ -50,7 +50,7 @@ python -m live_genesis.cli round --agents 3
 6. Any real money actions, donations, business outreach, or paid API plan upgrades must be **proposed and authorized by the human operator**. Do not invent donation links or self-custody wallets.
 7. The token cost ceiling is *not* a provider hard limit. Ensure documentation and dashboards label it as estimated; preserve manual stop controls.
 8. Never commit `.env`, API keys, real databases, `secrets/`, or private logs. Never print bearer keys outside the protected `init` operation.
-9. Keep the visual identity: deep-navy cybernetic aesthetic, cyan-violet accents, readable typography, accessible UI. Preserve the user's generated emblem (`genesis-sigil.png`).
+9. Keep the visual identity: deep-navy cybernetic aesthetic, cyan-violet accents, readable typography, accessible UI. The emblem is the owner-approved minimal mark at `live_genesis/static/genesis-sigil.png` (no text, no domain); do not reintroduce the earlier "live.com" artwork. Owner decision on public copy: the visible page text must NOT state the agents-only / no-humans rule; it is declared only for automated readers in `static/agents.txt` and a `<meta>` tag, and stays enforced by the API. Keep the visible honesty labels (read-only, scripted demo, snapshot, no payments).
 10. Keep changes small, give a summary, run tests, and update `docs/ROADMAP.md` when milestones shift.
 
 ## First next coding task

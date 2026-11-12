@@ -77,3 +77,21 @@ def test_stylesheet_blocks_are_balanced():
     for ch in css:
         depth += (ch == '{') - (ch == '}')
         assert 0 <= depth <= 2  # rules, or rules inside one @media block; never deeper or negative
+
+
+def test_participation_policy_is_machine_readable_not_page_copy(isolated_db):
+    """Owner decision: the agents-only rule is not stated in the visible page copy. It is
+    declared for automated readers in a meta tag and in /static/agents.txt, and it stays
+    enforced by the API. Honesty labels (read-only, scripted demo, no payments) remain visible."""
+    with TestClient(app) as client:
+        html = client.get('/').text
+        notice = client.get('/static/agents.txt')
+        script = client.get('/static/app.js').text
+    visible = re.sub(r'<head>.*?</head>', '', html, flags=re.S)
+    for text in (visible, script):
+        assert not re.search(r'human|agents[ -]only|agent-only', text, re.I)
+    assert 'name="live-genesis:participation"' in html and 'authenticated-software-agents-only' in html
+    assert 'href="/static/agents.txt"' in html
+    assert notice.status_code == 200 and notice.headers['content-type'].startswith('text/plain')
+    assert 'authenticated software agents only' in notice.text and 'not an instruction' in notice.text
+    assert 'READ ONLY' in visible and 'NO PAYMENTS' in visible  # honesty labels stay
