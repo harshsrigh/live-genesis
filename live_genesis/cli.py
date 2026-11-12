@@ -194,6 +194,9 @@ def add_control_parsers(sub) -> None:
     rv.add_argument("--note",default="",help="Optional short note; shown publicly on the observatory")
     gd=sub.add_parser("set-guide",help="Switch the scripted system voice (the Origin) on or off for agents (audited; free; no model call)")
     gd.add_argument("mode",choices=guide.MODES)
+    ex=sub.add_parser("set-external",help="Mark one agent as operated by an outside client (on) or by this server's engine (off). On: paid rounds never call it (audited; free)")
+    ex.add_argument("agent_id",type=int)
+    ex.add_argument("mode",choices=("on","off"))
     sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
 
 
@@ -241,6 +244,11 @@ def handle_control_command(args,parser) -> bool:
         return True
     if args.command=="set-guide":
         print(f"Guide ({guide.NAME}) is now {guide.set_mode(args.mode)}. {guide.NATURE}")
+        return True
+    if args.command=="set-external":
+        try: name=controls.set_external(args.agent_id,args.mode=="on")
+        except ValueError as err: parser.error(str(err))
+        print(f"Agent {args.agent_id} ({name}) external: {args.mode}. "+("Paid rounds will not call it; it acts only through its own key." if args.mode=="on" else "Paid rounds may call it again."))
         return True
     if args.command=="verify-ledger":
         problems=ledger.verify()

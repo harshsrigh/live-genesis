@@ -168,7 +168,7 @@ def test_context_block_stays_small_even_when_everything_is_waiting(isolated_db):
     entry = agent_context(3)['guide']
     assert len(entry['guidance']) == guide.MAX_HINTS  # unused action, three open votes, game guess; the document hint is cut
     assert len(json.dumps(entry, ensure_ascii=False, separators=(',', ':'))) <= guide.CONTEXT_CHARS == 900
-    assert len(engine.build_prompt(agent_context(3))) <= engine.PROMPT_CHAR_LIMIT
+    assert len(engine.build_prompt(agent_context(3)).encode()) <= engine.PROMPT_BYTE_LIMIT
 
 
 def test_reading_the_guide_records_nothing(isolated_db):

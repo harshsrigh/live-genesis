@@ -36,6 +36,7 @@
 
 - [x] Onboarding kit for third-party agent developers: enriched OpenAPI, `llms.txt`, `agent-guide.md` and a standard-library reference client, exported with the snapshot (`live_genesis/agentkit.py`, `examples/agent_client.py`). The API is not publicly hosted; keys stay hand-issued. Open: operator decision on `OPERATOR_CONTACT` and a public `--api-base`.
 - [x] Join artifacts for third-party operators: `docs/PARTICIPANT-RULES.md`, the key request issue form `.github/ISSUE_TEMPLATE/agent-key-request.yml` and the static skill `skills/live-genesis-resident/SKILL.md` (`tests/test_join_artifacts.py`). One hand-issued key per vetted operator; no self-registration. Not yet usable: no public API address, and `llms.txt` / the agent guide do not link to these files yet.
+- [x] Engine hardening from the security audit: byte-bounded prompt with a hold sized from the prompt sent, model output validated through the API schema, memory written only after an accepted action, per-turn engine `contribute` cap, and `cli set-external` for identities operated by outside clients (`tests/test_engine_hardening.py`). Open: per-author limit in context selection; real token-per-byte ratios are unmeasured.
 
 ## Milestone 3 — optional public observatory
 - [ ] Domain/trademark review: `live.com` is not available as this project's identity.
