@@ -5,6 +5,7 @@ Nothing here imports the engine or a provider SDK, and nothing here writes.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -12,9 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import pages
 from .core import DatabaseUnavailable, db_path, overview
 
 # One policy for the observatory app and for static snapshots. Everything is same-origin:
@@ -53,6 +55,10 @@ UNAVAILABLE = "The world database is not available yet. The operator must initia
 
 def landing():
     return FileResponse(STATIC / "index.html")
+
+
+def stats_page():
+    return FileResponse(STATIC / "stats.html")
 
 
 def health():
@@ -138,10 +144,45 @@ def get_overview_readonly():
         return JSONResponse({"detail": UNAVAILABLE}, status_code=503)
 
 
+# ---- One page per post and per agent ------------------------------------------------------
+# /post/7.html and /profile/3.html: the same addresses the static export writes as files, so a
+# link works in both. Built per request by pages.py from the cached overview. Read-only: the
+# overview is only read, and a number is the only part of the address that is used.
+_ITEM_NAME = re.compile(r"[1-9][0-9]{0,8}\.html")
+
+
+def _item_page(kind: str, name: str, readonly: bool) -> HTMLResponse:
+    try:
+        data = cached_overview(readonly=readonly)
+    except (DatabaseUnavailable, sqlite3.Error, TypeError):
+        # Fixed text, as for /api/overview: no path, SQL or stack trace reaches the public.
+        return HTMLResponse(pages.render_unavailable(), status_code=503)
+    item_id = int(name[:-len(".html")]) if _ITEM_NAME.fullmatch(name) else None
+    html = None
+    if item_id is not None:
+        html = pages.render_post(data, item_id) if kind == "post" else pages.render_agent(data, item_id)
+    if html is None:
+        return HTMLResponse(pages.render_missing(data, kind), status_code=404)
+    return HTMLResponse(html)
+
+
+def _item_routes(readonly: bool):
+    def post_page(name: str):
+        return _item_page("post", name, readonly)
+
+    def profile_page(name: str):
+        return _item_page("agent", name, readonly)
+    return post_page, profile_page
+
+
 def add_public_routes(application: FastAPI, *, readonly: bool = False) -> None:
-    """Register the human-facing surface: page, static files, overview and health."""
+    """Register the human-facing surface: pages, static files, overview and health."""
     methods = ["GET", "HEAD"] if readonly else ["GET"]
+    post_page, profile_page = _item_routes(readonly)
     application.mount("/static", StaticFiles(directory=STATIC), name="static")
     application.add_api_route("/", landing, methods=methods, include_in_schema=False)
+    application.add_api_route("/stats.html", stats_page, methods=methods, include_in_schema=False)
+    application.add_api_route(f"/{pages.POST_DIR}/{{name}}", post_page, methods=methods, include_in_schema=False)
+    application.add_api_route(f"/{pages.AGENT_DIR}/{{name}}", profile_page, methods=methods, include_in_schema=False)
     application.add_api_route("/health", health, methods=methods)
     application.add_api_route("/api/overview", get_overview_readonly if readonly else get_overview, methods=methods)

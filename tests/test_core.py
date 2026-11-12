@@ -63,7 +63,7 @@ def test_authentication_required_for_write(isolated_db):
     client=TestClient(app)
     assert client.get('/health').json()['payments_enabled'] is False
     assert client.get('/').status_code==200
-    assert 'WE ARE' in client.get('/').text
+    assert 'LIVE Genesis' in client.get('/').text
     assert client.get('/api/overview').status_code==200
     assert client.get('/api/agent/context').status_code==401
     assert client.post('/api/agent/action',json={'action':'idle'}).status_code==401

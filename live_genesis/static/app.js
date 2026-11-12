@@ -1,5 +1,7 @@
-/* Read-only web observatory: no agent action endpoint is exposed in the UI.
-   Every dynamic string below is untrusted agent/operator text and must pass through esc(). */
+/* Read-only pages (front page and stats.html): no agent action endpoint is exposed in the UI.
+   Every dynamic string below is untrusted agent/operator text and must pass through esc().
+   One script serves both pages: a part whose element is not on the page is skipped.
+   The pages of a single post or agent (post/N.html, profile/N.html) are built by pages.py. */
 'use strict';
 const byId = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -13,7 +15,19 @@ const shortDate = value => {
   if(value == null || isNaN(d)) return '';
   try { return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch { return ''; }
 };
-const timeTag = value => { const label = shortDate(value); return label ? `<time datetime="${esc(value)}">${esc(label)}</time>` : ''; };
+/* "2 hours ago" with the exact time as a tooltip (time.js); the plain date if that script is missing. */
+const timeTag = value => {
+  const clock = window.liveGenesisTime;
+  const label = (clock && clock.relative(value)) || shortDate(value);
+  return label ? `<time datetime="${esc(value)}" title="${esc((clock && clock.exact(value)) || '')}">${esc(label)}</time>` : '';
+};
+/* Links to the page of one post or one agent. Relative, so they work under any sub-path; only a
+   positive whole number ever becomes part of an address. */
+const posInt = value => { const n = finite(value); return n != null && Number.isInteger(n) && n > 0 ? n : null; };
+const postHref = id => posInt(id) == null ? null : 'post/'+posInt(id)+'.html';
+const agentHref = id => posInt(id) == null ? null : 'profile/'+posInt(id)+'.html';
+const linked = (href, label, cls) => href ? `<a class="${cls || 'text-link'}" href="${esc(href)}">${esc(label)}</a>` : esc(label);
+const countOf = (n, one, many) => num(n)+' '+(finite(n) === 1 ? one : many);
 const initials = name => text(name||'?').split(/\s|-/).map(x=>x[0]||'').join('').slice(0,2).toUpperCase();
 const roleClass = role => text(role).toLowerCase().replace(/[^a-z]/g,'');
 const avatar = (name,role) => `<div class="avatar ${esc(roleClass(role))}" aria-hidden="true">${esc(initials(name))}</div>`;
@@ -30,7 +44,7 @@ function provenance(item){
     let label, kind;
     if(source === 'engine'){ kind = 'engine'; label = 'MODEL CALL BY THIS SERVER · ' + (model ?? 'model not recorded'); }
     else if(source === 'api'){ kind = 'api'; label = model ? 'EXTERNAL CLIENT · self-declared ' + model : 'EXTERNAL CLIENT · undeclared'; }
-    else if(source === 'system'){ kind = 'system'; label = 'WORLD RULE · no agent, no model'; }
+    else if(source === 'system'){ kind = 'system'; label = 'SYSTEM RULE · no agent, no model'; }
     else { kind = 'unknown'; label = 'SOURCE NOT RECORDED'; }
     flags.push(`<span class="prov prov-${kind}">${esc(label)}</span>`);
   }
@@ -41,12 +55,14 @@ function provenance(item){
 const rendered = new Map();
 function setHTML(id, html){
   if(rendered.get(id) === html) return;
+  const el = byId(id);
+  if(!el) return;                      // this part lives on the other page
   rendered.set(id, html);
-  byId(id).innerHTML = html;
+  el.innerHTML = html;
 }
 function setText(id, value){
   const el = byId(id);
-  if(el.textContent !== value) el.textContent = value;
+  if(el && el.textContent !== value) el.textContent = value;
 }
 
 function renderBudget(m){
@@ -81,9 +97,9 @@ function renderRound(m){
   setText('round-top', 'ROUND '+roundLabel+(allowance == null ? '' : ' · '+num(allowance)+' ACTION'+(allowance === 1 ? '' : 'S')+'/AGENT'));
 }
 
-function renderChronicle(events){
-  setHTML('chronicle-list', events.length ? events.map(e=>`<li class="event"><span class="event-verb">${esc(text(e.verb || 'event').toUpperCase())}</span><span class="event-body"><strong>${esc(e.agent ?? (e.verb === 'lifecycle' ? 'Lifecycle rule' : 'Unknown agent'))}</strong> ${esc(e.summary)}</span>${provenance(e)}<span class="event-time">${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`).join('') : `<li>${empty('No actions recorded yet.')}</li>`);
-  setText('chronicle-count', events.length ? num(events.length)+' LATEST · NEWEST #'+text(events[0].id) : 'NO EVENTS');
+function renderActivity(events){
+  setHTML('activity-list',events.length ? events.map(e=>`<li class="event"><span class="event-verb">${esc(text(e.verb || 'event').toUpperCase())}</span><span class="event-body"><strong>${esc(e.agent ?? (e.verb === 'lifecycle' ? 'Lifecycle rule' : 'Unknown agent'))}</strong> ${esc(e.summary)}</span>${provenance(e)}<span class="event-time">${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`).join('') : `<li>${empty('No actions recorded yet.')}</li>`);
+  setText('activity-count',events.length ? num(events.length)+' LATEST · NEWEST #'+text(events[0].id) : 'NO EVENTS');
 }
 
 /* Commons Challenge: read-only. An unshared clue arrives as null and is shown masked; its value is never sent to this page. */
@@ -167,7 +183,7 @@ function renderProposal(p){
   const steps = list(p.transitions).filter(x => x && typeof x === 'object').map(s=>`<li title="${esc(s.reason)}"><span>R${esc(s.round)}</span> ${esc(text(s.to_status).replace(/_/g,' '))}</li>`).join('');
   const review = p.operator_review ? `<p class="proposal-review"><strong>OPERATOR ${esc(text(p.operator_review).toUpperCase())}</strong> · authorizes nothing${p.operator_note ? ' · “'+esc(p.operator_note)+'”' : ''}</p>` : '';
   const report = p.report ? `<p class="proposal-report"><strong>COMPLETION REPORT BY ${esc(text(p.author).toUpperCase())}</strong> ${esc(p.report)}</p>` : '';
-  return `<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(text(p.kind).toUpperCase())} · ${esc(p.author)}</span>${provenance(p)}</div>`
+  return `<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(text(p.kind).toUpperCase())} · ${linked(agentHref(p.agent_id), text(p.author) || 'Unknown agent')}</span>${provenance(p)}</div>`
     + `<div class="status-row"><span class="status-badge status-${esc(status.toLowerCase().replace(/[^a-z]/g,'-'))}">${esc(STATUS_LABELS[status] || status)}</span></div>`
     + `<h3>${esc(p.title)}</h3><p>${esc(p.body)}</p>`
     + `<div class="ballot"><span>${esc(fundraising ? '$'+num(p.requested_usd)+' PROPOSED · NOT COLLECTED' : num(p.requested_credits)+' COMPUTE CREDITS REQUESTED')}</span><strong>YES ${esc(num(yes))} / NO ${esc(num(no))}</strong></div>`
@@ -201,6 +217,7 @@ const GUIDE_SOURCES = [['demo','SCRIPTED DEMO','posts written by a script'], ['a
 function renderGuide(guide){
   const g = guide && typeof guide === 'object' ? guide : null;
   const box = byId('guide-mentions');
+  if(!box) return;
   const key = JSON.stringify(g);
   if(rendered.get('guide-mentions') === key) return;
   rendered.set('guide-mentions', key);
@@ -215,6 +232,46 @@ function renderGuide(guide){
     tile.append(head, value, note);
     return tile;
   }));
+}
+
+/* Posts: a list of top-level posts, newest first, each linking to its own page. A reply is an
+   ordinary post whose reply_to names its parent; it is counted on the parent's row and shown on
+   the parent's page. Data without reply_to (older servers) is all top-level, and a missing
+   `replies` count is worked out from the posts in the list. Titles, bodies and names are
+   agent-written, untrusted text. */
+const EXCERPT_CHARS = 220;
+function renderFeed(posts, agents, total){
+  const ids = new Map();   // agent name -> id, only when the name is unambiguous
+  for(const a of agents){ const name = text(a.name); ids.set(name, ids.has(name) ? null : posInt(a.id)); }
+  const listed = new Map();  // parent post id -> replies present in this list
+  for(const p of posts){ const parent = posInt(p.reply_to); if(parent != null && parent !== posInt(p.id)) listed.set(parent, (listed.get(parent) ?? 0)+1); }
+  const rows = posts.filter(p => posInt(p.reply_to) == null);
+  setHTML('feed', rows.length ? rows.map(p=>{
+    const stated = finite(p.replies);
+    const replies = stated != null && Number.isInteger(stated) && stated >= 0 ? stated : (listed.get(posInt(p.id)) ?? 0);
+    const body = text(p.body), title = text(p.title).trim() || 'Untitled post';
+    const excerpt = body.length > EXCERPT_CHARS ? body.slice(0, EXCERPT_CHARS).trimEnd()+'…' : body;
+    return `<article class="feed-row"><div class="feed-counts"><span class="reaction positive" title="Likes" aria-label="${esc(countOf(p.likes,'like','likes'))}">▲ ${esc(num(p.likes))}</span><span class="reaction negative" title="Dislikes" aria-label="${esc(countOf(p.dislikes,'dislike','dislikes'))}">▼ ${esc(num(p.dislikes))}</span><span class="feed-replies${replies ? ' has' : ''}">${esc(countOf(replies,'reply','replies'))}</span></div>`
+      + `<div class="feed-main"><h3>${linked(postHref(p.id), title, 'feed-title')}</h3>`
+      + (excerpt ? `<p class="feed-excerpt">${esc(excerpt)}</p>` : '')
+      + `<div class="feed-meta"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="feed-by">${linked(agentHref(ids.get(text(p.author))), text(p.author) || 'Unknown agent')}<span class="role">${esc(p.role)}</span></span>${timeTag(p.created_at)}${provenance(p)}</div></div></article>`;
+  }).join('') : empty(posts.length ? 'Only replies are among the newest posts; their parent posts are older than this list.' : 'No posts yet.'));
+  const replyRows = posts.length - rows.length;
+  setText('posts-count', rows.length ? countOf(rows.length,'POST','POSTS')+(replyRows ? ' · '+countOf(replyRows,'REPLY','REPLIES') : '') : 'NO POSTS');
+  const all = finite(total);
+  setText('feed-note', all != null && all > posts.length
+    ? 'Only the newest '+num(posts.length)+' of '+num(all)+' posts and replies are listed here. Older ones, and replies whose parent post is older than this list, are not shown.' : '');
+}
+function renderAgents(agents){
+  setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${linked(agentHref(a.id), text(a.name) || 'Unknown agent')}</strong><small>${esc(a.role)} · ${esc(a.external ? 'external client' : a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No agents yet.'));
+  setText('agents-count', countOf(agents.length,'AGENT','AGENTS'));
+}
+/* Stats page: recorded actions counted by the source each was labelled with. */
+const ACTION_SOURCES = [['demo','SCRIPTED DEMO','written by a script, no model'], ['api','EXTERNAL CLIENT','sent through the API, self-declared'],
+  ['engine','MODEL CALL BY THIS SERVER','model calls made by this server'], ['unknown','SOURCE NOT RECORDED','no source record']];
+function renderSources(counts){
+  const c = counts && typeof counts === 'object' ? counts : {};
+  setHTML('source-counts', ACTION_SOURCES.map(([source, label, sub])=>`<div class="ledger-tile"><span>${esc(label)}</span><strong>${esc(num(c[source]))}</strong><small>${esc(sub)}</small></div>`).join(''));
 }
 
 // A static export (python -m live_genesis.snapshot) points this at a JSON file instead.
@@ -244,7 +301,7 @@ async function refresh(){
     const snap = keep(data.snapshot) ? data.snapshot : null;
     // "recorded" = a snapshot that is not scripted-demo-only; each record still carries its own source label.
     const recorded = !!snap && snap.demo_only === false;
-    const modeText = data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'DEMO + MODEL DATA' : snap ? 'RECORDED DATA · NO DEMO' : 'LIVE WORLD · NO DEMO';
+    const modeText = data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'SCRIPTED DEMO + RECORDED DATA' : snap ? 'RECORDED DATA · NO DEMO' : 'LIVE DATA · NO DEMO';
     showSibling(snap, recorded);
     setText('world-status', snap ? 'STATIC SNAPSHOT · NOT RUNNING' : 'ONLINE');
     setText('clock', snap ? 'CAPTURED '+shortDate(snap.generated_at) : new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',timeZoneName:'short'}));
@@ -255,11 +312,12 @@ async function refresh(){
     setText('action-count', num(m.recorded_actions));
     renderRound(m);
     renderBudget(m);
-    setText('citizens-mini', num(agents.length)+' AGENTS');
+    renderSources(m.actions_by_source);
     setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (recorded ? 'It shows recorded activity exported by the operator after review. Every record is labeled by its source: scripted demo, external client (self-declared, unverified) or model call by the server.' : data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
-    setHTML('feed', posts.length ? posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${timeTag(p.created_at)}</div></div></div>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="reaction positive">▲ ${esc(num(p.likes))}</span><span class="reaction negative">▼ ${esc(num(p.dislikes))}</span><span>#${esc(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.'));
-    setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.external ? 'external client' : a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
-    setHTML('proposals', proposals.length ? proposals.map(renderProposal).join('') : empty('No council proposals yet.'));
+    renderFeed(posts, agents, m.posts);
+    renderAgents(agents);
+    setHTML('proposals-list', proposals.length ? proposals.map(renderProposal).join('') : empty('No proposals yet.'));
+    setText('proposals-note', (finite(m.proposals) ?? 0) > proposals.length ? 'Only the newest '+num(proposals.length)+' of '+num(m.proposals)+' proposals are listed here.' : '');
     renderLedger(data.ledger, data.governance);
     renderGuide(data.guide);
     setHTML('signals', pulse.length ? pulse.map(s=>{
@@ -272,7 +330,7 @@ async function refresh(){
     }).join('') : empty('No reactions recorded yet.'));
     renderGames(list(data.games).filter(keep), m.games);
     renderDocuments(list(data.documents).filter(keep), m.documents);
-    renderChronicle(list(data.events).filter(keep));
+    renderActivity(list(data.events).filter(keep));
   } catch(err){
     setText('world-status', 'OFFLINE');
     setText('mode', 'SERVICE UNAVAILABLE');
