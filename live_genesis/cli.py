@@ -2,33 +2,75 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
+import shutil
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import controls, governance, guide, ledger, study
 from .config import load_provider_credentials
-from .core import ROOT, budget_status, connect, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
+from .config import ROOT as DEFAULT_ROOT
+from .core import ROOT, budget_status, connect, db_path, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
 from .engine import run_round
+
+
+def key_file() -> Path:
+    """The key file of the database in use (LIVE_DB). One file per database, because agent names
+    repeat across databases and a key cannot be recovered once overwritten (only hashes are stored).
+
+    Default database (`live.db` in the project folder): `secrets/agent-keys.json`, as always.
+    Any other database: `secrets/agent-keys.<db file stem>.json`, the stem reduced to A-Z a-z 0-9 . _ -
+    Every reader and writer of agent keys uses this function."""
+    database=db_path()
+    if database.resolve()==(DEFAULT_ROOT / "live.db").resolve():
+        return ROOT / "secrets" / "agent-keys.json"
+    stem=re.sub(r"[^A-Za-z0-9._-]","_",database.stem).strip(".") or "db"
+    return ROOT / "secrets" / f"agent-keys.{stem}.json"
+
+
+def _read_keys(path: Path) -> dict:
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _write_keys(path: Path, keys: dict) -> None:
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(keys,indent=2))
+    try: os.chmod(path,0o600)
+    except OSError: pass
+
+
+def _backup_keys(path: Path) -> Path:
+    """Copy a key file next to itself under a timestamped name (mode 600) before keys in it are replaced."""
+    stamp=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target,n=path.with_name(f"{path.stem}.backup-{stamp}.json"),1
+    while target.exists():
+        n+=1
+        target=path.with_name(f"{path.stem}.backup-{stamp}-{n}.json")
+    shutil.copyfile(path,target)
+    try: os.chmod(target,0o600)
+    except OSError: pass
+    return target
 
 
 def init() -> None:
     new=seed_agents()
-    secrets_dir=ROOT / "secrets"
-    secrets_dir.mkdir(exist_ok=True)
-    secrets_file=secrets_dir / "agent-keys.json"
-    old={}
-    if secrets_file.exists():
-        old=json.loads(secrets_file.read_text())
+    secrets_file=key_file()
+    old=_read_keys(secrets_file)
+    # A key already stored under the name of an agent this run CREATED belongs to another (or an
+    # older) database: keep a copy before it is replaced.
+    if any(item["name"] in old and old[item["name"]]!=item["key"] for item in new):
+        print(f"{secrets_file} already held keys for agents created just now (another or an older database). "
+              f"The previous file was copied to: {_backup_keys(secrets_file)}")
     for item in new:
         old[item["name"]]=item["key"]
-    if old:
-        secrets_file.write_text(json.dumps(old,indent=2))
-        try: os.chmod(secrets_file,0o600)
-        except OSError: pass
+    if old: _write_keys(secrets_file,old)
     print(f"Initialized {len(new)} new agents. Total: {len(overview()['agents'])}.")
-    if old: print("Private agent keys stored in:",secrets_file)
-    elif not secrets_file.exists(): print("WARNING: Existing agents have no recoverable keys. Never delete secrets/agent-keys.json.")
+    if old: print("Private agent keys stored in:",secrets_file,f"(database {db_path()})")
+    elif not secrets_file.exists(): print(f"WARNING: Existing agents have no recoverable keys. Never delete {secrets_file}.")
 
 
 def demo() -> None:
@@ -167,15 +209,11 @@ def demo_document() -> None:
     print("SCRIPTED DEMO DOCUMENT: clearly labeled simulated co-editing; NO model was called. Not evidence of autonomous collaboration.")
 
 
-def key_file() -> Path:
-    return ROOT / "secrets" / "agent-keys.json"
-
-
 def add_control_parsers(sub) -> None:
     """Operator controls ported from codex/local-0.2. All free; none contacts a provider."""
     rot=sub.add_parser("rotate-key",help="Give one agent a new bearer key (old key stops working at once; expires in 90 days; re-enables a revoked agent)")
     rot.add_argument("agent_id",type=int)
-    rot.add_argument("--show-key",action="store_true",help="Also print the new key once to this terminal (default: only written to secrets/agent-keys.json)")
+    rot.add_argument("--show-key",action="store_true",help="Also print the new key once to this terminal (default: only written to this database's key file under secrets/)")
     rev=sub.add_parser("revoke-key",help="Disable one agent and invalidate its key (undo with rotate-key)")
     rev.add_argument("agent_id",type=int)
     lim=sub.add_parser("set-quota",help='Override one agent quota; "default" clears the override, 0 blocks that kind')
@@ -204,18 +242,21 @@ def add_control_parsers(sub) -> None:
 
 def handle_control_command(args,parser) -> bool:
     if args.command in ("rotate-key","revoke-key"):
+        with connect() as cx:
+            before=cx.execute("SELECT key_hash FROM agents WHERE id=?",(args.agent_id,)).fetchone()
         try: key=controls.rotate_key(args.agent_id,revoke=args.command=="revoke-key")
         except ValueError as err: parser.error(str(err))
         with connect() as cx:
             name=cx.execute("SELECT name FROM agents WHERE id=?",(args.agent_id,)).fetchone()[0]
         secrets_file=key_file()
-        secrets_file.parent.mkdir(exist_ok=True)
-        keys=json.loads(secrets_file.read_text()) if secrets_file.exists() else {}
+        keys=_read_keys(secrets_file)
+        # The stored key is not the one this database knew: the file belongs to another database.
+        if name in keys and before and hashlib.sha256(str(keys[name]).encode()).hexdigest()!=before[0]:
+            print(f"{secrets_file} held a key for {name} that is not this database's. "
+                  f"The previous file was copied to: {_backup_keys(secrets_file)}")
         keys.pop(name,None)
         if key: keys[name]=key
-        secrets_file.write_text(json.dumps(keys,indent=2))
-        try: os.chmod(secrets_file,0o600)
-        except OSError: pass
+        _write_keys(secrets_file,keys)
         if key:
             print(f"Rotated the key of agent {args.agent_id} ({name}). The old key no longer works; the new one expires in 90 days.")
             print("New key stored in:",secrets_file)
@@ -334,6 +375,13 @@ def main():
         report["spend_limit_usd"]=report["ceilings"].get("spend_limit_usd")
         report["reminder"]="Local figures are estimates entered or computed here; only the provider's billing page shows real charges."
         print(json.dumps(report,indent=2))
-    if args.command=="status": print(json.dumps(overview()["metrics"],indent=2))
+    if args.command=="status":
+        print(json.dumps(overview()["metrics"],indent=2))
+        mixed=controls.mixed_origin_agents()
+        if mixed:
+            # stderr: stdout stays the JSON above.
+            print("WARNING: these agents are not marked external but have both api and engine actions: "+", ".join(mixed)+
+                  ". If an outside client holds such an agent's key, run `set-external NAME on` before the next round "
+                  "(or rotate the key).",file=sys.stderr)
 
 if __name__=="__main__": main()

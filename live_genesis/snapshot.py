@@ -65,7 +65,58 @@ def _capture() -> dict:
 
 
 def _encode(data: dict) -> bytes:
-    return json.dumps(data, ensure_ascii=False, indent=1).encode("utf-8")
+    """ASCII only: every non-ASCII character is written as a \\uXXXX escape, so nothing invisible
+    (zero-width, tag, bidirectional ...) can hide from someone reading the file. The page parses
+    the escapes back to the same text. allow_nan=False: NaN/Infinity are not JSON."""
+    return json.dumps(data, ensure_ascii=True, allow_nan=False, indent=1).encode("ascii")
+
+
+class _Malformed(ValueError):
+    pass
+
+
+def _strict_pairs(pairs: list) -> dict:
+    out: dict = {}
+    for key, value in pairs:
+        if key in out:
+            raise _Malformed("duplicate key")
+        out[key] = value
+    return out
+
+
+def _strict_constant(name: str):
+    raise _Malformed("NaN or Infinity")
+
+
+def _strict_float(text: str) -> float:
+    value = float(text)
+    if value != value or value in (float("inf"), float("-inf")):
+        raise _Malformed("number out of range")
+    return value
+
+
+def _loads(payload: bytes) -> object:
+    """Strict JSON: no NaN/Infinity literal, no number that overflows to infinity, no duplicate
+    key (a browser keeps the last one, a reviewer may read the first)."""
+    return json.loads(payload.decode("utf-8"), parse_constant=_strict_constant, parse_float=_strict_float,
+                      object_pairs_hook=_strict_pairs)
+
+
+# Top-level keys app.js reads, and the JSON type each must have.
+SHAPE = {"mode": str, "agents": list, "posts": list, "proposals": list, "events": list, "pulse": list, "games": list,
+         "documents": list, "ledger": dict, "governance": dict, "guide": dict, "metrics": dict, "snapshot": dict}
+
+
+def _shape_problem(data: object) -> str | None:
+    if not isinstance(data, dict):
+        return "top level is not an object"
+    for key, kind in SHAPE.items():
+        if not isinstance(data.get(key), kind):
+            return f"key {key} is missing or not a JSON {'string' if kind is str else 'array' if kind is list else 'object'}"
+    for key in ("agents", "posts", "proposals", "events", "pulse", "games", "documents"):
+        if not all(isinstance(item, dict) for item in data[key]):
+            return f"key {key} holds an entry that is not an object"
+    return None
 
 
 def _kit(api_base: str | None) -> tuple[str | None, dict[str, str], bool]:
@@ -147,12 +198,17 @@ def guard_hits(node: object, kind: str = "overview", ref: object = None, field: 
     if isinstance(node, dict):
         ref = node.get("id", ref)
         for key, value in node.items():
+            if isinstance(key, str) and guards.has_forbidden_character(key):
+                hits.append(f"{kind} id {ref if ref is not None else '-'}: a field name {guards.CHARACTER_RULE}")
             hits += guard_hits(value, kind, ref, str(key))
     elif isinstance(node, list):
         for item in node:
             hits += guard_hits(item, kind, ref, field)
     elif isinstance(node, str) and not (field.endswith("_hash") and _HASH_VALUE.fullmatch(node)):
-        reason = guards.content_reason(node)
+        # The character rule of the write path, applied again here: rows written before that rule
+        # existed are not rewritten, so this is what keeps them out of a published file.
+        reason = (guards.CHARACTER_RULE if guards.has_forbidden_character(node, multiline=True)
+                  else guards.content_reason(node))
         if reason:
             hits.append(f"{kind} id {ref if ref is not None else '-'}, field {field}: {reason}")
     return hits
@@ -163,6 +219,35 @@ def _scan(data: dict) -> list[str]:
     for kind, value in data.items():
         hits += guard_hits(value, kind, None, kind)
     return hits
+
+
+SERVER_MARKS = "\u00b7\u2192"   # the separator and arrow the server itself writes into summaries
+
+
+def non_ascii_report(node: object, kind: str = "overview", ref: object = None, field: str = "") -> list[str]:
+    """One line per string that holds non-ASCII characters: record, field and a count per Unicode
+    general category. Never the text. For the reviewer: these are the \\uXXXX escapes in the file."""
+    lines: list[str] = []
+    if isinstance(node, dict):
+        ref = node.get("id", ref)
+        for key, value in node.items():
+            lines += non_ascii_report(value, kind, ref, str(key))
+    elif isinstance(node, list):
+        for item in node:
+            lines += non_ascii_report(item, kind, ref, field)
+    elif isinstance(node, str):
+        counts = guards.non_ascii_categories("".join(ch for ch in node if ch not in SERVER_MARKS))
+        if counts:
+            lines.append(f"{kind} id {ref if ref is not None else '-'}, field {field}: "
+                         + ", ".join(f"{name} {n}" for name, n in sorted(counts.items())))
+    return lines
+
+
+def published_non_ascii(target: str | Path | None = None) -> list[str]:
+    """non_ascii_report for an export folder that already passed check_published."""
+    folder = Path(target) if target is not None else PUBLISHED
+    data = _loads((folder / DATA_FILE).read_bytes())
+    return [line for kind, value in data.items() for line in non_ascii_report(value, kind, None, kind)]
 
 
 def _counts(data: dict) -> tuple[dict, dict]:
@@ -226,7 +311,7 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
     if not _is_file(folder / MANIFEST_FILE) or not _is_file(folder / DATA_FILE):
         raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (must be regular files)")
     try:
-        manifest = json.loads((folder / MANIFEST_FILE).read_text(encoding="utf-8"))
+        manifest = _loads((folder / MANIFEST_FILE).read_bytes())
         payload = (folder / DATA_FILE).read_bytes()
     except (OSError, ValueError) as err:
         raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable ({type(err).__name__})") from None
@@ -235,10 +320,21 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
     if hashlib.sha256(payload).hexdigest() != manifest.get("sha256"):
         raise RuntimeError(f"{folder}: {DATA_FILE} does not match the sha256 in the manifest. "
                            "It changed after export; export and review again.")
+    if not payload.isascii():
+        raise RuntimeError(f"{folder}: {DATA_FILE} holds a non-ASCII byte. An export writes every non-ASCII "
+                           "character as a \\uXXXX escape so that none can hide from the reviewer; export again.")
     try:
-        data = json.loads(payload.decode("utf-8"))
+        data = _loads(payload)
+    except _Malformed as err:
+        raise RuntimeError(f"{folder}: {DATA_FILE} is not strict JSON ({err})") from None
+    except ValueError:
+        raise RuntimeError(f"{folder}: {DATA_FILE} is not an exported overview") from None
+    problem = _shape_problem(data)
+    if problem:
+        raise RuntimeError(f"{folder}: {DATA_FILE} is not an exported overview ({problem})")
+    try:
         captured, demo_only = data["snapshot"]["generated_at"], data["snapshot"]["demo_only"]
-    except (ValueError, KeyError, TypeError):
+    except (KeyError, TypeError):
         raise RuntimeError(f"{folder}: {DATA_FILE} is not an exported overview") from None
     if captured != manifest.get("exported_at") or data.get("mode") != manifest.get("mode"):
         raise RuntimeError(f"{folder}: manifest and {DATA_FILE} disagree on export time or data mode")
@@ -279,7 +375,7 @@ def build_from_data(outdir: str | Path, published: str | Path | None = None, *, 
     _check_outdir(out, sibling)
     manifest = check_published(folder)
     payload = (folder / DATA_FILE).read_bytes()   # published byte for byte, so anyone can re-check the hash
-    info = json.loads(payload.decode("utf-8"))["snapshot"]
+    info = _loads(payload)["snapshot"]
     _render(out, payload, kit, include_client, sibling)
     return {**info, "api_base": api_base, "manifest": manifest}
 
@@ -324,6 +420,12 @@ def main() -> None:
                       "  python -m live_genesis.snapshot --approve --i-have-read-it")
             elif args.approve:
                 print(_describe(check_published(args.approve, require_reviewed=False)))
+                marked = published_non_ascii(args.approve)
+                if marked:
+                    print(f"Non-ASCII characters (written as \\uXXXX escapes in the file; counts per Unicode category, "
+                          f"the server's own \u00b7 and \u2192 left out) in {len(marked)} text(s):\n  " + "\n  ".join(marked))
+                else:
+                    print("No non-ASCII characters in the file besides the server's own separators.")
                 print("The guards are regular expressions and do not understand meaning. Approving means you "
                       f"read every agent-written text in {Path(args.approve) / DATA_FILE}.\n"
                       "Once pushed, the data stays in git history even if you withdraw it later.")

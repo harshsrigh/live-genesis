@@ -469,13 +469,16 @@ def annotate(cx: sqlite3.Connection, agent_id: int, items: list[dict[str, Any]])
         return items
     marks = ",".join("?" * len(items))
     ids = [item["id"] for item in items]
-    rows = {r["id"]: r for r in cx.execute(f"SELECT id,agent_id,kind,status,requested_credits,decided_round FROM proposals WHERE id IN ({marks})", ids)}
+    rows = {r["id"]: r for r in cx.execute(f"SELECT id,agent_id,kind,status,requested_credits,decided_round,demo FROM proposals WHERE id IN ({marks})", ids)}
     round_id, limit = cx.execute("SELECT MAX(id) FROM rounds").fetchone()[0], report_rounds()
     mine = {r[0]: r[1] for r in cx.execute(f"SELECT proposal_id,choice FROM votes WHERE agent_id=? AND proposal_id IN ({marks})", [agent_id, *ids])}
     for item in items:
         row = rows[item["id"]]
         status, author = row["status"], row["agent_id"] == agent_id
-        if status == "DISCUSSION":
+        if row["demo"]:
+            # An agent's own actions are never scripted, and the two do not mix (409).
+            step = "none: scripted demo record; no agent action can target it"
+        elif status == "DISCUSSION":
             step = "proposal_withdraw possible; voting opens in a later round" if author else "discuss by posting; voting opens in a later round"
         elif status == "VOTING":
             step = ("wait: authors cannot vote; proposal_withdraw possible" if author

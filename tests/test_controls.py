@@ -160,7 +160,7 @@ def test_http_action_passes_the_authenticated_credential(isolated_db,monkeypatch
 
 def test_cli_rotate_and_revoke(isolated_db,monkeypatch,capsys,tmp_path):
     old=seed_agents()[0]['key']
-    key_path=tmp_path/'secrets'/'agent-keys.json'
+    key_path=tmp_path/'secrets'/'agent-keys.genesis.json'  # the test database is genesis.sqlite, not the default live.db
     assert cli.key_file()==key_path  # conftest points the CLI away from the repository
     run_cli(monkeypatch,'rotate-key','1')
     out=capsys.readouterr().out

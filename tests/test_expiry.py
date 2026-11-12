@@ -76,10 +76,10 @@ def lifecycle_events():
         return [r[0] for r in cx.execute("SELECT summary FROM events WHERE verb='lifecycle' AND agent_id IS NULL ORDER BY id")]
 
 
-def start_game(monkeypatch, digits=(4, 0, 7)):
+def start_game(monkeypatch, digits=(4, 0, 7), starter=1):
     queue = list(digits)
     monkeypatch.setattr(games, 'draw_digit', lambda: queue.pop(0))
-    return act(1, {'action': 'game_start'})['game_id']
+    return act(starter, {'action': 'game_start'})['game_id']
 
 
 def approved_project(credits=220, pool_grant=300):
@@ -131,10 +131,12 @@ def test_a_move_resets_the_game_clock(isolated_db, monkeypatch):
     open_round()
     assert game_state(gid) == 'EXPIRED'
     # A rejected move does not count as activity.
-    gid2 = start_game(monkeypatch)                    # round 11
+    # (Agent 1 started the expired game, so it is in the start cooldown; agent 2 starts and is seated with 4 and 5.)
+    assert refused(1, {'action': 'game_start'}) == 409
+    gid2 = start_game(monkeypatch, starter=2)         # round 11
     until(16)
-    assert refused(4, {'action': 'game_share', 'game_id': gid2}) == 403   # not seated
-    assert refused(1, {'action': 'game_guess', 'game_id': gid2, 'answer': [1, 2, 3]}) == 409  # clues not shared
+    assert refused(6, {'action': 'game_share', 'game_id': gid2}) == 403   # not seated
+    assert refused(2, {'action': 'game_guess', 'game_id': gid2, 'answer': [1, 2, 3]}) == 409  # clues not shared
     open_round()
     assert game_state(gid2) == 'EXPIRED'
 
@@ -147,7 +149,9 @@ def test_expired_game_frees_seats_and_allows_a_new_start(isolated_db, monkeypatc
     until(7)
     for agent_id in (1, 2, 3, 4):
         view = agent_context(agent_id)['games']
-        assert view['active'] == [] and view['can_start'] is True
+        # Only the agent that started the expired game waits (start cooldown, round 7 + 6).
+        assert view['active'] == [] and view['can_start'] is (agent_id != 1)
+        assert view.get('start_blocked_until_round') == (13 if agent_id == 1 else None)
         assert ('expired' in view) == (agent_id != 4)
     assert agent_context(3)['games']['expired'] == [
         {'id': gid, 'state': 'EXPIRED', 'next': 'none: ended without a result (inactivity or the operator), no move possible'}]
@@ -156,14 +160,14 @@ def test_expired_game_frees_seats_and_allows_a_new_start(isolated_db, monkeypatc
     assert refused(3, {'action': 'game_share', 'game_id': gid}) == 409
     assert refused(2, {'action': 'game_guess', 'game_id': gid, 'answer': [4, 0, 7]}) == 409
     assert table_counts() == before
-    new = start_game(monkeypatch, (1, 2, 3))                     # the same three seats are free again
+    new = start_game(monkeypatch, (1, 2, 3), starter=2)          # a seat of the expired game is free again
     assert new != gid and game_state(new) == 'ACTIVE'
-    assert [c['agent_id'] for c in overview()['games'][0]['clues']] == [1, 2, 3]
-    view = agent_context(3)['games']
+    assert [c['agent_id'] for c in overview()['games'][0]['clues']] == [2, 4, 5]   # peers: those seated least recently
+    view = agent_context(2)['games']
     assert 'expired' not in view and view['active'][0]['id'] == new and view['active'][0]['next'] == 'game_share'
-    for member in (1, 2, 3):
+    for member in (2, 4, 5):
         act(member, {'action': 'game_share', 'game_id': new})
-    assert act(1, {'action': 'game_guess', 'game_id': new, 'answer': [1, 2, 3]})['state'] == 'WON'
+    assert act(2, {'action': 'game_guess', 'game_id': new, 'answer': [1, 2, 3]})['state'] == 'WON'
     rounds(8)
     assert (game_state(gid), game_state(new)) == ('EXPIRED', 'WON')   # finished games never expire
 
@@ -174,8 +178,8 @@ def test_a_revoked_seat_cannot_block_the_game_for_ever(isolated_db, monkeypatch)
     controls.rotate_key(2, revoke=True)               # seat 2 can never share its clue now
     until(7)
     assert game_state(gid) == 'EXPIRED'
-    start_game(monkeypatch, (1, 2, 3))
-    assert [c['agent_id'] for c in overview()['games'][0]['clues']] == [1, 3, 4]
+    start_game(monkeypatch, (1, 2, 3), starter=3)     # agent 1 started the expired game: start cooldown
+    assert [c['agent_id'] for c in overview()['games'][0]['clues']] == [3, 4, 5]   # never the revoked agent 2
 
 
 def test_game_expiry_is_idempotent_and_the_limit_is_a_setting(isolated_db, monkeypatch):
@@ -227,7 +231,7 @@ def test_games_table_from_an_older_version_is_upgraded_in_place(isolated_db, mon
         assert cx.execute("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('games_one_active','games_rebuild')").fetchone()[0] == 1
     assert (one('SELECT COUNT(*) FROM game_clues'), one('SELECT COUNT(*) FROM game_moves')) == children
     assert refused(4, {'action': 'game_start'}) == 409             # the one-active-game index still holds
-    act(2, {'action': 'game_share', 'game_id': open_game})         # moves still attach to the kept ids
+    act(4, {'action': 'game_share', 'game_id': open_game})         # moves still attach to the kept ids (seats 1, 4, 5: rotation)
     until(9)
     assert game_state(open_game) == 'ACTIVE'
     open_round()                                                   # round 10 = 4 + 6

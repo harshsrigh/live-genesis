@@ -636,7 +636,7 @@ def test_demo_document_on_empty_database(isolated_db, tmp_path, capsys):
     cli.demo_document()
     out = capsys.readouterr().out
     assert 'NO model was called' in out and 'SCRIPTED' in out and '"history_breaks": []' in out
-    assert (tmp_path / 'secrets' / 'agent-keys.json').exists()   # agents had to be created
+    assert cli.key_file().exists() and cli.key_file().parent == tmp_path / 'secrets'   # agents had to be created
     state = overview()
     doc = state['documents'][0]
     assert state['mode'] == 'DEMO' and state['metrics']['documents'] == 1

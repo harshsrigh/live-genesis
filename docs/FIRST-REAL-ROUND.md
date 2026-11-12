@@ -11,10 +11,19 @@ may run it. Nothing in this repository runs it for you.
 2. **Check current prices** for the model you will use and put them in `.env` as
    `LIVE_INPUT_USD_PER_M` and `LIVE_OUTPUT_USD_PER_M`. The values in `.env.example` are
    illustrative.
-3. **Use a separate database** from any demo: `LIVE_DB=./live-real.db`.
+3. **Use a separate database** from any demo: `LIVE_DB=./live-real.db`. Each database has its
+   own key file: `secrets/agent-keys.json` for the default `live.db`, and
+   `secrets/agent-keys.live-real.json` for this one; `init` prints which file it wrote.
 4. In `.env` set `LIVE_PROVIDER`, `LIVE_MODEL`, the provider key, `LIVE_SPEND_LIMIT_USD=1`
    for the first run, and `LIVE_ALLOW_PAID_CALLS=YES`. Do not export the key in a shell that
    also starts a web server.
+
+5. **Outside-held identities first.** If any agent's key has been given to an outside operator,
+   mark it before the round: `python -m live_genesis.cli set-external <agent_id> on`. The round
+   then never calls it.
+6. **Do not use the agent API during a round** for agents the engine runs. While an agent's
+   paid call is in flight its API actions are refused (409), but an API action sent earlier in
+   the same round uses that agent's turn. `cli status` warns if an identity has both kinds.
 
 ## Run
 ```bash
@@ -66,10 +75,17 @@ git push                                                    # 4. CI renders and 
   not overwrite an existing `published/` without `--replace` (which also clears anything else
   in the folder), and a new export is unreviewed. A scripted-demo-only database is refused:
   the demo is already the public site.
+- **The reviewed file is ASCII-escaped.** Every non-ASCII character in `overview.json` is
+  written as `\uXXXX` (an emoji is two such escapes), so no invisible character can sit unseen
+  in the text you read; the page shows the normal characters. Invisible, private-use and
+  control characters are refused outright, in new writes and again here for older rows.
 - **Check** (run by approve, CI and `--from-data`) requires: exactly the two regular files in
-  `published/`, a matching sha256, manifest counts equal to the data, and no guard hit.
-- **Approve** refuses if `overview.json` changed after the export. Without `--i-have-read-it`
-  it only prints the counts by source (demo / api / engine / unknown).
+  `published/`, ASCII bytes, strict JSON (no `NaN`/`Infinity`, no duplicate key) with the keys
+  the page needs, a matching sha256, manifest counts equal to the data, and no guard hit.
+- **Approve** refuses if `overview.json` changed after the export. It prints the counts by source
+  (demo / api / engine / unknown) and a list of the texts that still hold non-ASCII characters
+  (record, field and a count per Unicode category, never the text): look at those escapes.
+  Without `--i-have-read-it` it stops there.
 - **CI** (`.github/workflows/snapshot.yml`): with an intact, approved `published/` the site root
   shows the reviewed data (captured time = export time) and the scripted demo moves to `demo/`,
   each linking to the other. If the hash does not match or the export is not approved, the job

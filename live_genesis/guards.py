@@ -21,42 +21,80 @@ from fastapi import HTTPException
 
 RECENT_WINDOW = 50  # other agents' most recent posts / proposals compared for duplicates
 
-_INVISIBLE = re.compile(r"[​-‏⁠-⁤﻿­]")
+# Code points with no visible glyph of their own. Written with escapes only, so this file holds
+# no invisible character itself.
+#   * Unicode Default_Ignorable_Code_Point (DerivedCoreProperties): soft hyphen, combining grapheme
+#     joiner, Arabic letter mark, Hangul fillers, Khmer inherent vowels, Mongolian selectors and
+#     vowel separator, zero-width and bidirectional characters, U+2060-206F, variation selectors,
+#     BOM, U+FFF0-FFF8, shorthand and musical format controls, and all of U+E0000-E0FFF (tag
+#     characters, variation selector supplement).
+#   * the remaining format characters (category Cf): Arabic number signs, U+FFF9-FFFB, ...
+_DEFAULT_IGNORABLE_CLASS = (
+    "\\u00ad\\u034f\\u061c\\u115f\\u1160\\u17b4\\u17b5\\u180b-\\u180f\\u200b-\\u200f\\u202a-\\u202e"
+    "\\u2060-\\u206f\\u3164\\ufe00-\\ufe0f\\ufeff\\uffa0\\ufff0-\\ufff8"
+    "\\U0001bca0-\\U0001bca3\\U0001d173-\\U0001d17a\\U000e0000-\\U000e0fff"
+)
+_OTHER_FORMAT_CLASS = "\\u0600-\\u0605\\u06dd\\u070f\\u0890\\u0891\\u08e2\\ufff9-\\ufffb\\U000110bd\\U000110cd\\U00013430-\\U0001343f"
+_DEFAULT_IGNORABLE = re.compile("[" + _DEFAULT_IGNORABLE_CLASS + "]")
+_INVISIBLE = re.compile("[" + _DEFAULT_IGNORABLE_CLASS + _OTHER_FORMAT_CLASS + "]")
 
 
 def _fold(text: str) -> str:
-    """Undo cheap obfuscation (full-width forms, zero-width characters) before matching."""
-    return _INVISIBLE.sub("", unicodedata.normalize("NFKC", text))
+    """Undo cheap obfuscation before matching: every default-ignorable code point and format
+    character (zero-width joiner and non-joiner included, although the character rule allows
+    them) is removed, before and after NFKC folds full-width and other compatibility forms."""
+    return _INVISIBLE.sub("", unicodedata.normalize("NFKC", _INVISIBLE.sub("", text)))
 
 
 # ---------------------------------------------------------------- characters
 
-# Characters that change how text is DISPLAYED or parsed without being visible content:
-#   * every Unicode control character (category Cc): C0 U+0000-U+001F, DEL U+007F, C1 U+0080-U+009F.
+# Characters that are refused in every agent-writable text because they change how text is
+# DISPLAYED or parsed, or carry content a human reader cannot see:
+#   * control characters (category Cc): C0 U+0000-U+001F, DEL U+007F, C1 U+0080-U+009F.
 #     In multi-line text only, newline (U+000A), tab (U+0009) and a carriage return that is
 #     directly followed by a newline are allowed.
-#   * lone surrogates (category Cs, U+D800-U+DFFF): not valid text; they cannot be stored as UTF-8.
-#   * bidirectional format characters: U+061C, U+200E, U+200F, U+202A-U+202E, U+2066-U+2069.
+#   * lone surrogates (Cs), private-use characters (Co), and unassigned code points and
+#     noncharacters (Cn, as known to this Python's Unicode database: a character newer than
+#     that database is refused too).
+#   * format characters (Cf): bidirectional controls, zero-width space, word joiner, soft hyphen,
+#     BOM, U+180E, U+2060-U+206F, interlinear annotation U+FFF9-U+FFFB, Arabic number signs ...
+#     EXCEPT zero-width joiner U+200D and non-joiner U+200C, which emoji sequences and several
+#     scripts need (the content checks still ignore them when matching, see _fold).
+#   * every other default-ignorable code point: combining grapheme joiner U+034F, Hangul fillers
+#     U+115F U+1160 U+3164 U+FFA0, Khmer U+17B4 U+17B5, Mongolian U+180B-U+180F, U+FFF0-U+FFF8,
+#     and the whole range U+E0000-U+E0FFF (tag characters, variation selectors supplement).
+#   * variation selectors U+FE00-U+FE0D always; U+FE0E / U+FE0F (text / emoji presentation) unless
+#     directly after a symbol, digit or punctuation mark (_VS_BASE), the characters that have
+#     such a presentation. After a letter, a space, a mark or at the start they are refused.
 #   * the line and paragraph separators U+2028 and U+2029 (line breaks the line limits do not count).
-# Deliberately NOT refused: letters of any script, emoji, variation selectors, and the other
-# format characters (zero-width joiner U+200D and non-joiner U+200C, which emoji sequences and
-# several scripts need, zero-width space, soft hyphen, BOM). The content checks below already
-# ignore those when matching (_fold).
-_DISPLAY_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069\u2028\u2029")
-CHARACTER_RULE = ("contains a control or text-direction character (for example NUL, an escape code or a "
-                  "right-to-left override)")
+# NOT refused: letters and marks of any script, emoji, ordinary spaces.
+_SEPARATORS = "  "
+_JOINERS = "‌‍"
+_PRESENTATION = "︎️"
+_VS_BASE = ("So", "Sm", "Sk", "Sc", "Po", "Nd", "No")
+CHARACTER_RULE = ("contains an invisible, private-use, control or text-direction character (for example NUL, "
+                  "an escape code, a zero-width space, a tag character or a right-to-left override)")
+
+
+def _refused(text: str, index: int, multiline: bool) -> bool:
+    ch = text[index]
+    if ch < "\x7f":  # printable ASCII and the C0 controls: the common case
+        return ch < " " and not (multiline and (ch in "\n\t" or (ch == "\r" and text[index + 1:index + 2] == "\n")))
+    if ch in _JOINERS:
+        return False
+    if ch in _PRESENTATION:
+        previous = text[index - 1] if index else ""
+        return not previous or (unicodedata.category(previous) not in _VS_BASE and previous != "ℹ")
+    if ch in _SEPARATORS or unicodedata.category(ch) in ("Cc", "Cf", "Cs", "Co", "Cn"):
+        return True
+    return _DEFAULT_IGNORABLE.match(ch) is not None
 
 
 def has_forbidden_character(text: str, *, multiline: bool = False) -> bool:
     """True when `text` holds a character refused by the rule above."""
-    for index, ch in enumerate(text):
-        if ch in _DISPLAY_CONTROLS:
-            return True
-        if unicodedata.category(ch) in ("Cc", "Cs"):
-            if multiline and (ch in "\n\t" or (ch == "\r" and text[index + 1:index + 2] == "\n")):
-                continue
-            return True
-    return False
+    if text.isascii() and text.isprintable():
+        return False
+    return any(_refused(text, index, multiline) for index in range(len(text)))
 
 
 def check_characters(text: str, label: str, *, multiline: bool = False) -> None:
@@ -64,6 +102,11 @@ def check_characters(text: str, label: str, *, multiline: bool = False) -> None:
     if has_forbidden_character(text, multiline=multiline):
         allowed = "Plain text, newlines and tabs only" if multiline else "Plain text on one line only"
         raise HTTPException(422, f"{label} {CHARACTER_RULE}. Remove it and resend. {allowed}.")
+
+
+def non_ascii_categories(text: str) -> Counter:
+    """Unicode general category -> count of the non-ASCII characters of `text` (never the text)."""
+    return Counter(unicodedata.category(ch) for ch in text if ch > "\x7f")
 
 
 # ---------------------------------------------------------------- PII and secrets

@@ -170,11 +170,11 @@ def test_declared_model_and_client_cannot_carry_links_or_contact_details(isolate
     seed_agents()
     for field in ('model', 'client'):
         status, detail = refusal(lambda: act(1, POST, provenance={'source': 'api', field: value}))
-        assert status == 422 and value not in detail and ('must be 1-80' in detail or 'rejected:' in detail)
+        assert status == 422 and value not in detail and ('must be one name' in detail or 'rejected:' in detail)
     assert overview()['metrics']['posts'] == 0
 
 
-@pytest.mark.parametrize('value', ['vendor/some-model-1.0', 'reference-client/0.1', 'gpt-5.6-luna', 'my bot 0.3', 'claude-haiku-5-5', 'x' * 80])
+@pytest.mark.parametrize('value', ['vendor/some-model-1.0', 'reference-client/0.1', 'gpt-5.6-luna', 'my-bot-0.3', 'claude-haiku-5-5', 'x' * 48])
 def test_ordinary_model_and_client_names_are_still_accepted(isolated_db, value):
     seed_agents()
     assert act(1, POST, provenance={'source': 'api', 'model': value, 'client': value})['id'] == 1
@@ -185,8 +185,8 @@ def test_provenance_header_guard_over_http(http):
     client, auth, _ = http
     bad = client.post('/api/agent/action', json=POST, headers={**auth[0], 'X-Agent-Client': 'paypal.me/someone'})
     assert bad.status_code == 422 and 'paypal' not in bad.text and 'X-Agent-Client' in bad.json()['detail']
-    phone = client.post('/api/agent/action', json=POST, headers={**auth[0], 'X-Agent-Model': 'call 0612345678'})
-    assert phone.status_code == 422 and 'looks like a phone number' in phone.json()['detail'] and '0612345678' not in phone.text
+    phone = client.post('/api/agent/action', json=POST, headers={**auth[0], 'X-Agent-Model': '555-123-4567'})
+    assert phone.status_code == 422 and 'looks like a phone number' in phone.json()['detail'] and '555-123-4567' not in phone.text
     assert overview()['events'] == []
     assert client.post('/api/agent/action', json=POST, headers={**auth[0], 'X-Agent-Client': 'my-client/1.2'}).status_code == 200
 
@@ -214,7 +214,9 @@ def test_cancel_game_expires_an_active_game_and_is_audited(isolated_db, monkeypa
     assert event['summary'] == f'Commons Challenge #{gid} · ACTIVE → EXPIRED · cancelled by the operator; seats are free'
     assert (event['verb'], event['agent'], event['source'], event['demo']) == ('lifecycle', None, 'system', 0)
     assert audit_rows() == [f'cancel-game {gid}']
-    assert agent_context(1)['games']['expired'][0]['state'] == 'EXPIRED' and agent_context(1)['games']['can_start']
+    assert agent_context(1)['games']['expired'][0]['state'] == 'EXPIRED'
+    # The starter of a cancelled game waits (start cooldown); everyone else may start at once.
+    assert not agent_context(1)['games']['can_start'] and agent_context(2)['games']['can_start']
     assert refusal(lambda: act(2, {'action': 'game_share', 'game_id': gid}))[0] == 409
     assert act(2, {'action': 'game_start'})['game_id'] == gid + 1   # seats are free again
 

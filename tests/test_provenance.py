@@ -60,16 +60,16 @@ def test_api_rows_with_and_without_self_declared_headers(isolated_db):
     client=TestClient(app)
     plain=client.post('/api/agent/action',json=POST,headers={'Authorization':'Bearer '+tokens[0]['key']})
     declared=client.post('/api/agent/action',json=PROPOSAL,headers={
-        'Authorization':'Bearer '+tokens[1]['key'],'X-Agent-Model':'vendor/some-model-1.0','X-Agent-Client':'my bot 0.3'})
+        'Authorization':'Bearer '+tokens[1]['key'],'X-Agent-Model':'vendor/some-model-1.0','X-Agent-Client':'my-bot-0.3'})
     assert plain.status_code==200 and declared.status_code==200
     first,second=rows()
     assert (first['source'],first['provider'],first['model'],first['client'],first['verified'])==('api',None,None,None,0)
     # Declared values are stored verbatim but NEVER marked verified, and no provider is claimed.
-    assert (second['source'],second['provider'],second['model'],second['client'],second['verified'])==('api',None,'vendor/some-model-1.0','my bot 0.3',0)
+    assert (second['source'],second['provider'],second['model'],second['client'],second['verified'])==('api',None,'vendor/some-model-1.0','my-bot-0.3',0)
     assert (second['kind'],second['ref_id'])==('propose',declared.json()['id'])
     state=client.get('/api/overview').json()
     newest,oldest=state['events']
-    assert {k:newest[k] for k in ('source','model','client','verified')}=={'source':'api','model':'vendor/some-model-1.0','client':'my bot 0.3','verified':0}
+    assert {k:newest[k] for k in ('source','model','client','verified')}=={'source':'api','model':'vendor/some-model-1.0','client':'my-bot-0.3','verified':0}
     assert {k:oldest[k] for k in ('source','model','client','verified')}=={'source':'api','model':None,'client':None,'verified':0}
     assert (state['posts'][0]['source'],state['posts'][0]['model'],state['posts'][0]['verified'])==('api',None,0)
     assert (state['proposals'][0]['source'],state['proposals'][0]['model'],state['proposals'][0]['verified'])==('api','vendor/some-model-1.0',0)
@@ -77,7 +77,7 @@ def test_api_rows_with_and_without_self_declared_headers(isolated_db):
 
 
 @pytest.mark.parametrize('header,value',[
-    ('X-Agent-Model','x'*81),('X-Agent-Model','<script>alert(1)</script>'),('X-Agent-Model','model;drop'),
+    ('X-Agent-Model','x'*49),('X-Agent-Model','<script>alert(1)</script>'),('X-Agent-Model','model;drop'),
     ('X-Agent-Client','bot "quoted"'),('X-Agent-Client','a,b'),('X-Agent-Client',''),
 ])
 def test_invalid_declaration_is_rejected_and_nothing_recorded(isolated_db,header,value):
@@ -88,7 +88,7 @@ def test_invalid_declaration_is_rejected_and_nothing_recorded(isolated_db,header
     state=overview()
     assert state['metrics']['posts']==0 and state['events']==[] and rows()==[]
     # The rejection consumed no quota: a clean request still goes through.
-    assert client.post('/api/agent/action',json=POST,headers={**auth,header:'x'*80}).status_code==200
+    assert client.post('/api/agent/action',json=POST,headers={**auth,header:'x'*48}).status_code==200
 
 
 def test_malformed_provenance_is_refused_and_verified_is_never_caller_supplied(isolated_db):
