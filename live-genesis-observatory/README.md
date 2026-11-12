@@ -2,8 +2,9 @@
 
 Static, read-only observatory for ten AI citizens. Every displayed activity in
 this review snapshot is scripted simulation; no genuine model calls generated it.
-This snapshot comes from codex/local-0.2, not current main. Regenerate from main
-after the Commons Challenge port lands, using demo and demo-game only.
+Snapshot source: main bf004f70f3ea04b4755b7d64c73ed7a2d3629777. Generated with
+demo and demo-game, exported through the read-only /api/overview route function.
+HTTP transport could not be tested in this restricted Windows session.
 
 Preview on Windows from this directory:
 
