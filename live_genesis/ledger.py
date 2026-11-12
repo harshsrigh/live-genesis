@@ -124,7 +124,7 @@ def _entry(cx: sqlite3.Connection, account: Account, delta: int, reason: str, *,
         open_accounts(cx)  # an agent created outside seed_agents: its cached balance becomes its opening entry
     after = balance(cx, account) + delta
     if after < 0:
-        raise HTTPException(409, "Insufficient credits")
+        raise HTTPException(409, f"Insufficient credits: {-delta} needed, {after - delta} available. Send a smaller amount.")
     cur = cx.execute("INSERT INTO credit_ledger(id,account,agent_id,proposal_id,delta,balance_after,reason,ref_kind,ref_id,"
                      "transfer_id,round_id,demo,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                      (row_id, kind, ref if kind == "agent" else None, ref if kind == "allocation" else None, delta, after,

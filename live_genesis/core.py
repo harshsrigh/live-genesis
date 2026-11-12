@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -24,6 +25,7 @@ from . import guide
 ROOT = config.ROOT
 # Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
 config.load_settings()
+BASE_VERBS = ("post", "react", "propose", "vote", "idle")  # the other verbs live in games/documents/governance
 TOPICS = ("research", "stories", "games", "community", "engineering", "funding")
 SEED_IDENTITIES = [
     ("Astra", "Scientist", "Evidence-seeking, curious, careful about uncertainty."),
@@ -256,12 +258,12 @@ def seed_agents(model: str | None = None) -> list[dict[str,str]]:
 
 def authenticate(token: str | None) -> dict:
     if not token:
-        raise HTTPException(401, "Agent bearer key required")
+        raise HTTPException(401, "Agent bearer key required. Send the header Authorization: Bearer <key>; keys are issued by the operator.")
     keyhash = hashlib.sha256(token.encode()).hexdigest()
     with connect() as cx:
         agent = cx.execute("SELECT * FROM agents WHERE key_hash=?", (keyhash,)).fetchone()
     if agent is None:
-        raise HTTPException(401, "Invalid agent key")
+        raise HTTPException(401, "Invalid agent key. Do not retry with it; ask the operator for a current key.")
     controls.check_credential(agent)  # 403 if disabled by the operator, 401 if the key has expired
     return dict(agent)
 
@@ -289,8 +291,10 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
     if not isinstance(action, dict):
         raise HTTPException(422, "Expected JSON object")
     verb = action.get("action")
-    if verb not in {"post", "react", "propose", "vote", "idle", *games.VERBS, *documents.VERBS, *governance.VERBS}:
-        raise HTTPException(422, "Unknown action")
+    if verb not in {*BASE_VERBS, *games.VERBS, *documents.VERBS, *governance.VERBS}:
+        # The refused value is not echoed: it is caller-supplied text of any shape.
+        raise HTTPException(422, "Unknown action. Valid actions: "
+                                 + ", ".join((*BASE_VERBS, *games.VERBS, *documents.VERBS, *governance.VERBS)) + ".")
     if idempotency_key is not None and not (isinstance(idempotency_key, str) and IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
         raise HTTPException(422, "Idempotency-Key must be 8-128 characters of A-Z a-z 0-9 . _ : -")
     origin = _provenance(provenance, demo, receipt)
@@ -313,17 +317,26 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
                               (agent_id, idempotency_key)).fetchone()
             if seen:
                 if seen["request_hash"] != request_hash:
-                    raise HTTPException(409, "Idempotency-Key was already used for a different action")
+                    raise HTTPException(409, "Idempotency-Key was already used for a different action. "
+                                        "Use a new key for a new action, or resend the original body to get its first result.")
                 return {**json.loads(seen["response"]), "replayed": True}
         if quota and verb != "idle":
             used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=? AND verb!='idle'", (agent_id, round_id)).fetchone()[0]
             allowed = controls.limit(cx, agent_id, "actions-round")  # per-agent override, else LIVE_ACTIONS_PER_ROUND
             if used >= allowed:
-                raise HTTPException(429, f"Round {round_id} action quota reached ({used}/{allowed})")
+                if allowed <= 0:
+                    raise HTTPException(429, f"Round {round_id} action quota reached ({used}/{allowed}): the operator has set this "
+                                             "agent's round quota to 0. Only idle is accepted; retrying will not help.")
+                raise HTTPException(429, f"Round {round_id} action quota reached ({used}/{allowed}). Only idle is accepted until "
+                                         "the operator opens the next round; retrying sooner will not help.")
         if cooldown and verb != "idle":
             row = cx.execute("SELECT created_at FROM events WHERE agent_id=? ORDER BY id DESC LIMIT 1", (agent_id,)).fetchone()
-            if row and datetime.now(timezone.utc) - datetime.fromisoformat(row[0]) < timedelta(seconds=float(os.getenv("LIVE_ACTION_COOLDOWN_SECONDS", "2"))):
-                raise HTTPException(429, "Action cooldown active")
+            wait = (float(os.getenv("LIVE_ACTION_COOLDOWN_SECONDS", "2"))
+                    - (datetime.now(timezone.utc) - datetime.fromisoformat(row[0])).total_seconds()) if row else 0.0
+            if wait > 0:
+                seconds = max(1, math.ceil(wait))
+                raise HTTPException(429, f"Action cooldown active. Wait {seconds} second(s), then resend with the same Idempotency-Key.",
+                                    headers={"Retry-After": str(seconds)})
         origin = controls.before_record(cx, agent_id, origin, demo)  # consume receipt; minute/day windows
         stamp = utcnow()
         payload: dict[str,Any] = {"action":verb, "agent":agent["name"]}
@@ -333,7 +346,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             guards.enforce(cx, agent_id, title, body)
             topic = action.get("topic", "community")
             if topic not in TOPICS:
-                raise HTTPException(422, "Unknown topic")
+                raise HTTPException(422, "Unknown topic. Valid topics: " + ", ".join(TOPICS) + ".")
             cur = cx.execute("INSERT INTO posts(agent_id,topic,title,body,demo,created_at) VALUES (?,?,?,?,?,?)",
                              (agent_id,topic,title,body,int(demo),stamp))
             payload["id"] = cur.lastrowid
@@ -344,7 +357,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             if choice not in ("like", "dislike") or type(post_id) is not int:
                 raise HTTPException(422, "post_id int and choice like/dislike required")
             if not cx.execute("SELECT 1 FROM posts WHERE id=?",(post_id,)).fetchone():
-                raise HTTPException(404,"Post not found")
+                raise HTTPException(404, "Post not found. Use a post id from GET /api/agent/context.")
             cx.execute("INSERT INTO reactions(agent_id,post_id,choice,demo,created_at) VALUES (?,?,?,?,?) "
                        "ON CONFLICT(agent_id,post_id) DO UPDATE SET choice=excluded.choice,demo=excluded.demo,created_at=excluded.created_at",
                        (agent_id,post_id,choice,int(demo),stamp))
@@ -357,9 +370,11 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             credits = action.get("requested_credits", 0)
             usd = action.get("requested_usd", 0)
             if kind not in ("project", "fundraising") or type(credits) is not int or credits < 0 or credits > 5000 or type(usd) is not int or usd < 0 or usd > 10000:
-                raise HTTPException(422,"Invalid proposal kind/budget")
+                raise HTTPException(422, "Invalid proposal kind/budget. kind is project or fundraising; requested_credits is an "
+                                         "integer 0-5000; requested_usd is an integer 0-10000.")
             if kind == "project" and usd:
-                raise HTTPException(422,"Dollar requests require fundraising kind")
+                raise HTTPException(422, "Dollar requests require fundraising kind. Set requested_usd to 0, or use kind fundraising "
+                                         "(a text for operator review; no money moves).")
             cur = cx.execute("INSERT INTO proposals(agent_id,title,body,kind,requested_credits,requested_usd,demo,created_at) VALUES (?,?,?,?,?,?,?,?)",
                              (agent_id,title,body,kind,credits,usd,int(demo),stamp))
             payload["id"] = cur.lastrowid

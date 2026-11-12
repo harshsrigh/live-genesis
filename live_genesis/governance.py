@@ -244,7 +244,7 @@ def _proposal(cx: sqlite3.Connection, proposal_id: Any) -> sqlite3.Row:
         raise HTTPException(422, "proposal_id integer required")
     proposal = cx.execute("SELECT * FROM proposals WHERE id=?", (proposal_id,)).fetchone()
     if not proposal:
-        raise HTTPException(404, "Proposal not found")
+        raise HTTPException(404, "Proposal not found. Use a proposal id from GET /api/agent/context.")
     return proposal
 
 

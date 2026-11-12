@@ -17,7 +17,7 @@ def isolated_db(tmp_path,monkeypatch):
     monkeypatch.setenv('LIVE_PROVIDER','openai')
     # Paid-call opt-in is on so engine tests reach their mocked `infer`; no test has a real key.
     monkeypatch.setenv('LIVE_ALLOW_PAID_CALLS','YES')
-    for name in ('LIVE_PROJECT_BUDGET_USD','LIVE_OTHER_COMMITTED_USD','LIVE_ACTIONS_PER_ROUND','LIVE_API_REQUESTS_PER_MINUTE'):
+    for name in ('LIVE_PROJECT_BUDGET_USD','LIVE_OTHER_COMMITTED_USD','LIVE_ACTIONS_PER_ROUND','LIVE_API_REQUESTS_PER_MINUTE','LIVE_SEARCHES_PER_MINUTE'):
         monkeypatch.delenv(name,raising=False)  # shipped defaults, whatever the developer's shell or .env says
     # Wall-clock window quotas are set far above what any older test does in one minute (some
     # record dozens of actions for one agent); tests/test_controls.py lowers them with a fake clock.
