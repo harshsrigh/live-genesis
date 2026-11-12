@@ -28,10 +28,24 @@ What this module is, honestly:
 Money safety (local ESTIMATES only; nothing here moves money): `run_archive` passes the same
 gates as `engine.run_round` and `study.run_study` (provider, key, `LIVE_ALLOW_PAID_CALLS=YES`,
 validated budget config, no unconfirmed reservation, a required `max_usd` that the worst case
-must fit under before the first call), and every call is reserve -> infer -> settle. A failed
-call leaves its hold `unconfirmed` and STOPS the run. One pair of rates
-(`LIVE_INPUT_USD_PER_M` / `LIVE_OUTPUT_USD_PER_M`) prices every listed model: set them to
-the dearest model you list.
+must fit under before the first call), and every call is reserve -> infer -> settle.
+
+Several services in one run: a model is reached through `openai`, `anthropic`, the single
+`openai-compatible` endpoint, or a NAMED endpoint (`LIVE_ARCHIVE_ENDPOINTS`, providers.endpoints)
+with its own base URL, key variable and rates. Each answer records its `pricing_basis`:
+`rates` (priced), `local` (loopback, zero rates) or `declared-free` (hosted; the operator's own
+unverified statement that the service charges nothing). The global pair of rates
+(`LIVE_INPUT_USD_PER_M` / `LIVE_OUTPUT_USD_PER_M`) prices the two native providers and the single
+`openai-compatible` endpoint only.
+
+A failed call (FAILURE RULE, printed by `archive-plan`):
+* zero-priced endpoint (`local`, `declared-free`): its $0 hold is released, THAT answerer is
+  skipped for the rest of the run with a reason category, and the run goes on. Nothing is
+  left unrecorded: at zero rates the ledger would hold $0 for the call whether it worked or not.
+* priced endpoint (`rates`): unchanged. The hold stays `unconfirmed`, the run STOPS, and every
+  paid command is blocked until the operator reconciles. Zero-priced answerers are asked
+  first, so a priced failure never costs a free column.
+`engine.run_round` and `study.run_study` are not touched by any of this.
 
 `live_genesis.core` imports this module for `SCHEMA`, so the engine is imported lazily: the
 web processes must never load the engine or a provider SDK.
@@ -46,6 +60,7 @@ import os
 import re
 import time
 import unicodedata
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +71,10 @@ from . import core  # attributes are used at call time only (core imports this m
 
 QUESTIONS_FILE = Path(__file__).resolve().parent / "archive_questions.json"
 TRENDING_FILE = Path(__file__).resolve().parent / "archive_trending.json"
-PAYLOAD_SCHEMA = "live-genesis-archive/2"   # /2: the `trending` track and, per run, how many questions were asked
+# /2: the `trending` track and, per run, how many questions were asked. /3: per answer, the endpoint name, the
+# model name the provider reported, the local model digest, the pricing basis and whether sampling was pinned;
+# per run, the answerers that were skipped.
+PAYLOAD_SCHEMA = "live-genesis-archive/3"
 TRACKS = ("core", "trending")
 GROUP_COUNT = 4
 QUESTION_ID = re.compile(r"Q[0-9]{2}")
@@ -100,6 +118,33 @@ CHANGED_RULE = ("An answer counts as changed when its text differs from the same
 TRUNCATED = "reply cut off at the output limit"
 EMPTY = "empty reply"
 TOO_LONG = "reply longer than the archive stores"
+# Model ids of ARCHIVE answerers only (the operator's own setting). Wider than core.declared_ok, which stays as it
+# is for what agents declare about themselves: a tag after a colon ("gemma3:4b", "vendor/model:free"), several
+# slashes and a leading @ ("@cf/meta/llama-..."), dated ids. Still nothing shaped like a domain name, because the id
+# is shown on public pages; every page escapes it.
+MODEL_ID = re.compile(r"[A-Za-z0-9._:/@-]{1,120}")
+MODEL_ID_RULE = ("must be 1-120 characters of A-Z a-z 0-9 . _ : / @ - with no space and no '..'; a dot may not be "
+                 "followed by letters that end a name (nothing shaped like a domain name)")
+# Sampling sent on archive calls where the API takes it, so that two runs differ as little as the service allows.
+# It does not make a model deterministic. Recorded per answer as `sampling` (what was actually sent).
+ARCHIVE_SEED = 1234
+SAMPLING = {"temperature": 0, "seed": ARCHIVE_SEED}
+NOT_PINNED = "none"
+# Why an answerer was skipped: a category from this list, never the provider's response or exception text.
+SKIP_REASONS = ("rate_limited", "not_found", "auth", "timeout", "server_error", "no_usage", "not_ready", "other")
+OUTCOMES = ("complete", "skipped", "stopped", "not_asked")
+ZERO_PRICED = (providers.BASIS_LOCAL, providers.BASIS_FREE)
+FAILURE_RULE = ("If a call fails on a zero-priced endpoint (local or declared-free), its $0 hold is released, that model is "
+                "skipped for the rest of the run and the run goes on. If a call fails on a priced endpoint (rates), the hold "
+                "stays unconfirmed, the run stops and paid calls are blocked until `cli reconcile`. Zero-priced models are "
+                "asked first.")
+DECLARED_FREE_NOTE = ("declared-free is the operator's own statement that the service charges nothing. It is NOT verified, and "
+                      "the local ceiling cannot see a charge on such an endpoint: check that service's billing page yourself.")
+REPORTED = re.compile(r"[A-Za-z0-9._:/@+-]{1,120}")
+FINISH = re.compile(r"[A-Za-z0-9_.:-]{1,40}")
+DIGEST = re.compile(r"(?:sha256:)?([0-9a-f]{64})")
+DIGEST_PUBLIC_CHARS = 12
+DIGEST_TIMEOUT_SECONDS = 2.0
 
 TABLES = '''
 CREATE TABLE IF NOT EXISTS archive_sets (
@@ -150,10 +195,26 @@ CREATE TABLE IF NOT EXISTS archive_answers (
     answer_text TEXT, normalised TEXT, answer_sha256 TEXT,
     changed INTEGER CHECK(changed IN (0,1)),
     input_tokens INTEGER, output_tokens INTEGER, estimated_usd REAL, created_at TEXT NOT NULL,
+    -- Server calls only (NULL otherwise, and NULL on rows from before these columns): the endpoint NAME (never its
+    -- URL), what the provider's response said about itself, and how the call was made and priced.
+    endpoint TEXT, reported_model TEXT, system_fingerprint TEXT, finish_reason TEXT, latency_ms INTEGER,
+    sampling TEXT, model_digest TEXT, pricing_basis TEXT, local INTEGER,
     UNIQUE (run_id, question_id, answerer),
     CHECK ((state='answered') = (answer_text IS NOT NULL)),
     CHECK ((source='engine') = (reservation_id IS NOT NULL) OR source='mock'),
     CHECK ((source='api') = (agent_id IS NOT NULL))
+);
+-- One row per answerer of a run made by `archive-run`, written when the run closes: how far that model got.
+-- `skipped`: a call failed on a zero-priced endpoint and the run went on without this model. `stopped`: the run
+-- ended while this model was being asked. `reason` is a category (SKIP_REASONS), never provider text.
+CREATE TABLE IF NOT EXISTS archive_run_answerers (
+    run_id INTEGER NOT NULL REFERENCES archive_runs(id), answerer TEXT NOT NULL,
+    endpoint TEXT, provider TEXT, model TEXT NOT NULL,
+    pricing_basis TEXT CHECK(pricing_basis IN ('rates','local','declared-free')),
+    outcome TEXT NOT NULL CHECK(outcome IN ('complete','skipped','stopped','not_asked')),
+    reason TEXT NOT NULL DEFAULT '' CHECK(reason IN ('','rate_limited','not_found','auth','timeout','server_error','no_usage','not_ready','other')),
+    recorded INTEGER NOT NULL DEFAULT 0, reservation_id INTEGER REFERENCES budget_reservations(id), model_digest TEXT,
+    PRIMARY KEY (run_id, answerer)
 );
 '''
 # Columns added after the first release, for a database created before them (migrate()).
@@ -163,6 +224,16 @@ ADDED_COLUMNS = (
     ("archive_questions", "added", "TEXT NOT NULL DEFAULT ''"),
     ("archive_questions", "topic", "TEXT NOT NULL DEFAULT ''"),
     ("archive_questions", "trend_source", "TEXT NOT NULL DEFAULT ''"),
+    # Named endpoints and what a call records. All nullable: a row from before them keeps NULL (not recorded).
+    ("archive_answers", "endpoint", "TEXT"),
+    ("archive_answers", "reported_model", "TEXT"),
+    ("archive_answers", "system_fingerprint", "TEXT"),
+    ("archive_answers", "finish_reason", "TEXT"),
+    ("archive_answers", "latency_ms", "INTEGER"),
+    ("archive_answers", "sampling", "TEXT"),
+    ("archive_answers", "model_digest", "TEXT"),
+    ("archive_answers", "pricing_basis", "TEXT"),
+    ("archive_answers", "local", "INTEGER"),
 )
 RULES = '''
 CREATE INDEX IF NOT EXISTS archive_answers_series ON archive_answers(answerer, question_id, run_id);
@@ -225,6 +296,10 @@ CREATE TRIGGER IF NOT EXISTS archive_run_sets_no_update BEFORE UPDATE ON archive
     BEGIN SELECT RAISE(ABORT, 'archive_run_sets is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS archive_run_sets_no_delete BEFORE DELETE ON archive_run_sets
     BEGIN SELECT RAISE(ABORT, 'archive_run_sets is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS archive_run_answerers_no_update BEFORE UPDATE ON archive_run_answerers
+    BEGIN SELECT RAISE(ABORT, 'archive_run_answerers is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS archive_run_answerers_no_delete BEFORE DELETE ON archive_run_answerers
+    BEGIN SELECT RAISE(ABORT, 'archive_run_answerers is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS archive_runs_no_delete BEFORE DELETE ON archive_runs
     BEGIN SELECT RAISE(ABORT, 'archive_runs is append-only'); END;
 -- The single permitted change: closing a running run once (status, stop_reason, finished_at).
@@ -240,7 +315,9 @@ SCHEMA = TABLES + RULES
 
 
 def migrate(cx) -> None:
-    """Create the tables and rules, and bring a database from before the trending track up to date.
+    """Create the tables and rules, and bring an older database up to date in place: one from before
+    the trending track, or one from before named endpoints (its answers gain nullable columns that
+    stay NULL, and the per-run answerer table is created empty).
     Nothing recorded is rewritten: columns are added with defaults, the one lock an older database
     can hold is copied into the version table as version 1, and the trigger that tied a real run
     to `archive_sets` is replaced by the same rule against the version table."""
@@ -596,13 +673,28 @@ def max_output_tokens() -> int:
     return min(max(value, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS)
 
 
+def model_id_ok(value: Any) -> bool:
+    """The shape rule for an archive answerer's model id (MODEL_ID_RULE). Separate from, and wider
+    than, core.declared_ok, which keeps ruling what agents declare about themselves."""
+    return (isinstance(value, str) and MODEL_ID.fullmatch(value) is not None and ".." not in value
+            and not core.DECLARED_DOMAIN.search(value) and not guards.has_forbidden_character(value)
+            and not guards.content_reason(value))
+
+
 def answerers(only: str | None = None) -> list[dict]:
     """LIVE_ARCHIVE_MODELS: comma-separated `label=provider:model` entries, e.g.
-    `model-a=anthropic:claude-haiku-5-5,model-b=openai:gpt-5.6-luna`. `only` (--models) keeps a subset."""
+    `model-a=anthropic:claude-haiku-5-5,model-b=openai:gpt-5.6-luna`. In place of a provider an entry
+    may name an endpoint from LIVE_ARCHIVE_ENDPOINTS (`gemma=ollama:gemma3:4b`); such an entry carries
+    `endpoint` and the provider `openai-compatible`. The model id is everything after the first colon.
+    `only` (--models) keeps a subset."""
     raw = os.getenv("LIVE_ARCHIVE_MODELS", "").strip()
     if not raw:
         raise ArchiveRefused("No models configured. Set LIVE_ARCHIVE_MODELS in .env, e.g. "
                              "LIVE_ARCHIVE_MODELS=model-a=anthropic:claude-haiku-5-5,model-b=openai:gpt-5.6-luna")
+    try:
+        named = providers.endpoint_names()
+    except providers.ProviderConfigError as err:
+        raise ArchiveRefused(str(err)) from None
     out: list[dict] = []
     for entry in (part.strip() for part in raw.split(",") if part.strip()):
         label, eq, rest = entry.partition("=")
@@ -611,13 +703,17 @@ def answerers(only: str | None = None) -> list[dict]:
         if not eq or not colon or not LABEL.fullmatch(label):
             raise ArchiveRefused("LIVE_ARCHIVE_MODELS entries must look like label=provider:model, the label 1-24 "
                                  "characters of a-z 0-9 . _ -")
-        if provider not in providers.NAMES:
-            raise ArchiveRefused(f"LIVE_ARCHIVE_MODELS, {label}: provider must be openai, anthropic or openai-compatible")
-        if not core.declared_ok(model) or guards.content_reason(model):
-            raise ArchiveRefused(f"LIVE_ARCHIVE_MODELS, {label}: the model id {core.DECLARED_RULE}")
+        if provider not in providers.NAMES and provider not in named:
+            raise ArchiveRefused(f"LIVE_ARCHIVE_MODELS, {label}: provider must be openai, anthropic, openai-compatible "
+                                 f"or an endpoint name listed in {config.ENDPOINTS_VARIABLE}")
+        if not model_id_ok(model):
+            raise ArchiveRefused(f"LIVE_ARCHIVE_MODELS, {label}: the model id {MODEL_ID_RULE}")
         if any(a["label"] == label for a in out):
             raise ArchiveRefused(f"LIVE_ARCHIVE_MODELS: label {label} is used twice")
-        out.append({"label": label, "provider": provider, "model": model})
+        if provider in named:
+            out.append({"label": label, "provider": providers.COMPATIBLE, "model": model, "endpoint": provider})
+        else:
+            out.append({"label": label, "provider": provider, "model": model})
     if len(out) > MAX_ANSWERERS:
         raise ArchiveRefused(f"LIVE_ARCHIVE_MODELS lists more than {MAX_ANSWERERS} models")
     if only:
@@ -638,14 +734,63 @@ def call_hold(prompt: str, input_rate: float, output_rate: float, tokens_out: in
     return tokens_in * input_rate / 1e6 + tokens_out * output_rate / 1e6
 
 
+def resolve(models: list[dict], tokens_out: int) -> tuple[list[dict], dict]:
+    """Each answerer with what a call to it needs: the endpoint name and record, its rates, pricing
+    basis, output limit, whether pinned sampling is sent and its pause. Returns (answerers, budget):
+    zero-priced answerers first (see FAILURE_RULE), otherwise in the configured order; `budget` holds the
+    ceilings and, when a native provider or the single openai-compatible endpoint is listed, the
+    global rates (None otherwise: they are then not used and need not be set).
+
+    Raises ArchiveRefused / controls.ConfigError when settings are unusable. Reads no key, sends nothing."""
+    try:
+        records = providers.endpoints() if any(a.get("endpoint") for a in models) else {}
+        legacy = any(a["provider"] == providers.COMPATIBLE and not a.get("endpoint") for a in models)
+        try:
+            compat = providers.compat_settings() if legacy else None
+        except providers.ProviderConfigError:
+            compat = None   # as before named endpoints: the plan does not need the URL; `archive-run` refuses without it
+        shared = [a for a in models if not a.get("endpoint")]
+        budget = controls.budget_config() if shared else {**controls.spend_config(), "input_rate": None, "output_rate": None}
+        if shared and not (budget["input_rate"] and budget["output_rate"]) and any(a["provider"] != providers.COMPATIBLE for a in shared):
+            raise ArchiveRefused("Zero rates are accepted only for a local openai-compatible model, and the global pair of rates "
+                                 "prices openai, anthropic and openai-compatible entries. Set positive LIVE_INPUT_USD_PER_M / "
+                                 "LIVE_OUTPUT_USD_PER_M, or give a free or local model its own named endpoint "
+                                 f"({config.ENDPOINTS_VARIABLE}).")
+        out: list[dict] = []
+        for answerer in models:
+            name = answerer.get("endpoint")
+            if name:
+                record = records[name]
+                limit = tokens_out if record.max_output_tokens is None else min(max(record.max_output_tokens, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS)
+                out.append({**answerer, "record": record, "input_rate": record.input_rate, "output_rate": record.output_rate,
+                            "basis": record.basis, "local": record.loopback, "max_output_tokens": limit,
+                            "send_sampling": record.send_sampling, "pause_seconds": record.pause_seconds})
+                continue
+            native = answerer["provider"] != providers.COMPATIBLE
+            zero = not (budget["input_rate"] or budget["output_rate"])   # budget_config allows it for a loopback URL only
+            out.append({**answerer, "endpoint": answerer["provider"], "record": None, "input_rate": budget["input_rate"],
+                        "output_rate": budget["output_rate"], "basis": providers.BASIS_LOCAL if zero else providers.BASIS_RATES,
+                        "local": bool(compat and compat.loopback) and not native, "max_output_tokens": tokens_out,
+                        # The two native APIs: off unless switched on, because some of their models refuse `temperature`
+                        # (and neither takes a seed). Chat Completions servers: on.
+                        "send_sampling": providers.send_sampling(answerer["provider"], not native), "pause_seconds": 0.0})
+    except providers.ProviderConfigError as err:
+        raise ArchiveRefused(str(err)) from None
+    return sorted(out, key=lambda a: a["basis"] not in ZERO_PRICED), budget
+
+
 def plan(only: str | None = None, question_set: str | None = None) -> dict:
-    """Free. Questions, models, number of calls and the worst-case estimate at the configured rates.
+    """Free. Questions, models, number of calls and the worst-case estimate at each model's rates.
     Raises ArchiveRefused / controls.ConfigError when settings are unusable. Contacts no provider.
 
     Covers what a run would ask. `question_set` (--set) limits it to one track. A track that is
     locked in this database contributes its locked questions (and its file must still match the
     lock); while any chosen track is locked, a track that is not locked is listed as not asked.
-    With nothing locked yet, the files' questions are shown as a preview."""
+    With nothing locked yet, the files' questions are shown as a preview.
+
+    `holds` prices each question at the global rates and output limit (0 when no listed model uses
+    them); `holds_by_model` holds what a run reserves: per label, per question, at that model's
+    own rates and output limit."""
     with core.connect() as cx:
         states = [track_state(cx, track) for track in select_tracks(question_set)]
     any_locked = any(state["locked"] for state in states)
@@ -655,27 +800,38 @@ def plan(only: str | None = None, question_set: str | None = None) -> dict:
     if not asked:
         raise ArchiveRefused("There is no question to ask: " + " and ".join(_file(s["track"]).name for s in states)
                              + " hold" + ("s" if len(states) == 1 else "") + " no question.")
-    models = answerers(only)
     tokens_out = max_output_tokens()
-    budget = controls.budget_config()
-    if not (budget["input_rate"] and budget["output_rate"]) and any(a["provider"] != providers.COMPATIBLE for a in models):
-        raise ArchiveRefused("Zero rates are accepted only for a local openai-compatible model, and one pair of rates "
-                             "prices every listed model. Set positive LIVE_INPUT_USD_PER_M / LIVE_OUTPUT_USD_PER_M.")
+    models, budget = resolve(answerers(only), tokens_out)
     questions = [question for state in asked for question in state["questions"]]
-    holds = {q["id"]: call_hold(q["prompt"], budget["input_rate"], budget["output_rate"], tokens_out) for q in questions}
-    per_model = math.fsum(holds.values())
+    holds = {q["id"]: call_hold(q["prompt"], budget["input_rate"] or 0.0, budget["output_rate"] or 0.0, tokens_out) for q in questions}
+    by_model = {a["label"]: {q["id"]: call_hold(q["prompt"], a["input_rate"], a["output_rate"], a["max_output_tokens"])
+                             for q in questions} for a in models}
+    per_model = {label: math.fsum(values.values()) for label, values in by_model.items()}
+    groups: list[dict] = []   # per endpoint: what the plan prints
+    for answerer in models:
+        group = next((g for g in groups if g["endpoint"] == answerer["endpoint"]), None)
+        if group is None:
+            group = {"endpoint": answerer["endpoint"], "basis": answerer["basis"], "local": answerer["local"], "calls": 0,
+                     "worst_case_usd": 0.0, "input_rate": answerer["input_rate"], "output_rate": answerer["output_rate"],
+                     "pause_seconds": answerer["pause_seconds"], "labels": []}
+            groups.append(group)
+        group["calls"] += len(questions)
+        group["worst_case_usd"] += per_model[answerer["label"]]
+        group["labels"].append(answerer["label"])
     lead = asked[0]
     return {"question_set": lead["question_set"], "sha256": lead["sha256"], "status": lead["status"],
             "questions": questions, "groups": lead["groups"], "tracks": states, "models": models,
             "max_output_tokens": tokens_out,
-            "calls": len(holds) * len(models), "input_rate": budget["input_rate"], "output_rate": budget["output_rate"],
-            "spend_limit_usd": budget["spend_limit_usd"], "holds": holds, "worst_case_usd_per_model": per_model,
-            "worst_case_usd": per_model * len(models), "largest_call_hold_usd": max(holds.values())}
+            "calls": len(questions) * len(models), "input_rate": budget["input_rate"], "output_rate": budget["output_rate"],
+            "spend_limit_usd": budget["spend_limit_usd"], "holds": holds, "holds_by_model": by_model, "endpoints": groups,
+            "worst_case_usd_per_model": max(per_model.values()),
+            "worst_case_usd": math.fsum(per_model.values()),
+            "largest_call_hold_usd": max(max(values.values()) for values in by_model.values())}
 
 
 def render_plan(planned: dict, *, locked: dict | None = None) -> str:
     """Text for `archive-plan`. `locked` is accepted for older callers; the lock state of each
-    track is read from the plan itself."""
+    track is read from the plan itself. Prints endpoint NAMES only: no URL, no host, no key."""
     cap = study.suggested_cap(planned["worst_case_usd"])
     lines, unlocked = [], []
     for state in planned["tracks"]:
@@ -696,15 +852,28 @@ def render_plan(planned: dict, *, locked: dict | None = None) -> str:
         if state["pending"]:
             lines.append(f"  {state['pending']} more in {_file(state['track']).name} are not locked yet and are not asked. "
                          f"To add them: python -m live_genesis.cli archive-lock{flag}")
-    lines.append("Models (label = provider:model):")
-    lines += [f"  {a['label']} = {a['provider']}:{a['model']}" for a in planned["models"]]
-    lines += [f"Calls per run: {planned['calls']} ({len(planned['questions'])} questions x {len(planned['models'])} models), "
-              f"output limit {planned['max_output_tokens']} tokens each.",
-              f"Rates used for every model: ${planned['input_rate']:.2f} in / ${planned['output_rate']:.2f} out per million tokens.",
-              f"Worst-case estimate for one run: ${planned['worst_case_usd']:.6f} "
-              f"(${planned['worst_case_usd_per_model']:.6f} per model; largest single hold ${planned['largest_call_hold_usd']:.6f}).",
+    lines.append("Models (label = provider or endpoint:model), in the order they are asked:")
+    lines += [f"  {a['label']} = {a['endpoint']}:{a['model']}" for a in planned["models"]]
+    lines.append(f"Calls per run: {planned['calls']} ({len(planned['questions'])} questions x {len(planned['models'])} models), "
+                 f"output limit {planned['max_output_tokens']} tokens each unless an endpoint sets its own.")
+    lines.append("Per endpoint (calls, worst-case estimate, pricing basis):")
+    for group in planned["endpoints"]:
+        detail = {providers.BASIS_RATES: f"rates ${group['input_rate']:.2f} in / ${group['output_rate']:.2f} out per million tokens",
+                  providers.BASIS_LOCAL: "local (runs on this machine; recorded as $0 estimated)",
+                  providers.BASIS_FREE: "declared-free (UNVERIFIED: see below)"}[group["basis"]]
+        lines.append(f"  {group['endpoint']}: {group['calls']} calls, ${group['worst_case_usd']:.6f}, {detail}"
+                     + (f", pause {group['pause_seconds']:g} s between calls" if group["pause_seconds"] else ""))
+    if any(group["basis"] == providers.BASIS_FREE for group in planned["endpoints"]):
+        lines.append("  " + DECLARED_FREE_NOTE)
+    if planned["input_rate"] is not None:
+        lines.append(f"Rates used for every model: ${planned['input_rate']:.2f} in / ${planned['output_rate']:.2f} out per million "
+                     "tokens (openai, anthropic and openai-compatible entries; a named endpoint uses its own).")
+    lines += [f"Worst-case estimate for one run: ${planned['worst_case_usd']:.6f} "
+              f"(at most ${planned['worst_case_usd_per_model']:.6f} per model; largest single hold ${planned['largest_call_hold_usd']:.6f}).",
               f"This is {study.COST_CAVEAT}.",
-              "Nothing was called. The PAID command, to be run only on the owner's explicit word:",
+              "If a call fails: " + FAILURE_RULE,
+              "Nothing was called. The PAID command, to be run only on the owner's explicit word (--max-usd and "
+              "LIVE_ALLOW_PAID_CALLS=YES are required for every run, a free one included):",
               f"  python -m live_genesis.cli archive-run --max-usd {cap}"]
     if unlocked:
         lines.append("Before that: finish the question list, set its status to \"locked\", and run: " + " ; ".join(unlocked))
@@ -741,10 +910,13 @@ def _close_run(run_id: int, status: str, reason: str, finished_at: str | None = 
 def _store(cx, run_id: int, question_set: str, question_id: str, answerer: str, *, model: str, source: str,
            state: str, reason: str = "", text: str | None = None, provider: str | None = None,
            agent_id: int | None = None, reservation: int | None = None, input_tokens: int | None = None,
-           output_tokens: int | None = None, usd: float | None = None, created_at: str | None = None) -> dict:
+           output_tokens: int | None = None, usd: float | None = None, created_at: str | None = None,
+           call: dict | None = None) -> dict:
     """Insert one answer row. `changed` compares with this answerer's previous ANSWERED row for
     the same question in an earlier run of the same kind: None for the first, and None for a
-    row that holds no answer. A run with no answer in between is skipped, not counted as a change."""
+    row that holds no answer. A run with no answer in between is skipped, not counted as a change.
+    `call` (server calls only) holds the columns of `_call_record`."""
+    call = call or {}
     kind, number = cx.execute("SELECT kind,number FROM archive_runs WHERE id=?", (run_id,)).fetchone()
     normalised = digest = changed = None
     if state == "answered":
@@ -757,11 +929,116 @@ def _store(cx, run_id: int, question_set: str, question_id: str, answerer: str, 
         changed = None if previous is None else int(previous[0] != digest)
     cx.execute("INSERT INTO archive_answers(run_id,question_set,question_id,answerer,agent_id,provider,model,source,"
                "reservation_id,state,reason,answer_text,normalised,answer_sha256,changed,input_tokens,output_tokens,"
-               "estimated_usd,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+               "estimated_usd,created_at,endpoint,reported_model,system_fingerprint,finish_reason,latency_ms,sampling,"
+               "model_digest,pricing_basis,local) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                (run_id, question_set, question_id, answerer, agent_id, provider, model, source, reservation, state, reason,
                 text if state == "answered" else None, normalised, digest, changed, input_tokens, output_tokens, usd,
-                created_at or core.utcnow()))
+                created_at or core.utcnow(), *(call.get(key) for key in CALL_COLUMNS)))
     return {"state": state, "changed": None if changed is None else bool(changed)}
+
+
+CALL_COLUMNS = ("endpoint", "reported_model", "system_fingerprint", "finish_reason", "latency_ms", "sampling",
+                "model_digest", "pricing_basis", "local")
+
+
+def _shaped(value: Any, pattern: re.Pattern) -> str | None:
+    """A string the provider sent about itself, kept only when it has the expected shape and passes
+    the content guards. Anything else is stored as not recorded: provider output is untrusted text."""
+    if not isinstance(value, str) or not pattern.fullmatch(value) or guards.has_forbidden_character(value) or guards.content_reason(value):
+        return None
+    return value
+
+
+def sampling_text(sent: Any) -> str | None:
+    """`temperature=0;seed=1234`, `none` when nothing was sent, None when the adapter did not say."""
+    if not isinstance(sent, dict):
+        return None
+    parts = [f"{key}={sent[key]}" for key in ("temperature", "seed")
+             if type(sent.get(key)) in (int, float) and math.isfinite(sent[key])]
+    return ";".join(parts) or NOT_PINNED
+
+
+def _call_record(answerer: dict, result: Any, latency_ms: int, digest: str | None) -> dict:
+    """What one server call records beside the answer: the endpoint NAME (never its URL), the model
+    name and fingerprint the response reported, its raw finish reason, the latency, the sampling
+    actually sent, the local model digest and the pricing basis."""
+    reported = _shaped(getattr(result, "reported_model", None), REPORTED)
+    return {"endpoint": answerer["endpoint"],
+            "reported_model": reported if reported and not core.DECLARED_DOMAIN.search(reported) and ".." not in reported else None,
+            "system_fingerprint": _shaped(getattr(result, "system_fingerprint", None), REPORTED),
+            "finish_reason": _shaped(getattr(result, "finish_reason", None), FINISH),
+            "latency_ms": latency_ms,
+            "sampling": sampling_text(getattr(result, "sampling", None)) if answerer["send_sampling"] else NOT_PINNED,
+            "model_digest": digest, "pricing_basis": answerer["basis"], "local": int(bool(answerer["local"]))}
+
+
+def failure_category(exc: BaseException) -> str:
+    """Why a call failed, as one of SKIP_REASONS. Built from the exception's HTTP status and class name
+    only, never from its text (which can quote the response body, the URL or a key)."""
+    if type(exc).__name__ == "UsageMissing":   # engine.UsageMissing: an answer came back without token counts
+        return "no_usage"
+    status = getattr(exc, "status_code", None)
+    if type(status) is int:
+        if status == 429:
+            return "rate_limited"
+        if status == 404:
+            return "not_found"
+        if status in (401, 403):
+            return "auth"
+        if status >= 500:
+            return "server_error"
+        return "other"
+    if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+        return "timeout"
+    return "other"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def _fetch_tags(origin: str, timeout: float) -> bytes:
+    """GET <origin>/api/tags (Ollama's list of pulled models). The only HTTP request this module can
+    make; `lookup_model_digest` calls it for a loopback origin only. No proxy, no redirect, at most
+    1 MB read. Tests replace it."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
+    with opener.open(f"{origin}/api/tags", timeout=timeout) as response:
+        return response.read(1_000_001)
+
+
+def lookup_model_digest(record: Any, model: str) -> str | None:
+    """Best effort: the sha256 digest of a model on a LOOPBACK server that answers like Ollama.
+    Why: a local tag such as `gemma3:4b` can be re-pulled and then names different weights; the
+    digest says which file answered. Returns None (recorded as not known) for a hosted endpoint,
+    a server that is not Ollama, a model it does not list, or any error. Never raises."""
+    try:
+        if record is None or not record.loopback or not providers._loopback_port_open(record.host, record.port, DIGEST_TIMEOUT_SECONDS):
+            return None
+        host = f"[{record.host}]" if ":" in record.host else record.host
+        body = _fetch_tags(f"{record.scheme}://{host}:{record.port}", DIGEST_TIMEOUT_SECONDS)
+        if len(body) > 1_000_000:
+            return None
+        for item in json.loads(body)["models"]:
+            names = (item.get("name"), item.get("model"))
+            if model in names or f"{model}:latest" in names:
+                found = DIGEST.fullmatch(item.get("digest") or "")
+                return found.group(1) if found else None
+    except Exception:
+        return None
+    return None
+
+
+def _answerer_rows(cx, run_id: int) -> list[dict]:
+    return [dict(r) for r in cx.execute(
+        "SELECT answerer,endpoint,model,pricing_basis,outcome,reason,recorded,reservation_id,model_digest "
+        "FROM archive_run_answerers WHERE run_id=? ORDER BY rowid", (run_id,))]
+
+
+def shown_status(status: str, answerer_rows: list[dict]) -> str:
+    """`complete_with_gaps` for a run that reached its end with at least one model skipped. The stored
+    status of such a run is `complete`: it asked everything it could."""
+    return "complete_with_gaps" if status == "complete" and any(r["outcome"] == "skipped" for r in answerer_rows) else status
 
 
 def _summary(run_id: int) -> dict:
@@ -772,13 +1049,30 @@ def _summary(run_id: int) -> dict:
             counts[state] = int(n)
         usd = cx.execute("SELECT COALESCE(SUM(estimated_usd),0) FROM archive_answers WHERE run_id=?", (run_id,)).fetchone()[0]
         asked = {r["track"]: int(r["questions"]) for r in cx.execute("SELECT track,questions FROM archive_run_sets WHERE run_id=?", (run_id,))}
-    return {"run": run["number"], "kind": run["kind"], "mock": run["kind"] == "mock", "mock_kind": run["mock_kind"],
-            "status": run["status"], "stop_reason": run["stop_reason"], "question_set": run["question_set"],
-            "questions_asked": asked,
-            "answers": counts, "estimated_usd": round(float(usd), 6), "max_usd": run["max_usd"]}
+        per_answerer = _answerer_rows(cx, run_id)
+    summary = {"run": run["number"], "kind": run["kind"], "mock": run["kind"] == "mock", "mock_kind": run["mock_kind"],
+               "status": shown_status(run["status"], per_answerer), "stop_reason": run["stop_reason"], "question_set": run["question_set"],
+               "questions_asked": asked,
+               "answers": counts, "estimated_usd": round(float(usd), 6), "max_usd": run["max_usd"]}
+    if per_answerer:
+        summary["answerers"] = per_answerer
+    return summary
 
 
 # ---- Paid run (operator only) ------------------------------------------------------------------
+
+def _check_ready(models: list[dict]) -> None:
+    """Local gate before a run: every provider and endpoint usable, every key present. Sends nothing."""
+    try:
+        for provider in sorted({a["provider"] for a in models if a["record"] is None}):
+            providers.check_ready(provider)
+        providers.timeout_seconds()
+        for record in {a["record"].name: a["record"] for a in models if a["record"] is not None}.values():
+            providers.endpoint_api_key(record)
+    except providers.ProviderConfigError as err:
+        hint = " For a free plumbing check, run: python -m live_genesis.cli archive-dry-run" if "missing" in str(err) else ""
+        raise ArchiveRefused(f"{err}.{hint}") from None
+
 
 def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0,
                 question_set: str | None = None) -> dict:
@@ -789,30 +1083,33 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
     run over no locked track is refused.
 
     Refuses (ArchiveRefused / controls.ConfigError), before any provider request and before a run
-    row is written, when: no model is configured, a provider is unknown or its key is missing, the
-    paid opt-in is not exactly YES, the budget settings are unusable, `max_usd` is not a positive
-    finite number, the question list is not locked or the file differs from the lock (real adapter
-    only), scripted demo answers are in this database, the worst case does not fit under `max_usd`
-    or the remaining local ceiling, or an unconfirmed reservation is outstanding.
+    row is written, when: no model is configured, a provider or endpoint is unknown or unusable or
+    its key is missing, the paid opt-in is not exactly YES (also for a run that costs nothing), the
+    budget settings are unusable, `max_usd` is not a positive finite number, the question list is
+    not locked or the file differs from the lock (real adapter only), scripted demo answers are in
+    this database, the worst case does not fit under `max_usd` or the remaining local ceiling, or
+    an unconfirmed reservation is outstanding.
 
-    Every call holds its worst case first (reserve -> infer -> settle, `agent_id=NULL`). The run
-    STOPS (status `incomplete`, no further call) on a failed inference, a refused reservation or
-    usage above a hold. Nothing is retried and an interrupted run is never resumed.
+    Every call holds its worst case first (reserve -> infer -> settle, `agent_id=NULL`), priced at
+    its own endpoint's rates. Models are asked one after another, zero-priced ones first.
+
+    FAILURE_RULE. A failed call on a zero-priced endpoint (`local`, `declared-free`) releases its
+    $0 hold, skips THAT model for the rest of the run (reason category in `archive_run_answerers`)
+    and the run goes on; it then ends `complete_with_gaps`. On a priced endpoint (`rates`) nothing
+    changed: the run STOPS (status `incomplete`, no further call) on a failed inference, and its
+    hold stays `unconfirmed`. The run also stops on a refused reservation or usage above a hold.
+    Nothing is retried and an interrupted run is never resumed.
     A run made through a replaced `engine.infer` is stored as mock and is never public.
     """
     from . import engine  # lazy: see module docstring
-    models = answerers(only)
-    for provider in sorted({a["provider"] for a in models}):
-        try:
-            providers.check_ready(provider)
-        except providers.ProviderConfigError as err:
-            hint = " For a free plumbing check, run: python -m live_genesis.cli archive-dry-run" if str(err).endswith("missing") else ""
-            raise ArchiveRefused(f"{err}.{hint}") from None
+    _check_ready([{**a, "record": None} for a in answerers(only) if not a.get("endpoint")])   # native providers and the single endpoint
     if os.getenv("LIVE_ALLOW_PAID_CALLS") != "YES":
         raise ArchiveRefused("Explicit opt-in required for paid calls: set LIVE_ALLOW_PAID_CALLS=YES")
     if isinstance(max_usd, bool) or not isinstance(max_usd, (int, float)) or not math.isfinite(max_usd) or max_usd <= 0:
         raise ArchiveRefused("--max-usd is required and must be a finite positive number. No paid call was made.")
-    planned = plan(only, question_set)  # validates the question files, the locks and the budget settings (fail closed)
+    planned = plan(only, question_set)  # validates the question files, the locks, the endpoints and the budget settings (fail closed)
+    models = planned["models"]
+    _check_ready(models)
     asked = [state for state in planned["tracks"] if state["asked"]]
     real = engine.infer is engine.REAL_INFER
     worst = planned["worst_case_usd"]
@@ -838,56 +1135,97 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
     if baseline + worst > ceiling:
         raise ArchiveRefused(f"Worst-case estimate ${worst:.6f} does not fit under the local ceiling: ${baseline:.6f} of "
                              f"${ceiling:.2f} is already committed. No paid call was made.")
-    input_rate, output_rate, tokens = planned["input_rate"], planned["output_rate"], planned["max_output_tokens"]
     cap_ceiling = min(planned["spend_limit_usd"], baseline + max_usd + study.LEDGER_ROUNDING_USD)
     kind, source = ("real", "engine") if real else ("mock", "mock")
     with core.connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
-        run_id, _ = _open_run(cx, kind, asked, max_usd=float(max_usd), tokens=tokens, mock_kind="" if real else "patched-infer")
+        run_id, number = _open_run(cx, kind, asked, max_usd=float(max_usd), tokens=planned["max_output_tokens"],
+                                   mock_kind="" if real else "patched-infer")
     status, reason = "incomplete", "interrupted before the run finished"
     spent: list[float] = []
     unconfirmed = ("Check provider billing, then run: cli reconcile --receipt {0} --actual-usd <charged amount>")
+    progress = {a["label"]: {"outcome": "not_asked", "reason": "", "recorded": 0, "reservation": None, "digest": None} for a in models}
+
+    def skip(answerer: dict, reservation: int, category: str) -> None:
+        """A failed call on a zero-priced endpoint: release the $0 hold, drop this model, go on (audited)."""
+        core.close_reservation(reservation, "released")
+        progress[answerer["label"]].update(outcome="skipped", reason=category, reservation=reservation)
+        with core.connect() as cx:
+            controls.audit(cx, f"archive run {number} ({kind}): {answerer['label']} skipped ({category}); $0 hold {reservation} "
+                               f"released (pricing basis {answerer['basis']})")
+
     try:
         for answerer in models:
+            state_of = progress[answerer["label"]]
+            zero = answerer["basis"] in ZERO_PRICED
+            tokens = answerer["max_output_tokens"]
+            record = answerer["record"]
+            try:
+                where = record if record is not None else providers.compat_settings() if answerer["local"] else None
+            except providers.ProviderConfigError:
+                where = None
+            digest = state_of["digest"] = lookup_model_digest(where, answerer["model"])
+            extra: dict[str, Any] = {}   # only what this call needs: a resident-style call passes neither
+            if record is not None:
+                extra["endpoint"] = record
+            if answerer["send_sampling"]:
+                extra["sampling"] = dict(SAMPLING)
+            wait = max(float(pause_seconds or 0.0), answerer["pause_seconds"], 0.0)
+            state_of["outcome"] = "stopped"   # until this model's last question is stored
             for question in planned["questions"]:
-                hold = planned["holds"][question["id"]]
+                hold = planned["holds_by_model"][answerer["label"]][question["id"]]
                 if math.fsum(spent) + hold > max_usd + study.EPSILON_USD:
                     reason = "run cap reached; no further calls made"
                     break
                 try:
                     reservation = core.reserve_budget(None, answerer["model"], hold, cap_ceiling, provider=answerer["provider"],
-                                                      input_rate=input_rate, output_rate=output_rate)
+                                                      input_rate=answerer["input_rate"], output_rate=answerer["output_rate"])
                 except core.ReconciliationRequired as exc:
                     reason = str(exc)
                     break
                 except core.BudgetExceeded:
                     reason = "local estimated spending ceiling or run cap reached; no further calls made"
                     break
+                started = time.monotonic()
                 try:
                     result = engine.infer(answerer["provider"], answerer["model"], question["prompt"], system=SYSTEM_LINE,
-                                          max_output_tokens=tokens)
+                                          max_output_tokens=tokens, **extra)
+                    latency_ms = int((time.monotonic() - started) * 1000)
                     text, tokens_in, tokens_out = result.text, result.input_tokens, result.output_tokens
                     if not isinstance(text, str):
                         raise TypeError("completion text missing")
                     stop = getattr(result, "stop", "unknown")
                     stop = stop if stop in engine.STOP_VALUES else "unknown"
                 except engine.ProviderNotReady:
+                    if zero:
+                        skip(answerer, reservation, "not_ready")
+                        break
                     core.close_reservation(reservation, "released")  # nothing was sent
                     reason = "provider not ready (local setup); nothing was sent for this call"
+                    state_of.update(reason="not_ready", reservation=reservation)
                     break
-                except Exception:
+                except Exception as exc:
+                    # Provider exception text is never stored or echoed: it can contain secrets. Only a category is kept.
+                    category = failure_category(exc)
+                    if zero:
+                        skip(answerer, reservation, category)   # nothing could be charged at zero rates: see FAILURE_RULE
+                        break
                     # The request may have been billed: keep the hold as unconfirmed and STOP.
-                    # Provider exception text is never stored or echoed: it can contain secrets.
                     core.close_reservation(reservation, "unconfirmed")
                     reason = (f"inference failed; ${hold:.6f} kept as unconfirmed (reservation {reservation}). "
                               + unconfirmed.format(reservation))
+                    state_of.update(reason=category, reservation=reservation)
                     break
                 try:
                     usd = core.settle_reservation(reservation, tokens_in, tokens_out)
                 except Exception:
+                    if zero:
+                        skip(answerer, reservation, "no_usage")
+                        break
                     core.close_reservation(reservation, "unconfirmed")
                     reason = (f"provider usage was missing or invalid; ${hold:.6f} kept as unconfirmed (reservation "
                               f"{reservation}). " + unconfirmed.format(reservation))
+                    state_of.update(reason="no_usage", reservation=reservation)
                     break
                 spent.append(usd)
                 state, why, kept = classify(text, stop)
@@ -895,20 +1233,38 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
                     cx.execute("BEGIN IMMEDIATE")
                     _store(cx, run_id, question["question_set"], question["id"], answerer["label"], model=answerer["model"],
                            source=source, state=state, reason=why, text=kept, provider=answerer["provider"],
-                           reservation=reservation, input_tokens=tokens_in, output_tokens=tokens_out, usd=usd)
+                           reservation=reservation, input_tokens=tokens_in, output_tokens=tokens_out, usd=usd,
+                           call=_call_record(answerer, result, latency_ms, digest))
+                state_of["recorded"] += 1
                 if usd > hold:
                     reason = (f"recorded usage exceeded the hold; reservation {reservation} is unconfirmed. "
                               + unconfirmed.format(reservation))
+                    state_of["reservation"] = reservation
                     break
-                if pause_seconds:
-                    time.sleep(max(0.0, pause_seconds))
+                if wait:
+                    time.sleep(wait)
             else:
+                state_of["outcome"] = "complete"
                 continue
+            if state_of["outcome"] == "skipped":
+                continue          # this model only; the next one is asked
             break
         else:
-            status, reason = "complete", ""
+            skipped = [f"{a['label']} ({progress[a['label']]['reason']})" for a in models if progress[a["label"]]["outcome"] == "skipped"]
+            status, reason = "complete", ("skipped, no further question asked of: " + ", ".join(skipped)) if skipped else ""
     finally:
-        _close_run(run_id, status, reason)  # also on KeyboardInterrupt: a held reservation then stays counted
+        # Also on KeyboardInterrupt: a held reservation then stays counted, and each model's outcome is still written.
+        try:
+            with core.connect() as cx:
+                cx.execute("BEGIN IMMEDIATE")
+                for answerer in models:
+                    done = progress[answerer["label"]]
+                    cx.execute("INSERT INTO archive_run_answerers(run_id,answerer,endpoint,provider,model,pricing_basis,outcome,"
+                               "reason,recorded,reservation_id,model_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                               (run_id, answerer["label"], answerer["endpoint"], answerer["provider"], answerer["model"],
+                                answerer["basis"], done["outcome"], done["reason"], done["recorded"], done["reservation"], done["digest"]))
+        finally:
+            _close_run(run_id, status, reason)
     return _summary(run_id)
 
 
@@ -1212,6 +1568,24 @@ def _trending_public(cx, has_tables: bool, demo: bool) -> dict:
             "questions": [_public_question(q, TRENDING_FIELDS) for q in data["questions"]]}
 
 
+PUBLIC_CALL_FIELDS = ("endpoint", "reported_model", "model_digest", "pricing_basis", "sampling_pinned", "local")
+
+
+def _public_call(row: dict) -> dict:
+    """The part of a server call's record that is public: the endpoint NAME, the model name the
+    provider reported, the first 12 hex digits of a local model's digest, the pricing basis,
+    whether sampling was pinned and whether the model ran on the operator's machine. All None for
+    an answer that was not a server call, or was recorded before these were kept. Never the URL,
+    the fingerprint, the latency or the raw finish reason."""
+    if row.get("source") != "engine":
+        return dict.fromkeys(PUBLIC_CALL_FIELDS)
+    digest, sampling, local = row.get("model_digest"), row.get("sampling"), row.get("local")
+    return {"endpoint": row.get("endpoint"), "reported_model": row.get("reported_model"),
+            "model_digest": digest[:DIGEST_PUBLIC_CHARS] if digest else None, "pricing_basis": row.get("pricing_basis"),
+            "sampling_pinned": None if sampling is None else sampling != NOT_PINNED,
+            "local": None if local is None else bool(local)}
+
+
 def public_payload(readonly: bool = True) -> dict:
     """Everything the public pages show. Mock rows and runs are never included. Questions come
     from the locked copy in the database when there is one, otherwise from the file (draft).
@@ -1226,13 +1600,19 @@ def public_payload(readonly: bool = True) -> dict:
             # trending track): the one lock such a database can hold is the core lock.
             row = cx.execute("SELECT * FROM archive_sets ORDER BY locked_at, question_set LIMIT 1").fetchone()
             locked = dict(row) if row else None
-        runs, answers, questions, groups, covered = [], [], [], [], {}
+        runs, answers, questions, groups, covered, skipped = [], [], [], [], {}, {}
         if "archive_runs" in tables:
             runs = [dict(r) for r in cx.execute("SELECT id,number,kind,started_at FROM archive_runs WHERE kind!='mock' ORDER BY number")]
-            answers = [dict(r) for r in cx.execute(
-                "SELECT a.id,r.number AS run,a.question_id AS question,a.answerer,a.model,a.source,a.state,a.reason,"
-                "a.answer_text AS text,a.changed,a.created_at FROM archive_answers a JOIN archive_runs r ON r.id=a.run_id "
+            # a.* and .get: a database opened read-only before migrate() ran has no endpoint columns yet.
+            stored = [dict(r) for r in cx.execute(
+                "SELECT a.*,r.number AS run FROM archive_answers a JOIN archive_runs r ON r.id=a.run_id "
                 "WHERE r.kind!='mock' AND a.source!='mock' ORDER BY r.number,a.id")]
+            answers = [{"id": a["id"], "run": a["run"], "question": a["question_id"], "answerer": a["answerer"], "model": a["model"],
+                        "source": a["source"], "state": a["state"], "reason": a["reason"], "text": a["answer_text"],
+                        "changed": a["changed"], "created_at": a["created_at"], **_public_call(a)} for a in stored]
+        if "archive_run_answerers" in tables:
+            for row in cx.execute("SELECT run_id,answerer,reason FROM archive_run_answerers WHERE outcome='skipped'"):
+                skipped.setdefault(row["run_id"], {})[row["answerer"]] = row["reason"] or "other"
         if current:
             for row in cx.execute("SELECT run_id,track,questions FROM archive_run_sets"):
                 covered.setdefault(row["run_id"], {})[row["track"]] = int(row["questions"])
@@ -1260,7 +1640,10 @@ def public_payload(readonly: bool = True) -> dict:
             "system_line": SYSTEM_LINE, "changed_rule": CHANGED_RULE,
             "groups": groups, "questions": questions, "trending": trending, "answerers": labels,
             "runs": [{"number": r["number"], "date": r["started_at"], "demo": r["kind"] == "demo",
-                      "asked": {track: covered.get(r["id"], legacy).get(track, 0) for track in TRACKS}} for r in runs],
+                      "asked": {track: covered.get(r["id"], legacy).get(track, 0) for track in TRACKS},
+                      # Models dropped from this run after a failed call, with the reason category. Only models
+                      # that have a recorded answer somewhere are listed (the others have no column to show).
+                      "skipped": {label: why for label, why in skipped.get(r["id"], {}).items() if label in labels}} for r in runs],
             "answers": answers, "answers_by_source": by_source}
 
 
@@ -1291,6 +1674,42 @@ def _questions_problem(groups: list, questions: list, fields: tuple) -> str | No
     for question in questions:
         if not all(isinstance(question.get(k), str) for k in fields[1:]) or question["group"] not in names:
             return "a question lacks a field or names an unknown group"
+    return None
+
+
+PUBLIC_DIGEST = re.compile(r"[0-9a-f]{%d}" % DIGEST_PUBLIC_CHARS)
+PUBLIC_ENDPOINT = re.compile(r"[a-z0-9][a-z0-9-]{0,23}")
+
+
+def _call_problem(answer: dict) -> str | None:
+    """The endpoint fields of one public answer: each None (or absent: not recorded) or well-formed.
+    The endpoint is a NAME: a URL cannot pass. `export_problem` also requires them to be present."""
+    endpoint, reported, digest = answer.get("endpoint"), answer.get("reported_model"), answer.get("model_digest")
+    if endpoint is not None and not (isinstance(endpoint, str) and PUBLIC_ENDPOINT.fullmatch(endpoint)):
+        return "an answer's endpoint is not a plain name"
+    if reported is not None and not (isinstance(reported, str) and REPORTED.fullmatch(reported) and ".." not in reported
+                                     and not core.DECLARED_DOMAIN.search(reported)):
+        return "an answer's reported model name is not well-formed"
+    if digest is not None and not (isinstance(digest, str) and PUBLIC_DIGEST.fullmatch(digest)):
+        return f"an answer's model digest is not {DIGEST_PUBLIC_CHARS} hex digits"
+    if answer.get("pricing_basis") is not None and answer["pricing_basis"] not in providers.PRICING_BASES:
+        return "an answer's pricing basis is unknown"
+    if any(answer.get(key) is not None and type(answer[key]) is not bool for key in ("sampling_pinned", "local")):
+        return "an answer's sampling or local flag is not true, false or null"
+    return None
+
+
+def export_problem(data: dict) -> str | None:
+    """Stricter than payload_problem, for a file that is to be published (snapshot --export / --check):
+    every answer carries all its endpoint fields, an answer that was not a server call has none set,
+    and every run says which models it skipped. `data` already passed payload_problem."""
+    for answer in data["answers"]:
+        if any(key not in answer for key in PUBLIC_CALL_FIELDS):
+            return "an answer lacks its endpoint fields"
+        if answer["source"] == "api" and any(answer[key] is not None for key in PUBLIC_CALL_FIELDS):
+            return "a self-declared answer carries endpoint fields; only a server call has them"
+    if any("skipped" not in run for run in data["runs"]):
+        return "a run does not say which models it skipped"
     return None
 
 
@@ -1343,6 +1762,9 @@ def payload_problem(data: object) -> str | None:
         if run["number"] in asked:
             return "run numbers repeat"
         asked[run["number"]] = counts
+        gaps = run.get("skipped", {})
+        if not isinstance(gaps, dict) or any(label not in data["answerers"] or why not in SKIP_REASONS for label, why in gaps.items()):
+            return "a run's list of skipped models is missing or invalid"
     seen = set()
     for answer in data["answers"]:
         if type(answer.get("id")) is not int or answer.get("run") not in asked or answer.get("question") not in place \
@@ -1353,6 +1775,9 @@ def payload_problem(data: object) -> str | None:
             return "an answer has a missing or invalid field"
         if (answer["state"] == "answered") != isinstance(answer.get("text"), str) or (answer["state"] != "answered" and answer.get("text") is not None):
             return "an answer's text does not fit its state"
+        problem = _call_problem(answer)
+        if problem:
+            return problem
         track, position = place[answer["question"]]
         if position > asked[answer["run"]][track]:
             return "an answer belongs to a question its run did not ask"
@@ -1392,15 +1817,30 @@ def status() -> dict:
         versions = [dict(r) for r in cx.execute(
             "SELECT v.version,v.sha256,v.questions,v.locked_at FROM archive_set_versions v JOIN archive_sets s "
             "ON s.question_set=v.question_set WHERE s.track='trending' ORDER BY v.version")]
+        # The last run made by archive-run (real, or mock through a replaced adapter): how far each model got.
+        last = cx.execute("SELECT r.id,r.number,r.kind,r.status FROM archive_runs r WHERE EXISTS "
+                          "(SELECT 1 FROM archive_run_answerers x WHERE x.run_id=r.id) ORDER BY r.id DESC LIMIT 1").fetchone()
+        last_run = None
+        if last:
+            per_answerer = _answerer_rows(cx, last["id"])
+            last_run = {"run": last["number"], "kind": last["kind"], "status": shown_status(last["status"], per_answerer),
+                        "answerers": per_answerer}
+        gaps = {r[0] for r in cx.execute("SELECT DISTINCT run_id FROM archive_run_answerers WHERE outcome='skipped'")}
+        ids = {(r["kind"], r["number"]): r["id"] for r in cx.execute("SELECT id,kind,number FROM archive_runs")}
     file_state, matches = _file_state("core", locked)
     trending_file, trending_matches = _file_state("trending", trending)
     for run in runs:
         run["estimated_usd"] = round(float(run["estimated_usd"]), 6)
+        if run["status"] == "complete" and ids.get((run["kind"], run["number"])) in gaps:
+            run["status"] = "complete_with_gaps"
     return {"question_file": file_state, "locked": locked, "file_matches_lock": matches,
             "trending": {"question_file": trending_file, "locked": trending, "file_matches_lock": trending_matches,
                          "versions": versions},
-            "models_configured": os.getenv("LIVE_ARCHIVE_MODELS", "").strip() or None, "runs": runs,
-            "note": "mock runs are never published; estimated_usd is " + study.COST_CAVEAT}
+            "models_configured": os.getenv("LIVE_ARCHIVE_MODELS", "").strip() or None,
+            "endpoints_configured": os.getenv(config.ENDPOINTS_VARIABLE, "").strip() or None, "runs": runs,
+            "last_run_answerers": last_run,
+            "note": "mock runs are never published; estimated_usd is " + study.COST_CAVEAT
+                    + "; a declared-free endpoint is the operator's unverified statement and always shows $0"}
 
 
 # ---- CLI glue ------------------------------------------------------------------------------------------
@@ -1415,7 +1855,7 @@ def add_parsers(sub) -> None:
     dry = sub.add_parser("archive-dry-run", help="Answers Over Time plumbing check with built-in FAKE answers (free; stored as mock; never published)")
     run = sub.add_parser("archive-run", help="PAID: ask every locked question of every configured model once. Needs the operator's explicit decision, the paid opt-in and a key")
     run.add_argument("--max-usd", type=float, required=True, help="Hard cap on this run's estimated USD; the worst case must fit under it before the first call")
-    run.add_argument("--pause", type=float, default=0.0, help="Seconds to wait between calls")
+    run.add_argument("--pause", type=float, default=0.0, help="Seconds to wait between calls (an endpoint's own _PAUSE_SECONDS applies when it is longer)")
     for parser in (plan_p, dry, run):
         parser.add_argument("--models", help="Comma-separated labels from LIVE_ARCHIVE_MODELS (default: all)")
         parser.add_argument("--set", dest="question_set", choices=TRACKS, default=None, help="Only this question set (default: both)")
@@ -1446,7 +1886,7 @@ def handle_command(args, parser) -> bool:
             print(MOCK_BANNER)
         elif args.command == "archive-run":
             print(render_plan(plan(args.models, args.question_set)))
-            print("PAID RUN: provider requests follow. A failed call stops the run and blocks paid calls until reconciled.")
+            print("PAID RUN: provider requests follow. A failed call is handled by the rule printed above (\"If a call fails\").")
             config.load_provider_credentials()  # with `cli round` and `cli study-run`, the only place .env provider keys enter a process
             # Answers are plain sentences, not JSON objects: JSON mode is for resident turns only.
             os.environ["LIVE_COMPAT_JSON_MODE"] = "off"
@@ -1454,7 +1894,9 @@ def handle_command(args, parser) -> bool:
             print(json.dumps(done, indent=2))
             if done["mock"]:
                 print(MOCK_BANNER)
-            if done["status"] != "complete":
+            if done["status"] == "complete_with_gaps":
+                print("RUN COMPLETE WITH GAPS:", done["stop_reason"])
+            elif done["status"] != "complete":
                 print("RUN INCOMPLETE:", done["stop_reason"])
             print(f"Estimated cost is {study.COST_CAVEAT}. Answers are published only through the reviewed path: "
                   "python -m live_genesis.snapshot --export")

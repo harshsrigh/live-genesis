@@ -123,6 +123,11 @@ class ProviderNotReady(RuntimeError):
     """Local setup problem detected before any request was sent to a provider."""
 
 
+class UsageMissing(RuntimeError):
+    """The provider answered without usable token counts. A RuntimeError as before, so `round` and `study-run`
+    treat it as any failed call; live_genesis/archive.py records it under its own category."""
+
+
 @dataclass
 class Completion:
     text: str
@@ -131,12 +136,49 @@ class Completion:
     # Why the provider stopped, normalised: 'end' (finished), 'length' (cut off at the output limit),
     # 'other' (refusal, filter, tool call, ...) or 'unknown' (the server did not say).
     stop: str = 'unknown'
+    # What the provider's response said about itself. Untrusted text: only live_genesis/archive.py reads these,
+    # and it shape-checks each before storing. None when the server did not say (or the adapter was replaced).
+    reported_model: str | None = None      # the model name in the response, which can differ from the one requested
+    system_fingerprint: str | None = None  # Chat Completions only, when the server sends one
+    finish_reason: str | None = None       # the raw finish / stop reason behind `stop`
+    sampling: dict | None = None           # the sampling parameters actually sent ({} = none); None = not recorded
 
 
 def _stop(value: Any, *, end: tuple[str, ...], length: str) -> str:
     if not isinstance(value, str) or not value:
         return 'unknown'
     return 'length' if value == length else 'end' if value in end else 'other'
+
+
+def _text_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _chat(client: Any, model: str, system: str, prompt: str, max_output_tokens: int, *, json_mode: bool,
+          reasoning_effort: str | None, sampling: dict | None) -> Completion:
+    """One Chat Completions request on a client that is already built. Shared by the single
+    `openai-compatible` provider and the named archive endpoints."""
+    request: dict[str, Any] = {'model': model, 'max_tokens': max_output_tokens,
+                               'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}]}
+    if json_mode:
+        request['response_format'] = {'type': 'json_object'}
+    if reasoning_effort:
+        request['reasoning_effort'] = reasoning_effort
+    sent = {key: sampling[key] for key in ('temperature', 'seed') if sampling and key in sampling}
+    request.update(sent)
+    response = client.chat.completions.create(**request)
+    usage = getattr(response, 'usage', None)
+    tokens = (getattr(usage, 'prompt_tokens', None), getattr(usage, 'completion_tokens', None))
+    if any(type(n) is not int or n < 0 for n in tokens):
+        # No numbers are invented: the callers keep the hold as unconfirmed and stop.
+        raise UsageMissing('Provider usage missing; inference not recorded as priced')
+    choices = getattr(response, 'choices', None) or []
+    text = getattr(getattr(choices[0], 'message', None), 'content', None) if choices else None
+    finish = getattr(choices[0], 'finish_reason', None) if choices else None
+    return Completion(text if isinstance(text, str) else '', tokens[0], tokens[1], _stop(finish, end=('stop',), length='length'),
+                      reported_model=_text_or_none(getattr(response, 'model', None)),
+                      system_fingerprint=_text_or_none(getattr(response, 'system_fingerprint', None)),
+                      finish_reason=_text_or_none(finish), sampling=sent if sampling is not None else None)
 
 
 def parse_object(text: str) -> dict:
@@ -152,41 +194,49 @@ def parse_object(text: str) -> dict:
     return result
 
 
-def infer(provider: str, model: str, prompt: str, *, system: str | None = None, max_output_tokens: int | None = None) -> Completion:
+def infer(provider: str, model: str, prompt: str, *, system: str | None = None, max_output_tokens: int | None = None,
+          endpoint: Any = None, sampling: dict | None = None) -> Completion:
     """One provider request. `system` and `max_output_tokens` default to the resident turn's values
-    (constitution() and LIVE_MAX_OUTPUT_TOKENS); only live_genesis/study.py passes others (its calls are not resident turns)."""
+    (constitution() and LIVE_MAX_OUTPUT_TOKENS); only live_genesis/study.py and archive.py pass others (their calls
+    are not resident turns).
+
+    `endpoint` and `sampling` are passed by live_genesis/archive.py only; a resident turn and a study call send
+    neither, and their requests are unchanged. `endpoint` is a providers.Endpoint: the request then goes to that
+    server and to no other, with that endpoint's own key. `sampling` ({'temperature': 0, 'seed': N}) is sent as far
+    as the API takes it: Chat Completions both, the two native APIs `temperature` only (neither has a seed).
+    Completion.sampling says what was sent."""
     try:
         if max_output_tokens is None:
             max_output_tokens = providers.max_output_tokens()
         if system is None:
             system = constitution(max_output_tokens)
         timeout = providers.timeout_seconds()  # LIVE_INFER_TIMEOUT_SECONDS: default 35, clamped 5-600
-        compat = providers.compat_settings() if provider == providers.COMPATIBLE else None
+        compat = providers.compat_settings() if provider == providers.COMPATIBLE and endpoint is None else None
         compat_key = providers.compat_api_key(compat) if compat else None
+        endpoint_key = providers.endpoint_api_key(endpoint) if endpoint is not None else None
     except providers.ProviderConfigError as err:
         raise ProviderNotReady(str(err)) from None
+    if endpoint is not None:
+        if provider != providers.COMPATIBLE:
+            raise ProviderNotReady('A named endpoint speaks the OpenAI Chat Completions API only')
+        # A client per call, built from this endpoint's record alone: its base URL, its own key, no retry, and no
+        # redirect followed (a redirect would carry the prompt, and could carry the key, to a host nobody configured).
+        import httpx
+        from openai import OpenAI
+        with httpx.Client(follow_redirects=False, timeout=timeout) as http:
+            client = OpenAI(base_url=endpoint.base_url, api_key=endpoint_key, timeout=timeout, max_retries=0, http_client=http)
+            return _chat(client, model, system, prompt, max_output_tokens, json_mode=False,
+                         reasoning_effort=endpoint.reasoning_effort, sampling=sampling)
     if compat:
         # Any server speaking the OpenAI Chat Completions API (local or hosted). The base URL and key are
         # passed explicitly, never taken from OPENAI_* variables. Exceptions from here on are caught by the
         # callers, which never echo their text.
         from openai import OpenAI
         client = OpenAI(base_url=compat.base_url, api_key=compat_key, timeout=timeout, max_retries=0)
-        request: dict[str, Any] = {'model': model, 'max_tokens': max_output_tokens,
-                                   'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}]}
-        if compat.json_mode:
-            request['response_format'] = {'type': 'json_object'}
-        if compat.reasoning_effort:
-            request['reasoning_effort'] = compat.reasoning_effort
-        response = client.chat.completions.create(**request)
-        usage = getattr(response, 'usage', None)
-        tokens = (getattr(usage, 'prompt_tokens', None), getattr(usage, 'completion_tokens', None))
-        if any(type(n) is not int or n < 0 for n in tokens):
-            # No numbers are invented: the callers keep the hold as unconfirmed and stop.
-            raise RuntimeError('Provider usage missing; inference not recorded as priced')
-        choices = getattr(response, 'choices', None) or []
-        text = getattr(getattr(choices[0], 'message', None), 'content', None) if choices else None
-        finish = getattr(choices[0], 'finish_reason', None) if choices else None
-        return Completion(text if isinstance(text, str) else '', tokens[0], tokens[1], _stop(finish, end=('stop',), length='length'))
+        return _chat(client, model, system, prompt, max_output_tokens, json_mode=compat.json_mode,
+                     reasoning_effort=compat.reasoning_effort, sampling=sampling)
+    sent = {'temperature': sampling['temperature']} if sampling and 'temperature' in sampling else {}
+    recorded = sent if sampling is not None else None
     if provider == 'openai':
         if not os.getenv('OPENAI_API_KEY'):
             raise ProviderNotReady('OPENAI_API_KEY missing')
@@ -194,17 +244,19 @@ def infer(provider: str, model: str, prompt: str, *, system: str | None = None, 
         client = OpenAI(timeout=timeout, max_retries=0)
         response = client.responses.create(
             model=model, instructions=system,
-            input=prompt, max_output_tokens=max_output_tokens,
+            input=prompt, max_output_tokens=max_output_tokens, **sent,
         )
         usage = response.usage
         if usage is None:
-            raise RuntimeError('Provider usage missing; inference not recorded as priced')
-        status = getattr(response, 'status', None)
+            raise UsageMissing('Provider usage missing; inference not recorded as priced')
+        status = raw = getattr(response, 'status', None)
         if status == 'incomplete':
             # Reasoning tokens count against max_output_tokens here: a reply can be cut off before any text.
             status = getattr(getattr(response, 'incomplete_details', None), 'reason', None) or 'incomplete'
         return Completion(response.output_text, int(usage.input_tokens), int(usage.output_tokens),
-                          _stop(status, end=('completed',), length='max_output_tokens'))
+                          _stop(status, end=('completed',), length='max_output_tokens'),
+                          reported_model=_text_or_none(getattr(response, 'model', None)),
+                          finish_reason=_text_or_none(status) or _text_or_none(raw), sampling=recorded)
     if provider == 'anthropic':
         if not os.getenv('ANTHROPIC_API_KEY'):
             raise ProviderNotReady('ANTHROPIC_API_KEY missing')
@@ -215,12 +267,14 @@ def infer(provider: str, model: str, prompt: str, *, system: str | None = None, 
         client = Anthropic(timeout=timeout, max_retries=0)
         response = client.messages.create(
             model=model, max_tokens=max_output_tokens, system=system,
-            messages=[{'role':'user', 'content':prompt}],
+            messages=[{'role':'user', 'content':prompt}], **sent,
         )
         texts = [part.text for part in response.content if getattr(part, 'type', '') == 'text']
         # Thinking tokens, where the model thinks by default, count against max_tokens as well.
         return Completion('\n'.join(texts), int(response.usage.input_tokens), int(response.usage.output_tokens),
-                          _stop(getattr(response, 'stop_reason', None), end=('end_turn', 'stop_sequence'), length='max_tokens'))
+                          _stop(getattr(response, 'stop_reason', None), end=('end_turn', 'stop_sequence'), length='max_tokens'),
+                          reported_model=_text_or_none(getattr(response, 'model', None)),
+                          finish_reason=_text_or_none(getattr(response, 'stop_reason', None)), sampling=recorded)
     raise ProviderNotReady(providers.UNKNOWN_PROVIDER)
 
 

@@ -8,6 +8,13 @@ server, or a hosted endpoint with a free tier.
 replaced SDK client. Nothing in this repository has contacted Ollama, a hosted free tier or
 any other endpoint. Expect to adjust settings on the first try.
 
+This page is about `round` and `study-run`, which use ONE endpoint and one pair of rates.
+Answers Over Time (`archive-run`) can ask several services in one run through named endpoints
+(`LIVE_ARCHIVE_ENDPOINTS`), each with its own base URL, key variable and rates, and there a
+hosted free tier may be declared free (`_FREE_TIER=YES`, zero rates). See "Several models from
+several services" in `docs/ANSWERS-OVER-TIME.md`. Nothing below about positive rates or about a
+failed call stopping everything was changed for `round` and `study-run`.
+
 What stays the same as for the paid providers: `round` and `study-run` run only on the
 operator's instruction; `LIVE_ALLOW_PAID_CALLS=YES` is still required (the name is historical:
 read it as "allow model calls"); every call is held against the estimated ceiling first; a
@@ -27,7 +34,7 @@ call: the hold becomes `unconfirmed` and the round stops; no numbers are invente
 | `LIVE_PROVIDER` | `openai` | `openai-compatible` selects this adapter |
 | `LIVE_MODEL` | none for this provider | exact model id the server expects (set it **before** `cli init`, or run `cli set-model`) |
 | `LIVE_COMPAT_BASE_URL` | required | e.g. `http://localhost:11434/v1`. Must be `https` unless the host is loopback (`localhost`, `127.x.x.x`, `::1`). No user:password, query or fragment |
-| `OPENAI_COMPATIBLE_API_KEY` | empty | a secret: loaded only by `round`, `study-run` and `check-provider`, removed from web processes. Not needed for a loopback server; required for any other host |
+| `OPENAI_COMPATIBLE_API_KEY` | empty | a secret: loaded only by `round`, `study-run`, `archive-run` and `check-provider`, removed from web processes. Not needed for a loopback server; required for any other host |
 | `LIVE_COMPAT_JSON_MODE` | `on` | sends `response_format={"type":"json_object"}`. Set `off` if the server rejects it |
 | `LIVE_COMPAT_REASONING_EFFORT` | unset | `low`, `medium` or `high` is sent as `reasoning_effort`; unset sends nothing |
 | `LIVE_INFER_TIMEOUT_SECONDS` | `35` | per call, all providers; clamped to 5-600 |
@@ -91,8 +98,9 @@ LIVE_MODEL=<exact model id from the service>
 LIVE_INPUT_USD_PER_M=<a conservative positive figure, e.g. the service's paid price>
 LIVE_OUTPUT_USD_PER_M=<same>
 ```
-Positive rates are required for every non-loopback host, so the estimated ceiling keeps
-working if a free tier starts charging. The page then shows an estimated cost even if you paid
+For `round` and `study-run`, positive rates are required for every non-loopback host, so the
+estimated ceiling keeps working if a free tier starts charging. (For `archive-run` only, a named
+endpoint may be declared free; the answers are then labelled `declared-free`.) The page then shows an estimated cost even if you paid
 nothing; `cli reconcile --provider-usd 0` records what the bill really says. If the service
 rejects `response_format`, set `LIVE_COMPAT_JSON_MODE=off`. Rate limiting by the service shows
 up as a failed call and stops the round (nothing is retried).
@@ -109,4 +117,5 @@ python -m live_genesis.cli status
 a key is set (yes/no), whether the rates are zero or positive and whether zero is allowed, and
 for a loopback host whether a TCP connection opens. It never contacts a non-loopback host and
 cannot tell whether the server knows the model or returns token usage; only the first round
-shows that. Then follow `docs/FIRST-REAL-ROUND.md` for review and publishing.
+shows that. `python -m live_genesis.cli archive-check-endpoints` does the same for the archive's
+named endpoints. Then follow `docs/FIRST-REAL-ROUND.md` for review and publishing.
