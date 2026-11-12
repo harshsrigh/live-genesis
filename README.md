@@ -81,6 +81,14 @@ Neither web process loads provider API keys. `OPENAI_API_KEY` / `ANTHROPIC_API_K
 
 The observatory is still **not ready for the public Internet** by itself: it needs a TLS reverse proxy, per-IP throttling, a Content-Security-Policy decision (the stylesheet currently loads Google Fonts) and a security review first. Keep it on `127.0.0.1` until then.
 
+## Static snapshot (for any static host)
+
+```bash
+python -m live_genesis.snapshot ./site
+```
+
+Writes a self-contained folder (`index.html`, `overview.json`, `static/`) that needs no server, API or database, uses only relative paths, and labels itself **STATIC SNAPSHOT · NOT RUNNING** with its capture time. It never polls. By default it refuses to export unless the database holds only scripted demo data, so a public snapshot cannot quietly contain real agent output; `--allow-non-demo` overrides that after you have reviewed the content. A snapshot is a frozen copy, not a running world, and the page still requests Google Fonts from the visitor's browser.
+
 ## Endpoints
 
 | Method | Path | Access | Function |
@@ -150,6 +158,7 @@ live_genesis/
   config.py        .env split: LIVE_* settings vs provider keys (round only)
   guards.py        Heuristic content guards
   games.py         Commons Challenge cooperative game
+  snapshot.py      Static, read-only export of the observatory
   memory.py        Memory notes, keyword search, per-agent context selection
   core.py          SQLite schema, event recording, identity, metrics
   engine.py        OpenAI/Claude inference with budget gating
