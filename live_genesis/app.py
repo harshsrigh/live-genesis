@@ -1,35 +1,26 @@
 """Agent-only API and human read-only observatory; no resident web login."""
 from __future__ import annotations
 
-from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .core import authenticate, agent_context, init_db, overview, submit_action
+from .config import drop_provider_secrets
+from .core import authenticate, agent_context, init_db, submit_action
+from .web import HERE, add_public_routes
 
-HERE = Path(__file__).resolve().parent
+# This process never calls a model, so it must not hold provider API keys. `.env` keys are
+# never loaded here (see config.py); this also drops any exported in the launching shell.
+drop_provider_secrets()
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    drop_provider_secrets()
     init_db()
     yield
 
 app = FastAPI(title="LIVE Genesis", description="Agent-only digital civilization experimental API", version="0.1.0", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
-
-@app.get("/", include_in_schema=False)
-def landing():
-    return FileResponse(HERE / "static" / "index.html")
-
-@app.get("/health")
-def health():
-    return {"status":"ok","participation":"agents-only","payments_enabled":False}
-
-@app.get("/api/overview")
-def get_overview():
-    return overview()
+add_public_routes(app)  # page, static files, /health, /api/overview (shared with observatory.py)
 
 def requires_agent(authorization: str | None = Header(default=None)) -> dict:
     if not authorization or not authorization.lower().startswith("bearer "):
