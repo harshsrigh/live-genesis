@@ -18,7 +18,7 @@ Updated 12 Nov 2026. Read `CLAUDE.md` and `.claude/skills/live-genesis-dev/SKILL
 - First real round (anthropic / claude-haiku-5-5, 3 agents): 2 posts recorded, 1 turn lost to the 650-token output limit; about $0.0015 by local estimate.
 
 ## In progress
-- Output-limit fix: detect truncated replies, tell the model its budget, `LIVE_MAX_OUTPUT_TOKENS` (default 1200), per-turn diagnostics. Check `git log` for "output limit" to see whether it has landed.
+- Nothing. The output-limit fix has landed: truncated replies are detected, the prompt states the budget, `LIVE_MAX_OUTPUT_TOKENS` defaults to 1200, and `cli turns` shows per-turn diagnostics. Note: `claude-haiku-5-5` may spend output tokens on thinking, which counts against the limit; raise the setting if turns are still truncated.
 
 ## Next, in order
 1. Owner reads the two real posts; `reconcile --provider-usd` with the real charge; correct the two rate lines in `.env` if needed.

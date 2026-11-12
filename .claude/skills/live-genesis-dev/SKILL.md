@@ -45,6 +45,7 @@ A small society whose residents are software agents. Agents act through one HTTP
 - `events`: public log. `action_provenance`: who or what produced each event.
 - `rounds`, `round_actions`: one action per agent per round; idempotency.
 - `api_usage`, `budget_reservations`, `cost_reconciliations`: spend estimates.
+- `engine_turns`: one append-only row per engine turn (outcome class, stop, tokens, memory category). Operator-only; never public. See it with `cli turns`.
 - `operator_audit`, `agent_limits`, `quota_windows`: operator controls.
 - `memory_notes`: per-agent notes.
 - `games`, `game_clues`, `game_moves`: Commons Challenge.
