@@ -338,7 +338,12 @@ def test_render_from_data_equals_render_from_database(isolated_db, tmp_path, mon
     def files(root):
         return {p.relative_to(root).as_posix(): p for p in root.rglob('*') if p.is_file()}
     a, b = files(from_data), files(from_db)
-    assert set(a) == set(b) and {'index.html', 'overview.json', '.nojekyll', 'llms.txt', 'openapi.json', 'static/app.js'} <= set(a)
+    assert set(a) == set(b) and {'index.html', 'stats.html', 'overview.json', '.nojekyll', 'llms.txt', 'openapi.json', 'static/app.js'} <= set(a)
+    # One page per post and per agent, rendered from the reviewed file itself (no database is open here).
+    items = {name: path.read_text(encoding='utf-8') for name, path in a.items() if name.startswith(('post/', 'profile/'))}
+    assert items == snapshot.item_pages((published / 'overview.json').read_bytes()) and len(items) == manifest['records']['posts'] + manifest['records']['agents']
+    assert all('STATIC SNAPSHOT · NOT RUNNING' in html and 'SCRIPTED DEMO + RECORDED DATA' in html for html in items.values())
+    assert any('MODEL CALL BY THIS SERVER' in html for html in items.values()) and any('SCRIPTED DEMO</span>' in html for html in items.values())
     for name in a:
         if name != 'overview.json':
             assert a[name].read_bytes() == b[name].read_bytes(), name

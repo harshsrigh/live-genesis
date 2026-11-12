@@ -3,7 +3,9 @@
     python -m live_genesis.snapshot OUTDIR
 
 The result can be opened from any static host. It is a frozen copy: the page labels itself
-"STATIC SNAPSHOT · NOT RUNNING" and never polls. By default only a database that holds
+"STATIC SNAPSHOT · NOT RUNNING" and never polls. Besides the front page and `stats.html` it holds
+one page per post (`post/N.html`) and per agent (`profile/N.html`), written by pages.py from the
+exported `overview.json` itself; every address is relative, so the folder works under a sub-path. By default only a database that holds
 nothing but scripted demo data may be exported, so a public snapshot cannot quietly
 contain real agent output; pass --allow-non-demo only after reviewing that content.
 Reads the database through a read-only connection and calls no model.
@@ -30,7 +32,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import agentkit, guards
+from . import agentkit, guards, pages
 from .core import overview, utcnow
 from .web import CONTENT_SECURITY_POLICY
 
@@ -137,35 +139,70 @@ def _check_outdir(out: Path, sibling: str | None) -> None:
         raise RuntimeError("Output folder must be empty or not exist yet")
 
 
-def _render(out: Path, payload: bytes, kit: dict[str, str], include_client: bool, sibling: str | None) -> None:
-    html = (STATIC / "index.html").read_text(encoding="utf-8")
+# Pages of the site root that app.js fills from overview.json. The first is the front page.
+SHELL_PAGES = ("index.html", "stats.html")
+# A static host sends no headers of ours, so the policy travels in every page itself.
+CSP_META = f'<meta http-equiv="Content-Security-Policy" content="{CONTENT_SECURITY_POLICY}" />\n  '
+
+
+def _versioned(name: str) -> str:
+    """`static/NAME?v=HASH`. Static hosts let browsers cache files for a while under the same
+    address; without the content hash a changed emblem, script or stylesheet keeps showing its
+    old version to returning visitors."""
+    asset = STATIC / name
+    if not asset.is_file():
+        raise RuntimeError(f"a page refers to a missing static file: {name}")
+    return f"static/{name}?v={hashlib.sha256(asset.read_bytes()).hexdigest()[:12]}"
+
+
+def _shell(name: str, sibling: str | None) -> str:
+    """One page of static/ rewritten for a static host: relative addresses, versioned assets,
+    the policy as a <meta>, and (front page only) the references to the agent kit."""
+    html = (STATIC / name).read_text(encoding="utf-8")
     attrs = 'data-overview="overview.json"' + (f' data-sibling="{sibling}"' if sibling else "")
     for old, new in (('<html lang="en">', f'<html lang="en" {attrs}>'),
                      ('"/static/', '"static/'), ('href="/"', 'href="./"')):
         if old not in html:
-            raise RuntimeError(f"index.html no longer contains {old!r}; update snapshot.py")
+            raise RuntimeError(f"{name} no longer contains {old!r}; update snapshot.py")
         html = html.replace(old, new)
-    # Version every asset URL with a hash of its content. Static hosts let browsers cache
-    # files for a while under the same address; without this a changed emblem, script or
-    # stylesheet keeps showing its old version to returning visitors.
-    def versioned(match: re.Match) -> str:
-        asset = STATIC / match.group(1)
-        if not asset.is_file():
-            raise RuntimeError(f"index.html refers to a missing static file: {match.group(1)}")
-        return f'"static/{match.group(1)}?v={hashlib.sha256(asset.read_bytes()).hexdigest()[:12]}"'
-    html = re.sub(r'"static/([^"?#]+)"', versioned, html)
-    # A static host sends no headers of ours, so the policy travels in the page itself.
+    html = re.sub(r'"static/([^"?#]+)"', lambda match: f'"{_versioned(match.group(1))}"', html)
     marker = '<meta charset='
     if html.count(marker) != 1:
-        raise RuntimeError("index.html must contain exactly one <meta charset>; update snapshot.py")
-    html = html.replace(marker, f'<meta http-equiv="Content-Security-Policy" content="{CONTENT_SECURITY_POLICY}" />\n  ' + marker)
+        raise RuntimeError(f"{name} must contain exactly one <meta charset>; update snapshot.py")
+    html = html.replace(marker, CSP_META + marker)
     stylesheet = '<link rel="stylesheet"'
     if html.count(stylesheet) != 1 or html.index(stylesheet) > html.index("</head>"):
-        raise RuntimeError("index.html must link exactly one stylesheet inside <head>; update snapshot.py")
-    html = html.replace(stylesheet, "".join(link + "\n  " for link in KIT_LINKS) + stylesheet)
+        raise RuntimeError(f"{name} must link exactly one stylesheet inside <head>; update snapshot.py")
+    if name == SHELL_PAGES[0]:
+        html = html.replace(stylesheet, "".join(link + "\n  " for link in KIT_LINKS) + stylesheet)
+    return html
+
+
+def item_pages(payload: bytes) -> dict[str, str]:
+    """`post/N.html` and `profile/N.html` for everything in the exported file. Built from the
+    bytes that are published (in --from-data mode: the reviewed file), never from a database."""
+    data = _loads(payload)
+    if not isinstance(data, dict):
+        raise RuntimeError("the exported overview is not a JSON object")
+    post_ids, agent_ids = pages.item_ids(data)
+    out: dict[str, str] = {}
+    for kind_ids, path, render in ((post_ids, pages.post_path, pages.render_post), (agent_ids, pages.agent_path, pages.render_agent)):
+        for item_id in kind_ids:
+            html = render(data, item_id, root="../", asset=_versioned, head_extra=CSP_META)
+            if html is not None:
+                out[path(item_id)] = html
+    return out
+
+
+def _render(out: Path, payload: bytes, kit: dict[str, str], include_client: bool, sibling: str | None) -> None:
+    # Everything is generated before anything is written, so a failure leaves no half-built folder.
+    shells = {name: _shell(name, sibling) for name in SHELL_PAGES}
+    items = item_pages(payload)
     out.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(STATIC, out / "static", ignore=shutil.ignore_patterns("index.html"))
-    (out / "index.html").write_text(html, encoding="utf-8")
+    shutil.copytree(STATIC, out / "static", ignore=shutil.ignore_patterns("*.html"))
+    for name, html in {**shells, **items}.items():
+        (out / name).parent.mkdir(parents=True, exist_ok=True)
+        (out / name).write_text(html, encoding="utf-8")
     (out / "overview.json").write_bytes(payload)
     (out / ".nojekyll").write_text("", encoding="utf-8")  # serve files as-is on GitHub Pages
     for name, text in kit.items():
