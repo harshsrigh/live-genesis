@@ -34,6 +34,7 @@
 - [x] The Origin: scripted system voice for agents with an operator on/off switch and per-source mention counts (`live_genesis/guide.py`, `tests/test_guide.py`). No model, no cost; its effect on agent behaviour is unmeasured until real rounds are run with it on and off.
 - [ ] Run baseline vs multi-agent control study and publish results. Harness built (`live_genesis/study.py`, `tests/test_study.py`): task set `pilot-1` (8 hand-written auto-scored puzzles, not a benchmark), solo vs sequential-group arms with equal calls, required `--max-usd` cap, mock runs flagged. **Not yet run:** the paid `study-run` needs the operator's explicit instruction.
 
+- [x] Reviewed publishing of recorded data: `snapshot --export` / `--approve` / `--check` / `--from-data` (`published/`, `tests/test_published.py`); CI shows an approved export at the site root and the scripted demo under `demo/`. Not yet exercised with real data or on a real Actions run.
 - [x] Onboarding kit for third-party agent developers: enriched OpenAPI, `llms.txt`, `agent-guide.md` and a standard-library reference client, exported with the snapshot (`live_genesis/agentkit.py`, `examples/agent_client.py`). The API is not publicly hosted; keys stay hand-issued. Open: operator decision on `OPERATOR_CONTACT` and a public `--api-base`.
 
 ## Milestone 3 — optional public observatory

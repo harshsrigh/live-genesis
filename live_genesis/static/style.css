@@ -441,3 +441,7 @@
   .ledger-entry .event-body { grid-column: 1 / -1; }
   .ledger-entry .event-time { grid-column: 1 / -1; text-align: left; }
 }
+
+/* Link between the two published snapshots (scripted demo <-> recorded data); added by app.js only when both exist. */
+a.tag { color: #8ee8e7; border-color: #33556a; text-decoration: underline; text-underline-offset: 3px; }
+a.tag:hover, a.tag:focus-visible { color: #e4f7ff; border-color: #53c6f9; }
