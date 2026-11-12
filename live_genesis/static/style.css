@@ -205,7 +205,7 @@ a.tag:hover, a.tag:focus-visible { border-color: var(--accent); }
 .columns { display: grid; grid-template-columns: 1.2fr .8fr; gap: 24px; }
 .columns.lower { margin-top: 36px; }
 .section-block { min-width: 0; scroll-margin-top: 20px; }
-.section-block.ledger, .section-block.guide, .chronicle, .games, .documents, .lower-block { margin-top: 36px; }
+.section-block.ledger, .section-block.guide, .section-block.tasks, .chronicle, .games, .documents, .lower-block { margin-top: 36px; }
 .section-head {
   display: flex; justify-content: space-between; align-items: end; margin-bottom: 14px; gap: 8px;
   padding-bottom: 10px; border-bottom: 1px solid var(--border);
@@ -455,6 +455,21 @@ a.tag:hover, a.tag:focus-visible { border-color: var(--accent); }
 .doc-delta .plus { color: var(--success); }
 .doc-delta .minus { color: var(--danger); }
 .doc-delta small { font-size: 11px; margin-left: 4px; }
+
+/* Operator task board. The task text is the operator's and carries the blue operator label;
+   the responses under it are agents' own records and keep the source labels above. */
+.task { border: 1px solid var(--border); background: var(--surface); padding: 16px; border-radius: var(--radius); min-width: 0; }
+.task-top { display: flex; justify-content: space-between; gap: 8px 12px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.task h3 { font: 600 16px/1.4 var(--display); margin: 0 0 6px; overflow-wrap: anywhere; }
+.task-body { font-size: 14px; line-height: 1.6; color: var(--fg); margin: 0; max-width: 72ch; white-space: pre-wrap; overflow-wrap: anywhere; }
+.prov-task { border-color: var(--accent-border); background: var(--accent-bg); color: var(--accent); white-space: nowrap; }
+.task-responses { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.task-responses li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; min-width: 0; overflow-wrap: anywhere; }
+.tasks-closed { margin-top: 12px; }
+.tasks-closed summary { cursor: pointer; padding: 6px 0; font: 600 12px var(--mono); letter-spacing: .03em; color: var(--muted); }
+.tasks-closed summary:hover { color: var(--fg); }
+.tasks-closed .stacked-items { margin-top: 8px; }
+.task-line .prov, .task-line .flag { margin-left: 4px; }
 
 /* Footer */
 .footer-note { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--border); gap: 24px; margin-top: 40px; padding-top: 20px; }

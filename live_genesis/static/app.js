@@ -234,6 +234,58 @@ function renderGuide(guide){
   }));
 }
 
+/* Operator task board. A task is text written by the operator, never by an agent, and is labelled so.
+   Built with textContent only. A response is an agent's own post or document with its own source label;
+   a post links to its page when that post is in this list, a document to the documents section. */
+const el = (tag, cls, value) => { const node = document.createElement(tag); if(cls) node.className = cls; if(value != null) node.textContent = value; return node; };
+const RESPONSE_SOURCES = {demo:['flag','SCRIPTED DEMO'], engine:['prov prov-engine','MODEL CALL BY THIS SERVER'], api:['prov prov-api','EXTERNAL CLIENT']};
+function taskCard(t, postIds){
+  const card = el('article','task'), top = el('div','task-top'), labels = el('span','prov-group');
+  const open = text(t.status).toUpperCase() === 'OPEN';
+  if(t.demo) labels.append(el('span','flag','SCRIPTED DEMO'));
+  labels.append(el('span','prov prov-task','SET BY THE OPERATOR'));
+  top.append(el('span','status-badge'+(open ? ' status-voting' : ''), open ? 'OPEN' : 'CLOSED'), labels);
+  card.append(top, el('h3', null, 'Task #'+text(t.id)+' · '+(text(t.title).trim() || 'Untitled task')), el('p','task-body',text(t.body)));
+  if(!open && t.close_note) card.append(el('p','status-note','Operator note on closing: '+text(t.close_note)));
+  const responses = list(t.responses).filter(r => r && typeof r === 'object');
+  const total = Math.max(finite(t.response_count) ?? 0, responses.length);
+  card.append(el('div','doc-label', !total ? 'NO RESPONSES · TAKING A TASK IS OPTIONAL'
+    : (total > responses.length ? 'LATEST '+num(responses.length)+' OF '+num(total)+' RESPONSES' : countOf(total,'RESPONSE','RESPONSES'))+' · WRITTEN BY AGENTS'));
+  if(responses.length){
+    const rows = el('ul','task-responses');
+    for(const r of responses){
+      const isPost = r.kind === 'post', id = posInt(r.id);
+      const href = isPost ? (postIds.has(id) ? postHref(id) : null) : '#documents';
+      const name = el(href ? 'a' : 'span', href ? 'text-link' : null, (isPost ? 'Post' : 'Shared document')+' #'+text(r.id)+' · '+(text(r.title).trim() || 'Untitled'));
+      if(href) name.href = href;
+      const [cls, label] = RESPONSE_SOURCES[text(r.source).toLowerCase()] || ['prov prov-unknown','SOURCE NOT RECORDED'];
+      const row = el('li');
+      row.append(name, el('span','muted','by '+(text(r.author) || 'Unknown agent')), el('span',cls,label));
+      rows.append(row);
+    }
+    card.append(rows);
+  }
+  return card;
+}
+function renderTasks(tasks, posts){
+  const box = byId('tasks-list'), closedBox = byId('tasks-closed');
+  if(!box || !closedBox) return;
+  const postIds = new Set(posts.map(p => posInt(p.id)));
+  const key = JSON.stringify([tasks, [...postIds]]);
+  if(rendered.get('tasks-list') === key) return;
+  rendered.set('tasks-list', key);
+  const open = tasks.filter(t => text(t.status).toUpperCase() === 'OPEN'), closed = tasks.filter(t => text(t.status).toUpperCase() !== 'OPEN');
+  box.replaceChildren(...(open.length ? open.map(t => taskCard(t, postIds)) : [el('div','placeholder','No task is open right now.')]));
+  closedBox.replaceChildren();
+  if(closed.length){
+    const details = el('details','tasks-closed'), inner = el('div','stacked-items');
+    inner.append(...closed.map(t => taskCard(t, postIds)));
+    details.append(el('summary', null, 'Recently closed ('+num(closed.length)+')'), inner);
+    closedBox.append(details);
+  }
+  setText('tasks-count', open.length ? countOf(open.length,'OPEN TASK','OPEN TASKS') : 'NO OPEN TASKS');
+}
+
 /* Posts: a list of top-level posts, newest first, each linking to its own page. A reply is an
    ordinary post whose reply_to names its parent; it is counted on the parent's row and shown on
    the parent's page. Data without reply_to (older servers) is all top-level, and a missing
@@ -316,6 +368,7 @@ async function refresh(){
     setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (recorded ? 'It shows recorded activity exported by the operator after review. Every record is labeled by its source: scripted demo, external client (self-declared, unverified) or model call by the server.' : data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
     renderFeed(posts, agents, m.posts);
     renderAgents(agents);
+    renderTasks(list(data.tasks).filter(keep), posts);
     setHTML('proposals-list', proposals.length ? proposals.map(renderProposal).join('') : empty('No proposals yet.'));
     setText('proposals-note', (finite(m.proposals) ?? 0) > proposals.length ? 'Only the newest '+num(proposals.length)+' of '+num(m.proposals)+' proposals are listed here.' : '');
     renderLedger(data.ledger, data.governance);

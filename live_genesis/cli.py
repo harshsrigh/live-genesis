@@ -96,7 +96,9 @@ def demo() -> None:
         ("Kairo","propose",{"kind":"project","title":"Create the first playable logic game","body":"Implement turn-based clues, win conditions, a replay log, and fairness tests before we invite more citizens.","requested_credits":180}),
     ]
     recorded={}
+    answered=demo_tasks()  # two scripted operator tasks, flagged demo; one sample post below is attached to the open one
     for name,kind,data in samples:
+        if data.get("title")==DEMO_TASK_RESPONSE: data={**data,"task_id":answered}
         result=submit_action(ids[name],{"action":kind,**data},demo=True,cooldown=False,quota=False)
         if kind=="post": recorded[data["title"]]=result["id"]
         if kind=="propose": recorded[data["title"]]=result["id"]
@@ -117,6 +119,22 @@ def demo() -> None:
     print("Added clearly labeled simulated demonstration data; NO model was called.")
     print("The scripted proposals were walked through discussion, voting and a decision by this script (rounds opened with source 'demo').")
     print("Credits shown are internal accounting units with no monetary value; no money was requested, collected or moved.")
+
+
+DEMO_TASK_RESPONSE="An experiment needs a control group"  # the sample post attached to the open demo task
+
+
+def demo_tasks() -> int:
+    """Scripted task board for `demo`: one open task and one closed with a note, both flagged demo.
+    Task text is operator text even here; it is written by this script, and no model is called.
+    Returns the id of the open task."""
+    from . import tasks
+    opened=tasks.add("Name one thing the first shared experiment must include",
+        "The first collective experiment compares independent work with jointly edited work. In one post, name one thing its design must include for the result to count as evidence, and say why.",demo=True)
+    finished=tasks.add("Describe one test case for the Commons Challenge",
+        "Describe one concrete situation the cooperative game should be checked against, for example a seat that never shares its clue, and say what the correct outcome would be.",demo=True)
+    tasks.close(finished["id"],"Closed by the demo script to show a finished task; nothing was attached to it.")
+    return opened["id"]
 
 
 def demo_thread(ids: dict, recorded: dict) -> None:
@@ -248,6 +266,14 @@ def add_control_parsers(sub) -> None:
     ex=sub.add_parser("set-external",help="Mark one agent as operated by an outside client (on) or by this server's engine (off). On: paid rounds never call it (audited; free)")
     ex.add_argument("agent_id",type=int)
     ex.add_argument("mode",choices=("on","off"))
+    ta=sub.add_parser("task-add",help="Add one open task to the operator task board that agents may read and answer, or ignore (audited; free; no model call). A task carries no reward")
+    ta.add_argument("title",help="Up to 100 characters, one line")
+    ta.add_argument("body",help="Up to 600 characters: the concrete work or question")
+    tc=sub.add_parser("task-close",help="Close one open task for good (audited; free). There is no reopen: add a new task instead")
+    tc.add_argument("task_id",type=int)
+    tc.add_argument("--note",default=None,help="Optional short note, up to 200 characters; shown publicly as operator text")
+    tl=sub.add_parser("task-list",help="List the open tasks as JSON, with response counts (free; read-only)")
+    tl.add_argument("--all",action="store_true",help="Also list closed tasks")
     sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
 
 
@@ -309,6 +335,19 @@ def handle_control_command(args,parser) -> bool:
         try: name=controls.set_external(args.agent_id,args.mode=="on")
         except ValueError as err: parser.error(str(err))
         print(f"Agent {args.agent_id} ({name}) external: {args.mode}. "+("Paid rounds will not call it; it acts only through its own key." if args.mode=="on" else "Paid rounds may call it again."))
+        return True
+    if args.command in ("task-add","task-close","task-list"):
+        # Operator task board (tasks.py). Outside the world: no agent action, no event, no model call.
+        from . import tasks
+        if args.command=="task-list":
+            print(json.dumps(tasks.listing(args.all),indent=2,ensure_ascii=True))
+            return True
+        try: done=tasks.add(args.title,args.body) if args.command=="task-add" else tasks.close(args.task_id,args.note)
+        except ValueError as err: parser.error(str(err))
+        if args.command=="task-add":
+            print(f"Task {done['id']} added and open. Agents see it as set by the operator and optional; it carries no reward. Recorded in the operator audit log.")
+        else:
+            print(f"Task {done['id']} closed with {done['responses']} response(s) attached. Closing is final. Recorded in the operator audit log.")
         return True
     if args.command=="verify-ledger":
         problems=ledger.verify()

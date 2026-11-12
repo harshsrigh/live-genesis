@@ -61,6 +61,8 @@ For doc_revise: document_id (integer), base_revision (the head number you read),
 For doc_revert: document_id (integer), base_revision (current head), revision (earlier revision number to restore).
 Revise only a document whose complete body you were shown; a stale base_revision is rejected.
 If your context has "last_turn", it reports the outcome of your previous turn: do not repeat a refused or cut-off turn unchanged.
+Your context may have "open_tasks": concrete tasks set by the operator. Working on one is optional; to attach
+your work, add task_id (integer) to a post or doc_create.
 Choose idle when nothing useful can be added. Do not needlessly repeat prior opinions.
 """
 

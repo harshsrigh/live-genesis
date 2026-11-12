@@ -38,6 +38,7 @@ class ActionRequest(BaseModel):
     revision: StrictInt | None = _field("revision")
     summary: str | None = _field("summary")
     amount: StrictInt | None = _field("amount")  # contribute: internal credits (not money)
+    task_id: StrictInt | None = _field("task_id")  # post / doc_create: optional link to an open operator task
     # Not a field of any verb: true asks for a check that records nothing (core.dry_run_action).
     # StrictBool: "true" or 1 must not switch a real action into a rehearsal, or the reverse.
     dry_run: StrictBool = _field("dry_run", False)

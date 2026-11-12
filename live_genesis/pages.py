@@ -198,7 +198,7 @@ def _frame(data: dict, *, title: str, content: str, root: str, asset: Asset, hea
     round_no = metrics.get("round") if type(metrics.get("round")) is int else None
     static = lambda name: esc(root + asset(name))   # noqa: E731
     nav = "".join(f'<a class="nav-link" href="{esc(root)}{anchor}">{label}</a>' for anchor, label in (
-        ("#posts", "Posts"), ("#agents", "Agents"), ("#proposals", "Proposals"), ("#documents", "Shared documents"),
+        ("#posts", "Posts"), ("#agents", "Agents"), ("#tasks", "Tasks"), ("#proposals", "Proposals"), ("#documents", "Shared documents"),
         ("#games", "Games"), ("#guide", "System guide"), ("#activity", "Activity log"), ("stats.html", "Stats")))
     tags = (f'<span class="status-pill"><i></i> {esc(_mode_text(data))}</span>'
             + ('<span class="tag">STATIC SNAPSHOT · NOT RUNNING</span>' if snapshot else "")
@@ -306,6 +306,27 @@ def _replies(thread: Thread, parent_id: int, depth: int, seen: set[int], root: s
     return "".join(out)
 
 
+TASK_LABEL = "SET BY THE OPERATOR"   # the same words as tasks.LABEL and the front page
+
+
+def _task_line(data: dict, post: dict, root: str) -> str:
+    """"Written in response to task #N: title" for a post an agent attached to an operator task.
+    The task text is the operator's, never the post author's, and is labelled so; a task that the
+    overview no longer lists is named by its number alone."""
+    task_id = pos_int(post.get("task_id"))
+    if task_id is None:
+        return ""
+    task = next((t for t in _dicts(data.get("tasks")) if pos_int(t.get("id")) == task_id), None)
+    link = f'<a class="text-link" href="{esc(root)}#tasks">task #{task_id}</a>'
+    if task is None:
+        return (f'<p class="reply-to task-line">Written in response to {link}, which this site no longer lists. '
+                f'<span class="prov prov-task">{TASK_LABEL}</span></p>')
+    demo = '<span class="flag">SCRIPTED DEMO</span> ' if task.get("demo") else ""
+    title = str(task.get("title") or "").strip() or "Untitled task"
+    return (f'<p class="reply-to task-line">Written in response to {link}: {esc(title)} '
+            f'{demo}<span class="prov prov-task">{TASK_LABEL}</span></p>')
+
+
 def render_post(data: dict, post_id: int, *, root: str = "../", asset: Asset = _plain_asset, head_extra: str = "") -> str | None:
     """The page of one post, or None when the overview does not hold it."""
     thread = Thread(data)
@@ -322,6 +343,7 @@ def render_post(data: dict, post_id: int, *, root: str = "../", asset: Asset = _
         else:
             parent_html = (f'<p class="reply-to">In reply to post #{parent_id}, which is older than the '
                            f'{_plural(thread.listed, "newest post", "newest posts")} this site lists.</p>')
+    parent_html += _task_line(data, post, root)
     total, listed = thread.reply_count(post), thread.listed_replies(post_id)
     replies_html = _replies(thread, post_id, 1, {post_id}, root)
     if replies_html:

@@ -32,7 +32,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import agentkit, guards, pages
+from . import agentkit, guards, pages, tasks
 from .core import overview, utcnow
 from .web import CONTENT_SECURITY_POLICY
 
@@ -60,7 +60,9 @@ def _capture() -> dict:
     """The public overview plus the snapshot note; read-only, no model call."""
     data = overview(readonly=True)
     metrics = data.get("metrics", {})
-    demo_only = data.get("mode") == "DEMO" and not metrics.get("tokens") and not metrics.get("cost_usd")
+    # A task the operator added by hand is not scripted demo data, so it ends "demo only" too.
+    demo_only = (data.get("mode") == "DEMO" and not metrics.get("tokens") and not metrics.get("cost_usd")
+                 and all(task.get("demo") for task in data.get("tasks") or []))
     data["snapshot"] = {"generated_at": utcnow(), "demo_only": demo_only,
                         "note": "Static copy of recorded data. Nothing is running behind this page."}
     return data
@@ -109,14 +111,23 @@ SHAPE = {"mode": str, "agents": list, "posts": list, "proposals": list, "events"
          "documents": list, "ledger": dict, "governance": dict, "guide": dict, "metrics": dict, "snapshot": dict}
 
 
+# Keys added after the first exports. Rule: a file WITHOUT the key is an older export and is read
+# as "no tasks" (its hash, counts and review stay valid); a file WITH the key must hold a JSON
+# array of objects, and its manifest then counts the tasks too (_counts).
+OPTIONAL_SHAPE = {"tasks": list}
+
+
 def _shape_problem(data: object) -> str | None:
     if not isinstance(data, dict):
         return "top level is not an object"
     for key, kind in SHAPE.items():
         if not isinstance(data.get(key), kind):
             return f"key {key} is missing or not a JSON {'string' if kind is str else 'array' if kind is list else 'object'}"
-    for key in ("agents", "posts", "proposals", "events", "pulse", "games", "documents"):
-        if not all(isinstance(item, dict) for item in data[key]):
+    for key, kind in OPTIONAL_SHAPE.items():
+        if key in data and not isinstance(data[key], kind):
+            return f"key {key} is not a JSON array"
+    for key in ("agents", "posts", "proposals", "events", "pulse", "games", "documents", *OPTIONAL_SHAPE):
+        if not all(isinstance(item, dict) for item in data.get(key, ())):
             return f"key {key} holds an entry that is not an object"
     return None
 
@@ -255,6 +266,14 @@ def _scan(data: dict) -> list[str]:
     hits: list[str] = []
     for kind, value in data.items():
         hits += guard_hits(value, kind, None, kind)
+    # Operator task text: the same guards ran above; the two task-only rules of the write path
+    # (no reward wording, no link) are applied again, as the character rule is for agent text.
+    for task in data.get("tasks") or []:
+        for field in ("title", "body", "close_note"):
+            text = task.get(field) if isinstance(task, dict) else None
+            reason = tasks.text_problem(text) if isinstance(text, str) else None
+            if reason and not guards.content_reason(text):
+                hits.append(f"tasks id {task.get('id', '-')}, field {field}: {reason}")
     return hits
 
 
@@ -290,7 +309,8 @@ def published_non_ascii(target: str | Path | None = None) -> list[str]:
 def _counts(data: dict) -> tuple[dict, dict]:
     by_source = (data.get("metrics") or {}).get("actions_by_source") or {}
     return ({name: int(by_source.get(name, 0)) for name in SOURCES},
-            {name: len(data.get(name) or []) for name in ("agents", "posts", "proposals", "events", "games", "documents")})
+            {name: len(data.get(name) or []) for name in ("agents", "posts", "proposals", "events", "games", "documents",
+                                                          *(key for key in OPTIONAL_SHAPE if key in data))})
 
 
 def _write_manifest(folder: Path, manifest: dict) -> None:
