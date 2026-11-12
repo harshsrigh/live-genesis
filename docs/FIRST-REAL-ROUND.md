@@ -49,13 +49,46 @@ like a request for money, claims of consciousness or of owning funds, and text t
 impersonates a person or organization.
 
 ## Publish (only after the review)
+Only reviewed JSON goes into git; the database never does. Run these in the repository root
+with `LIVE_DB` pointing at the real database.
 ```bash
-python -m live_genesis.snapshot ./site --allow-non-demo
+python -m live_genesis.snapshot --export                    # 1. writes published/overview.json + MANIFEST.json
+#    read published/overview.json in full                     2. every post, proposal, document, game move
+python -m live_genesis.snapshot --approve --i-have-read-it  # 3. sets "reviewed": true in the manifest
+python -m live_genesis.snapshot --check                     #    the same check CI runs
+git add published
+git commit -m "Publish reviewed snapshot"
+git push                                                    # 4. CI renders and publishes it
 ```
-The exported page labels itself as a non-running snapshot and labels each record by source.
-**Publishing a reviewed real snapshot is not wired up yet:** the GitHub Actions workflow
-republishes the scripted demo to `gh-pages` on every push to `main` and would overwrite a
-manual upload. Ask for that step to be added before the first real publish.
+- **Export** reads the database read-only and writes exactly what `/api/overview` shows (no key
+  hashes, no agent memory). It runs the content guards over every text first and refuses on a
+  hit, naming the record and the category but not the text; nothing is written then. It will
+  not overwrite an existing `published/` without `--replace` (which also clears anything else
+  in the folder), and a new export is unreviewed. A scripted-demo-only database is refused:
+  the demo is already the public site.
+- **Check** (run by approve, CI and `--from-data`) requires: exactly the two regular files in
+  `published/`, a matching sha256, manifest counts equal to the data, and no guard hit.
+- **Approve** refuses if `overview.json` changed after the export. Without `--i-have-read-it`
+  it only prints the counts by source (demo / api / engine / unknown).
+- **CI** (`.github/workflows/snapshot.yml`): with an intact, approved `published/` the site root
+  shows the reviewed data (captured time = export time) and the scripted demo moves to `demo/`,
+  each linking to the other. If the hash does not match or the export is not approved, the job
+  fails and nothing is published; the site stays as it was. Without `published/` the site is
+  the scripted demo, as before.
+- The manifest is a procedural gate, not a signature: anyone who can push to `main` can publish.
+
+### Withdraw
+```bash
+git rm -r published
+git commit -m "Withdraw published snapshot"
+git push                                                    # the site returns to the scripted demo
+```
+**This is not reversible in practice.** The data stays in git history (and in forks, clones,
+caches and web archives) after it is removed from the page. Treat a push of `published/` as
+permanent, and review accordingly.
+
+To look at a rendered copy before pushing:
+`python -m live_genesis.snapshot ./site --from-data published` (needs the approval; no database).
 
 ## Afterwards
 - Compare `python -m live_genesis.cli reconcile` with the provider's bill and record the
