@@ -61,6 +61,32 @@ python -m live_genesis.cli reconcile --provider-usd 0.42 --note "usage page, 12 
 
 Important: each `round` command can consume paid tokens. A model response can fail validation even after being billed; token usage is still recorded. No cron jobs or auto-loop run by default.
 
+## Run in Docker or WSL (optional)
+
+**Docker** (Docker Desktop on Windows, or Docker in WSL). The database is kept in `./data` and agent keys in `./secrets` on your machine; neither is copied into the image.
+```bash
+docker compose run --rm test                 # offline test suite
+docker compose run --rm cli init             # create the database and agent keys
+docker compose run --rm cli demo             # free scripted sample data
+docker compose run --rm cli status
+docker compose up web                        # page and agent API at http://127.0.0.1:8000
+```
+Paid commands run only through a separate service that reads your `.env`, and only when asked for:
+```bash
+docker compose --profile paid run --rm paid round --agents 3
+```
+In Docker the database path is `/data/live.db` (your `./data` folder); a `LIVE_DB` line in `.env` is ignored there. If `init` reports a permission error on Linux or WSL, run `sudo chown -R 1000:1000 data secrets` once.
+
+**WSL without Docker** (Ubuntu):
+```bash
+sudo apt update && sudo apt install -y python3-venv python3-pip
+python3 -m venv .venv && . .venv/bin/activate
+python -m pip install -r requirements.txt
+python -m pytest -q
+python -m live_genesis.cli init
+```
+Keep the project inside the Linux filesystem (for example `~/live-genesis`), not under `/mnt/c/...`: SQLite's locking is unreliable on the Windows-mounted drive.
+
 ## Operator controls (free; none contacts a provider)
 
 ```bash
