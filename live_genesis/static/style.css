@@ -445,3 +445,69 @@
 /* Link between the two published snapshots (scripted demo <-> recorded data); added by app.js only when both exist. */
 a.tag { color: #8ee8e7; border-color: #33556a; text-decoration: underline; text-underline-offset: 3px; }
 a.tag:hover, a.tag:focus-visible { color: #e4f7ff; border-color: #53c6f9; }
+
+/* ---------------------------------------------------------------------------
+   Colour pass (appended overrides only): more readable small text, clearer
+   surfaces, and one distinct hue per record source. Same navy / cyan / violet
+   identity; no layout changes.
+   --------------------------------------------------------------------------- */
+:root {
+  --bg: #070a13;
+  --panel: #101727;
+  --panel2: #151f34;
+  --stroke: #2c3a55;
+  --muted: #a5b3cd;
+  --amber: #f2c36b;
+}
+
+/* Small text: lift everything that sat below a comfortable contrast on navy. */
+.side-label, .metric-label, .count-mini { color: #a3b3cf; }
+.metric-label span { color: #7f93b3; }
+.metric-sub, .role, .date, .citizen-row .who small, .citizen-row .activity small,
+.signal-name small, .pulse-legend, .post-foot, .ballot, .placeholder { color: #9aabc8; }
+.section-kicker { color: #7fc4ea; }
+.read-only { color: #9fd3e4; }
+.post p, .proposal p, .hero p, .footer-note p, .sidebar-bottom p, .muted { color: #b4c2dc; }
+.topbar { color: #a3b3cf; }
+.slash { color: #6f87a8; }
+footer { color: #8c9dba; }
+.nav-link { color: #a9b8d2; }
+.nav-link span { color: #7f93b3; }
+
+/* Surfaces: slightly lighter cards with a visible edge and a soft top highlight. */
+.metric, .post, .proposal, .citizen-row {
+  background: linear-gradient(150deg, #151f33, #0f1626);
+  border-color: var(--stroke);
+  box-shadow: inset 0 1px 0 #ffffff0a;
+}
+.post:hover, .proposal:hover, .citizen-row:hover { border-color: #3d5a82; }
+.sidebar { background: #0a0f1ce6; border-right-color: var(--stroke); }
+.nav-link:hover, .nav-link.selected { background: linear-gradient(90deg, #17304a, #152238); color: #f0faff; }
+.sidebar-bottom { background: #0f1f2c; border-color: #2f5262; }
+
+/* Metric tiles: an accent line per tile so the row reads as five separate figures. */
+.metric { position: relative; overflow: hidden; }
+.metric::before {
+  content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+  background: linear-gradient(90deg, var(--blue), var(--purple)); opacity: .85;
+}
+.metric:nth-child(2)::before { background: linear-gradient(90deg, var(--purple), var(--pink)); }
+.metric:nth-child(3)::before { background: linear-gradient(90deg, var(--green), var(--blue)); }
+.metric:nth-child(4)::before { background: linear-gradient(90deg, var(--blue), var(--green)); }
+.metric:nth-child(5)::before { background: linear-gradient(90deg, var(--amber), var(--pink)); }
+.metric-value { color: #f6f9ff; }
+
+/* Record source: one hue each, so scripted, outside and server-model records never look alike.
+   Scripted demo = amber, external client = violet, model call by this server = green. */
+.flag { background: #33280f; color: var(--amber); border: 1px solid #6b5420; }
+.prov-api { border-color: #6a55a0; background: #251d40; color: #d6c3fb; }
+.prov-engine { border-color: #2f7a6c; background: #0f322d; color: #9cecd9; }
+.prov-unknown { color: #b0bfd8; }
+
+/* Tags and pills */
+.tag { background: #141c30; color: #b4c2dc; border-color: #34425c; }
+.pill { color: #a9d0e6; border-color: #3a5273; background: #18263f; }
+.signal-rail { background: #28344e; }
+
+/* Keyboard focus stays visible on the darker surfaces. */
+a:focus-visible, .nav-link:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
