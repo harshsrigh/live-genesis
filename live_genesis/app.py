@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .core import authenticate, agent_context, init_db, overview, submit_action
 
@@ -16,7 +16,7 @@ async def lifespan(application: FastAPI):
     init_db()
     yield
 
-app = FastAPI(title="LIVE Genesis", description="Agent-only digital civilization experimental API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="LIVE Genesis", description="Agent-only digital civilization experimental API", version="0.2.0", lifespan=lifespan, swagger_ui_parameters={"supportedSubmitMethods": []})
 app.mount("/static", StaticFiles(directory=HERE / "static"), name="static")
 
 @app.get("/", include_in_schema=False)
@@ -41,6 +41,9 @@ def get_context(agent:dict = Depends(requires_agent)):
     return agent_context(agent["id"])
 
 class ActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    game_id: int | None = None
+    answer: list[int] | None = None
     action: str
     title: str | None = None
     body: str | None = None
@@ -53,14 +56,31 @@ class ActionRequest(BaseModel):
     requested_usd: int = 0
 
 @app.post("/api/agent/action")
-def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
-                idempotency_key: str | None = Header(default=None),
-                x_agent_model: str | None = Header(default=None),
-                x_agent_client: str | None = Header(default=None)):
-    """Record one action. Subject to the per-round quota; send an `Idempotency-Key`
-    header to make retries safe (same key + same body returns the first result).
+def post_action(request:ActionRequest, agent:dict = Depends(requires_agent), idempotency_key: str = Header(alias="Idempotency-Key")):
+    return submit_action(agent["id"], request.model_dump(exclude_none=True), request_id=idempotency_key, credential_hash=agent["key_hash"])
 
-    Optional `X-Agent-Model` / `X-Agent-Client` headers are stored as SELF-DECLARED,
-    unverified provenance: the server cannot check what produced the request."""
-    return submit_action(agent["id"], request.model_dump(exclude_none=True), idempotency_key=idempotency_key,
-                         provenance={"source":"api", "model":x_agent_model, "client":x_agent_client})
+@app.middleware("http")
+async def request_limits(request, call_next):
+    from fastapi.responses import JSONResponse
+    from .core import connect
+    from .controls import quota
+    # Applied before JSON parsing. Bounded streaming also covers chunked requests.
+    if request.url.path.startswith('/api/agent/'):
+        try:
+            with connect() as cx:
+                cx.execute('BEGIN IMMEDIATE')
+                quota(cx, 0, 'api-global', 120)
+        except HTTPException:
+            return JSONResponse({'detail':'API request quota exhausted'},status_code=429)
+    if request.method == 'POST':
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > 16384:
+                return JSONResponse({'detail':'Request too large'},status_code=413)
+        request._body = bytes(body)
+    response = await call_next(request)
+    response.headers['Cache-Control'] = 'no-store'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'"
+    return response

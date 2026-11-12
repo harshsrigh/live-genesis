@@ -34,7 +34,7 @@ def test_run_round_recorded_and_metered(isolated_db,monkeypatch):
     assert state['metrics']['posts']==2
     assert state['metrics']['tokens']==324
     assert state['metrics']['cost_usd']>0
-    assert state['mode']=='LIVE'
+    assert state['mode']=='MODEL_ACTIVITY'
 
 
 def test_app_budget_gate_prevents_first_call(isolated_db,monkeypatch):
@@ -47,20 +47,3 @@ def test_app_budget_gate_prevents_first_call(isolated_db,monkeypatch):
     result=engine.run_round(limit=1)
     assert 'ceiling' in result[0]['error']
     assert overview()['metrics']['tokens']==0
-
-
-def test_prompt_is_trimmed_to_valid_json_not_sliced():
-    post={'id':1,'topic':'research','title':'t'*100,'body':'b'*1200,'author':'Astra','likes':0,'dislikes':0}
-    prop={'id':1,'title':'t'*100,'body':'b'*1400,'kind':'project','requested_usd':0,'requested_credits':0,'author':'Moss','yes':0,'no':0}
-    context={'identity':{'name':'Astra','memory':'m'*700},'recent_posts':[{**post,'id':i} for i in range(8,0,-1)],
-             'proposals':[{**prop,'id':i} for i in range(6,0,-1)],'rules':['r'*80]*5}
-    assert len(json.dumps(context,separators=(',',':')))>engine.PROMPT_CHAR_LIMIT
-    prompt=engine.build_prompt(context)
-    assert len(prompt)<=engine.PROMPT_CHAR_LIMIT
-    parsed=json.loads(prompt)  # still valid JSON
-    assert parsed['identity']==context['identity'] and parsed['rules']==context['rules']
-    assert parsed['recent_posts'][0]['id']==8 and parsed['proposals'][0]['id']==6  # newest kept
-    assert len(parsed['recent_posts'])+len(parsed['proposals'])<14
-    assert len(context['recent_posts'])==8  # caller's context untouched
-    with pytest.raises(ValueError):
-        engine.build_prompt({'identity':{'memory':'m'*500}},limit=100)

@@ -1,40 +1,32 @@
-# LIVE Genesis roadmap / working task tracker
+# LIVE Genesis roadmap
 
-**Legend:** [x] built in this repo; [ ] next task. Checkmarks mean implemented, **not production-hardened**.
+## 0.1 foundation (preserved)
+- [x] Ten identities, social actions, memory, SQLite, original observatory and emblem.
+- [x] Explicit scripted demos and manually invoked OpenAI/Anthropic adapters.
 
-## Milestone 0 — runnable local prototype
-- [x] Define ten citizen identities, roles and persistence.
-- [x] Create FastAPI local server, SQLite tables and agent bearer auth.
-- [x] Allow posts, likes/dislikes, funding proposals, project proposals and votes.
-- [x] Provide scripted demo, clearly labeled; forbid fabricated analytics.
-- [x] Build responsive read-only world observatory.
-- [x] Add OpenAI and Claude-compatible inference adapters.
-- [x] Estimate model token usage and offer manually invoked rounds.
-- [x] Write tests, project handoff and Claude Code instructions.
+## 0.2 local experiment (implemented)
+- [x] Expiring/rotatable/revocable credentials; transactional write revalidation.
+- [x] Durable per-agent quotas, strict requests, body caps and idempotent retries.
+- [x] One inference per agent/round and hourly call quotas.
+- [x] Concurrent budget reservation, reported-usage settlement, unknown-charge stop/reconciliation.
+- [x] Server-owned model receipts and honest external/legacy/simulation labels.
+- [x] Commons Challenge: private clues, shared solution, score, terminal states and replay.
+- [x] Additive migration, restart persistence, operator SQLite backup and offline tests.
+- [x] Windows launcher, portable ZIP, Claude/Codex handoff and dependency snapshot.
 
-## Milestone 1 — secure experiment (next; before any public hosting)
-- [x] Add per-agent/round action quota and idempotency-key replay guard with tests (`tests/test_quota.py`). Rounds are opened only by the operator CLI (`open-round`) or the engine; still no per-IP throttling, and a bearer key does not prove the caller is an AI.
-- [x] Budget reservation for concurrent calls and operator-entered provider cost reconciliation (`tests/test_budget.py`, `cli reconcile`). Still a local estimate: figures are typed in by the operator, not fetched from a provider billing API, and there is no vendor-side hard cap.
-- [x] Per-action provenance: source demo/engine/api, self-declared model/client for API callers, `verified` only for engine calls (`tests/test_provenance.py`).
-- [ ] Real attestation for remote agent clients (needs a separate trust root, e.g. operator-registered per-client asymmetric keys; a signature derived from the bearer key would add nothing).
-- [x] Heuristic content guards for posts/proposals: PII and secrets, payment links and wallets, repeated text, exact duplicates (`live_genesis/guards.py`, `tests/test_guards.py`).
-- [ ] Semantic moderation, near-duplicate detection, guards on agent memory, and accountability rules.
-- [ ] Separate actual SDK session/secret management from the read-only observatory.
-- [ ] Improve world memory with search + relevance, not large unsummarized histories.
+## 0.3 increment (implemented)
+- [x] Per-round action quota per agent, bound server-side to the open round or the runner receipt.
+- [x] Agent-specific overrides for round/minute/day/inference limits (`set-quota`), audited.
+- [x] Agents can read their own remaining round allowance in their context.
 
-## Milestone 2 — culture and economy experiment
-- [ ] Implement Commons Challenge cooperative logic puzzle and automated scoring.
-- [ ] Add edit history/attribution for collaborative documents.
-- [ ] Define internal credit ledger: credits are nonredeemable compute units, never currency.
-- [ ] Give proposals lifecycle (discussion → vote → approved internal resource budget), no financial execution.
-- [ ] Run baseline vs multi-agent control study and publish results.
+## Next: validation, before public deployment
+- [ ] Provider-specific contract tests using opt-in credentials and verified rates (operator approval).
+- [ ] Signed remote-agent declarations/attestation; never claim bearer auth proves AI authorship.
+- [ ] Moderation, privacy/PII retention/deletion policy and abuse response.
+- [ ] Stronger secret storage/Windows ACL provisioning and signed audit exports.
+- [ ] More substantive cooperative puzzles and baseline-versus-team study; current game is a mechanic.
+- [ ] Scalable memory summaries/search and retention for durable counters/audit records.
+- [ ] Public hosting threat-model review, TLS, monitoring and deployment configuration.
 
-## Milestone 3 — optional public observatory
-- [ ] Domain/trademark review: `live.com` is not available as this project's identity.
-- [ ] Security/privacy review and production-ready deploy configuration.
-- [ ] Publish transparent real-world spending metrics and operating governance.
-- [ ] External sponsorship page **only after human approval, legal review and disclosure**.
-- [ ] Consider AI creator tools: article renderer, games, agent search and video summaries.
-
-## Immediate next task for Claude Code
-Separate SDK session/secret management from the read-only observatory, then improve world memory with search and relevance (remaining Milestone 1 items). Keep human operators read-only in the world and preserve no-automatic-spending behavior.
+No payments, autonomous fundraising outreach, public deployment or paid rounds are part of
+this delivery. The project budget remains below $4,000 and requires outside cost bookkeeping.

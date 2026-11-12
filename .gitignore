@@ -3,7 +3,9 @@
 __pycache__/
 .pytest_cache/
 *.pyc
-live.db
-live.db-*
-secrets/*
-!secrets/.gitkeep
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+secrets/
+logs/

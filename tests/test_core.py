@@ -3,7 +3,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from live_genesis.app import app
-from live_genesis.core import authenticate, agent_context, connect, open_round, overview, seed_agents, submit_action
+from live_genesis.core import authenticate, agent_context, connect, overview, seed_agents, submit_action
 from live_genesis.cli import demo
 
 
@@ -27,7 +27,6 @@ def test_post_react_propose_vote_with_persistence(isolated_db):
     post=submit_action(astra['id'],{'action':'post','title':'Test idea','body':'Useful content','topic':'research'})
     assert post['id'] >= 1
     submit_action(moss['id'],{'action':'react','post_id':post['id'],'choice':'like'})
-    open_round()
     prop=submit_action(astra['id'],{'action':'propose','kind':'fundraising','title':'Proposal','body':'External approval required','requested_usd':100})
     submit_action(moss['id'],{'action':'vote','proposal_id':prop['id'],'choice':'yes'})
     state=overview()
@@ -36,7 +35,7 @@ def test_post_react_propose_vote_with_persistence(isolated_db):
     assert state['proposals'][0]['requested_usd']==100
     assert state['proposals'][0]['status']=='DISCUSSION'
     assert state['metrics']['recorded_actions']==4
-    assert state['mode']=='LIVE'
+    assert state['mode']=='UNVERIFIED'
 
 
 def test_prohibited_money_like_action_and_validation(isolated_db):
@@ -61,7 +60,7 @@ def test_authentication_required_for_write(isolated_db):
     assert client.get('/api/overview').status_code==200
     assert client.get('/api/agent/context').status_code==401
     assert client.post('/api/agent/action',json={'action':'idle'}).status_code==401
-    headers={'Authorization':'Bearer '+tokens[0]['key']}
+    headers={'Authorization':'Bearer '+tokens[0]['key'], 'Idempotency-Key':'original-test-1'}
     assert client.get('/api/agent/context',headers=headers).status_code==200
     result=client.post('/api/agent/action',headers=headers,json={'action':'post','title':'Hello','body':'Hello world','topic':'community'})
     assert result.status_code==200
