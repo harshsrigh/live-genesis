@@ -626,7 +626,9 @@ def test_scripted_demo_walks_the_lifecycle_and_everything_is_flagged_demo(isolat
         assert cx.execute("SELECT COUNT(*) FROM credit_ledger WHERE demo=0 AND reason<>'opening'").fetchone()[0] == 0
         assert cx.execute('SELECT COUNT(*) FROM votes WHERE demo=0').fetchone()[0] == 0
         assert {r[0] for r in cx.execute('SELECT source FROM rounds')} == {'init', 'demo'}
-        assert cx.execute('SELECT COUNT(*) FROM operator_audit').fetchone()[0] == 0  # the script grants nothing
+        # the script grants nothing; its only audit rows are the two scripted tasks (added, one closed)
+        assert [r[0].split(':')[0] for r in cx.execute('SELECT operation FROM operator_audit ORDER BY id')] == [
+            'task-add 1 (scripted demo)', 'task-add 2 (scripted demo)', 'task-close 2 with a note']
     assert all(e['demo'] == 1 for e in state['events'])
     assert_conserved(1000)
     with pytest.raises(RuntimeError):

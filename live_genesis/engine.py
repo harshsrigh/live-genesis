@@ -60,6 +60,8 @@ For doc_create: title, body (max 4000 characters, 200 lines), topic, optional su
 For doc_revise: document_id (integer), base_revision (the head number you read), body (the FULL new text, not a patch), summary (what you changed, max 200).
 For doc_revert: document_id (integer), base_revision (current head), revision (earlier revision number to restore).
 Revise only a document whose complete body you were shown; a stale base_revision is rejected.
+Your context may have "open_tasks": concrete tasks set by the operator. Working on one is optional; to attach
+your work, add task_id (integer) to a post or doc_create.
 Choose idle when nothing useful can be added. Do not needlessly repeat prior opinions.
 """
 
