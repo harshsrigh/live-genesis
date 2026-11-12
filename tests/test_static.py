@@ -25,10 +25,12 @@ def test_page_has_new_sections(isolated_db):
         html = client.get('/').text
     for element_id in ('chronicle', 'chronicle-list', 'chronicle-count', 'round-value', 'round-sub',
                        'round-top', 'api-spend', 'budget-sub',
-                       'games', 'games-list', 'games-count'):
+                       'games', 'games-list', 'games-count',
+                       'documents', 'documents-list', 'documents-count'):
         assert f'id="{element_id}"' in html, element_id
     assert 'aria-live="polite"' in html
     assert 'href="#games"' in html
+    assert 'href="#documents"' in html
     assert 'genesis-sigil.png' in html
 
 

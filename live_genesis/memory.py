@@ -24,7 +24,7 @@ from . import core, guards
 MEMORY_CHARS = 700          # agents.memory / one note (unchanged from the original column limit)
 NOTE_CAP = 200              # stored notes per agent; older ones are deleted
 SCAN_LIMIT = 2000           # newest rows of each kind considered by search / context
-KINDS = ("post", "proposal")
+KINDS = ("post", "proposal", "document")
 EXCERPT_CHARS = 300
 MAX_SEARCH_LIMIT = 50
 
@@ -117,20 +117,24 @@ _TABLE = {"post": "posts", "proposal": "proposals"}
 
 
 def _candidates(cx: sqlite3.Connection, kind: str) -> list[sqlite3.Row]:
+    if kind == "document":  # current text of each shared document; `author` is its last editor
+        return cx.execute("SELECT d.id,d.title,r.body,a.name author FROM documents d JOIN document_revisions r "
+                          "ON r.document_id=d.id AND r.number=d.head JOIN agents a ON a.id=r.agent_id "
+                          "ORDER BY d.id DESC LIMIT ?", (SCAN_LIMIT,)).fetchall()
     return cx.execute(f"SELECT p.id,p.title,p.body,a.name author FROM {_TABLE[kind]} p JOIN agents a ON a.id=p.agent_id "
                       "ORDER BY p.id DESC LIMIT ?", (SCAN_LIMIT,)).fetchall()
 
 
 def search_world(cx: sqlite3.Connection | None, query: str, *, limit: int = 8,
                  kinds: Iterable[str] = KINDS) -> list[dict[str, Any]]:
-    """Rank posts/proposals for `query` (BM25 over title+body). Read-only.
+    """Rank posts/proposals/shared documents (current text) for `query` (BM25 over title+body). Read-only.
 
     Only the newest SCAN_LIMIT rows of each kind are scanned. Items sharing no query word are
-    not returned. Ties: higher id first, then post before proposal. Pass cx=None to open a connection.
+    not returned. Ties: higher id first, then post, proposal, document. Pass cx=None to open a connection.
     """
     kinds = tuple(dict.fromkeys(kinds))
     if not kinds or any(k not in KINDS for k in kinds):
-        raise ValueError("kinds must be a non-empty subset of ('post', 'proposal')")
+        raise ValueError("kinds must be a non-empty subset of ('post', 'proposal', 'document')")
     limit = max(1, min(int(limit), MAX_SEARCH_LIMIT))
     terms = _query_terms(query)
     if not terms:
@@ -141,7 +145,7 @@ def search_world(cx: sqlite3.Connection | None, query: str, *, limit: int = 8,
     rows = [(kind, row) for kind in kinds for row in _candidates(cx, kind)]
     scores = _bm25([_doc_terms(row["title"], row["body"]) for _, row in rows], terms)
     ranked = sorted(((round(score, 6), row["id"], kind, row) for (kind, row), score in zip(rows, scores) if score > 0),
-                    key=lambda t: (-t[0], -t[1], t[2]))
+                    key=lambda t: (-t[0], -t[1], KINDS.index(t[2])))
     return [{"kind": kind, "id": row["id"], "title": row["title"], "excerpt": _excerpt(row["body"]),
              "author": row["author"], "score": round(score, 4)} for score, _, kind, row in ranked[:limit]]
 

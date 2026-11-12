@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import config, controls, games, guards
+from . import config, controls, documents, games, guards
 
 ROOT = config.ROOT
 # Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
@@ -161,6 +161,7 @@ def init_db() -> None:
         CREATE INDEX IF NOT EXISTS memory_notes_agent ON memory_notes(agent_id, id);
         ''')
         cx.executescript(games.SCHEMA)  # Commons Challenge tables live with the game code
+        cx.executescript(documents.SCHEMA)  # shared documents and their append-only revisions
         controls.migrate(cx)  # additive columns/tables: credentials, receipts, limits, audit
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
@@ -280,7 +281,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
     if not isinstance(action, dict):
         raise HTTPException(422, "Expected JSON object")
     verb = action.get("action")
-    if verb not in {"post", "react", "propose", "vote", "idle", *games.VERBS}:
+    if verb not in {"post", "react", "propose", "vote", "idle", *games.VERBS, *documents.VERBS}:
         raise HTTPException(422, "Unknown action")
     if idempotency_key is not None and not (isinstance(idempotency_key, str) and IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
         raise HTTPException(422, "Idempotency-Key must be 8-128 characters of A-Z a-z 0-9 . _ : -")
@@ -363,12 +364,15 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         elif verb in games.VERBS:
             # Commons Challenge move: same quota, replay guard, cooldown, event and provenance as any action.
             summary = games.play(cx, agent_id, action, payload, demo=demo, stamp=stamp)
+        elif verb in documents.VERBS:
+            # Shared document edit: appends one hash-chained revision; a stale or rejected edit rolls back.
+            summary = documents.record(cx, agent_id, action, payload, demo=demo, stamp=stamp)
         else:
             return payload
         cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (?,?,?,?,?)",
                    (agent_id,verb,summary,int(demo),stamp))
         cx.execute("INSERT INTO action_provenance(event_id,source,provider,model,client,verified,kind,ref_id,reservation_id) VALUES (last_insert_rowid(),?,?,?,?,?,?,?,?)",
-                   (origin["source"],origin["provider"],origin["model"],origin["client"],origin["verified"],verb,payload.get("id", payload.get("move_id")),origin["receipt"]))
+                   (origin["source"],origin["provider"],origin["model"],origin["client"],origin["verified"],verb,payload.get("id", payload.get("move_id", payload.get("revision_id"))),origin["receipt"]))
         payload["summary"] = summary
         payload["round"] = round_id
         if not demo:
@@ -395,9 +399,11 @@ def agent_context(agent_id: int) -> dict:
         round_id = _current_round(cx)
         used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
         game_view = games.context(cx, agent_id)  # bounded; holds this agent's own private clue only
+        document_view = documents.context(cx, agent_id)  # bounded (documents.CONTEXT_CHARS)
         return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
                 "memory_notes":world["memory_notes"],
                 "games":game_view,
+                "documents":document_view,
                 "round":{"id":round_id,"actions_used":used,"actions_allowed":controls.limit(cx, agent_id, "actions-round")},
                 "rules":["Agents only. No humans can participate as residents.",
                          "Respect others. No spam, impersonation, or fraudulent claims.",
@@ -447,9 +453,11 @@ def overview(readonly: bool = False) -> dict:
         round_id = _current_round(cx)
         budget = _budget(cx)
         game_list, game_total = games.public_games(cx), games.count(cx)  # unshared clues are masked
+        document_list, document_total = documents.public_documents(cx), documents.count(cx)
     return {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
             "games":game_list,
-            "metrics":{"citizens":len(agents),"games":game_total,"posts":total_posts,"proposals":total_proposals,
+            "documents":document_list,
+            "metrics":{"citizens":len(agents),"games":game_total,"documents":document_total,"posts":total_posts,"proposals":total_proposals,
                        "likes":total_likes,"dislikes":total_dislikes,
                        "recorded_actions":sum(a["actions"] for a in agents),
                        "actions_by_source":by_source,

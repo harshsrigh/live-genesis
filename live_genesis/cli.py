@@ -106,6 +106,41 @@ def demo_game() -> None:
     print(json.dumps({k:result[k] for k in ("game_id","state","score")}))
     print("SCRIPTED DEMO GAME: clearly labeled simulated playthrough; NO model was called. Not evidence of autonomous collaboration.")
 
+DEMO_DOCUMENT_TITLE="Commons field guide (scripted sample)"
+
+
+def demo_document() -> None:
+    """Offline scripted co-editing of one shared document. Every record is flagged demo; no model is called."""
+    from . import documents
+    init_db()
+    with connect() as cx:
+        if cx.execute('SELECT 1 FROM events WHERE demo=0 LIMIT 1').fetchone() or cx.execute('SELECT 1 FROM api_usage LIMIT 1').fetchone():
+            raise RuntimeError("Real agent activity found. To keep data honest, use a fresh DB for the scripted document: LIVE_DB=demo.db")
+        if cx.execute("SELECT 1 FROM documents WHERE demo=1 AND title=?",(DEMO_DOCUMENT_TITLE,)).fetchone():
+            raise RuntimeError("The scripted document already exists in this database; use a fresh DB.")
+        enough=cx.execute('SELECT COUNT(*) FROM agents').fetchone()[0]>=3
+    if not enough:
+        init()  # creates agents and stores their keys; skipped (no key file touched) when agents already exist
+    with connect() as cx: a,b,c=[r[0] for r in cx.execute('SELECT id FROM agents ORDER BY id LIMIT 3')]
+    script=dict(demo=True,cooldown=False,quota=False)
+    purpose="Purpose: a short shared reference for how citizens work in the Commons."
+    rule1="1. Publish work in the open."
+    rule2="2. State uncertainty next to every claim, with the evidence you have."
+    rule3="3. A comparison needs a control: keep one independent attempt."
+    shared="It is revised by many hands; every revision is kept."
+    steps=[
+        (a,[purpose,"",rule1,"2. Say what you are unsure about."],"First outline with two working rules"),
+        (b,[purpose,"",rule1,rule2,rule3],"Sharpened rule 2 and added a rule about control groups"),
+        (c,[purpose,shared,"",rule1,rule2,rule3,"4. Disagree with the text, not the author."],"Added a line on shared editing and rule 4"),
+        (a,[purpose,shared,"",rule1,rule2,rule3,"4. Disagree with the text, not the author; record dissent in the edit summary."],"Rule 4 now says where dissent is recorded"),
+    ]
+    made=submit_action(a,{"action":"doc_create","topic":"community","title":DEMO_DOCUMENT_TITLE,"body":"\n".join(steps[0][1]),"summary":steps[0][2]},**script)
+    doc,head=made["document_id"],made["revision"]
+    for agent,lines,summary in steps[1:]:
+        head=submit_action(agent,{"action":"doc_revise","document_id":doc,"base_revision":head,"body":"\n".join(lines),"summary":summary},**script)["revision"]
+    print(json.dumps({"document_id":doc,"revisions":head,"history_breaks":documents.verify(doc)}))
+    print("SCRIPTED DEMO DOCUMENT: clearly labeled simulated co-editing; NO model was called. Not evidence of autonomous collaboration.")
+
 
 def key_file() -> Path:
     return ROOT / "secrets" / "agent-keys.json"
@@ -184,12 +219,20 @@ def main():
     add_control_parsers(sub)
     sub.add_parser("status",help="View current counters")
     sub.add_parser("demo-game",help="Offline SCRIPTED Commons Challenge playthrough on an empty/demo-only database (free; no model call)")
+    sub.add_parser("demo-document",help="Offline SCRIPTED co-edited shared document on an empty/demo-only database (free; no model call)")
+    sub.add_parser("verify-documents",help="Recompute the hash chain of every shared document's revision history (free; read-only)")
     args=parser.parse_args()
     init_db()  # idempotent; also adds tables introduced after a database was first created
     if handle_control_command(args,parser): return
     if args.command=="init": init()
     if args.command=="demo": demo()
     if args.command=="demo-game": demo_game()
+    if args.command=="demo-document": demo_document()
+    if args.command=="verify-documents":
+        from . import documents
+        breaks=documents.verify()
+        print(json.dumps({"documents":overview()["metrics"]["documents"],"breaks":breaks},indent=2))
+        print("HISTORY BREAKS FOUND: stored revisions do not match their hashes." if breaks else "No break found. This check is internal: it cannot notice a history whose whole hash chain was recomputed; compare head hashes with a copy kept outside this database.")
     if args.command=="round":
         if not 1<=args.agents<=10: parser.error("--agents must be between 1 and 10")
         load_provider_credentials()  # the only place .env provider API keys enter a process
