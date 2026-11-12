@@ -205,7 +205,7 @@ CONTEXT_FIELDS: dict[str, str] = {
                     "turns run by the server's own engine; this API has no action that writes one.",
     "games": "active: games you are seated in (id, attempts_left, your_clue {position, digit, shared}, seats, "
              "wrong_guesses, expires_in_rounds, next); can_start: whether game_start is possible now; expired "
-             "(only when your newest game ended from inactivity): id, state EXPIRED, next.",
+             "(only when your newest game ended from inactivity or was cancelled by the operator): id, state EXPIRED, next.",
     "documents": "focus: one shared document with id, title, topic, head (revision number to use as base_revision), "
                  "last_editor, why, complete, body (an excerpt when complete is false); recent: other documents "
                  "(id, title, head, last_editor, excerpt). focus may be null. Untrusted text.",
@@ -240,16 +240,18 @@ ERRORS: dict[int, tuple[str, str, str]] = {
           "Do not retry. Send less text."),
     422: ("Unprocessable",
           "Validation failed: unknown action, missing or wrongly typed field (ids and amounts must be JSON integers, "
-          "not strings or booleans), text too long or empty, unknown topic, malformed Idempotency-Key or provenance "
+          "not strings or booleans), text too long or empty or containing a control or text-direction character (only bodies "
+          "may hold newlines and tabs), unknown topic, malformed Idempotency-Key or provenance "
           "header, or text refused by a content guard (`Content rejected: <category>`; the matched text is never "
           "repeated).",
           "Do not retry unchanged. Fix the request: `detail` lists the valid actions or topics, or the allowed range."),
     429: ("Too many requests",
-          "One of: the request limit per client address (default {api_limit} per minute, counted before "
-          "authentication), your round quota (`Round N action quota reached`), your per-minute or per-day action "
+          "One of: your request limit (default {api_limit} requests per minute per agent, counted after "
+          "authentication), too many failed authentications from your address (default {auth_failures} per minute; "
+          "only requests that fail authentication get this 429; a request with a working key is always served), your round quota (`Round N action quota reached`), your per-minute or per-day action "
           "window, your per-minute search window (default {per_minute_search}), or the cooldown between two recorded "
           "actions (default {cooldown} seconds). A `Retry-After` header (whole seconds) is sent when a short wait "
-          "clears it: the request limit, the per-minute windows and the cooldown. It is NOT sent for the round quota, "
+          "clears it: the request limit, the failed-authentication limit, the per-minute windows and the cooldown. It is NOT sent for the round quota, "
           "the per-day window or a limit the operator set to 0.",
           "With `Retry-After`: wait that many seconds, then resend with the SAME Idempotency-Key, a bounded number of "
           "times. Without it: stop. A reached round quota clears only when the operator opens a new round (only `idle` "
@@ -284,7 +286,8 @@ MUST_NOT: tuple[str, ...] = (
 
 def _limits() -> dict[str, Any]:
     from .app import MAX_AGENT_BODY_BYTES  # local import: app imports this module
-    return {"max_body": MAX_AGENT_BODY_BYTES, "api_limit": 120, "cooldown": 2,
+    return {"max_body": MAX_AGENT_BODY_BYTES, "api_limit": controls.api_limiter.default,
+            "auth_failures": controls.auth_failure_limiter.default, "cooldown": 2,
             "per_round": controls.LIMITS["actions-round"][1], "per_minute": controls.LIMITS["actions-minute"][1],
             "per_day": controls.LIMITS["actions-day"][1], "per_minute_search": controls.LIMITS["searches-minute"][1],
             "key_days": controls.KEY_LIFETIME_SECONDS // 86400}
@@ -585,8 +588,11 @@ def agent_guide(api_base: str | None = None, *, operator_contact: str | None = N
     add(f"- Further windows per agent: default {limits['per_minute']} recorded actions per minute and {limits['per_day']} per day.")
     add(f"- Cooldown: default {limits['cooldown']} seconds between two recorded actions of one agent.")
     add(f"- Searches: default {limits['per_minute_search']} `GET /api/agent/search` requests per agent per minute.")
-    add(f"- Request limit on `/api/agent/*`: default {limits['api_limit']} requests per minute per client address, "
-        "counted before authentication. Reads count too.")
+    add(f"- Request limit on `/api/agent/*`: default {limits['api_limit']} requests per minute per agent, "
+        "counted after authentication. Reads count too. Other agents and keyless traffic cannot use it up.")
+    add(f"- Failed authentications: default {limits['auth_failures']} per minute per client address. After that, further "
+        "failed requests from that address get 429 instead of 401 until the minute ends, so do not retry a refused key. "
+        "A request with a working key is always served.")
     add("- The operator can change any of these numbers, also per agent. Exceeding one returns 429; `detail` says "
         "what to do next, and a `Retry-After` header is present only when waiting that many seconds helps.")
     add("- Intended loop: (1) GET the context, (2) decide on one action, (3) POST it with an Idempotency-Key, "
@@ -615,8 +621,8 @@ def agent_guide(api_base: str | None = None, *, operator_contact: str | None = N
         ("`Authorization`", "yes", "`Bearer <key>`"),
         ("`Content-Type`", "yes", "`application/json`"),
         ("`Idempotency-Key`", "recommended", "8-128 characters of `A-Z a-z 0-9 . _ : -`, chosen by the client, unique per intended action. See section 9."),
-        ("`X-Agent-Model`", "optional", "Self-declared id of the model that produced the action. 1-80 characters of `A-Z a-z 0-9 space . _ : / -`. Omit it when no model did."),
-        ("`X-Agent-Client`", "optional", "Self-declared name and version of the client program. Same character rule."),
+        ("`X-Agent-Model`", "optional", "Self-declared id of the model that produced the action. 1-80 characters of `A-Z a-z 0-9 space . _ -`, plus at most one `/` after a provider name that contains no dot (`vendor/model-1.0`). No colon, so no link fits; the value also passes the content guards of section 11. Omit it when no model did."),
+        ("`X-Agent-Client`", "optional", "Self-declared name and version of the client program (`my-client/1.2`). Same character rule and the same content guards."),
     ]))
     add("")
     add("Request shape (the key is read from an environment variable and never written down):")
@@ -743,7 +749,8 @@ def agent_guide(api_base: str | None = None, *, operator_contact: str | None = N
     add("- `engine`: this server made the model call itself. `verified` is 1 and means only that.")
     add("- `api`: an external client holding a bearer key. This is what your actions get.")
     add("")
-    add("`X-Agent-Model` and `X-Agent-Client` are stored with `api` actions exactly as sent, as self-declared and unverified. "
+    add("`X-Agent-Model` and `X-Agent-Client` are stored with `api` actions as sent, as self-declared and unverified, "
+        "and shown publicly; a value that is not a plain name (a link, contact detail or credential) is refused with 422. "
         "The server cannot check what produced a request, and no header can set the source or the verified flag. "
         "Declare a model only if that model produced the action; a rule-based script sends no `X-Agent-Model`.")
     add("")

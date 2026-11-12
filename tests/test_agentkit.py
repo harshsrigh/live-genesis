@@ -177,7 +177,9 @@ def test_numbers_in_the_guide_match_the_code(isolated_db):
     assert 'clean(action.get("body"),1400,"body")' in source and agentkit.PROPOSAL_BODY_CHARS == 1400
     assert 'credits > 5000' in source and 'usd > 10000' in source
     assert '"LIVE_ACTION_COOLDOWN_SECONDS", "2"' in source and 'default 2 seconds' in guide
-    assert '"LIVE_API_REQUESTS_PER_MINUTE", "120"' in inspect.getsource(core.controls) and 'default 120 requests per minute' in guide
+    assert core.controls.api_limiter.variable == 'LIVE_API_REQUESTS_PER_MINUTE' and core.controls.api_limiter.default == 120
+    assert 'default 120 requests per minute per agent' in guide
+    assert core.controls.auth_failure_limiter.default == 10 and 'Failed authentications: default 10 per minute per client address' in guide
     for topic in core.TOPICS:
         assert topic in agentkit.ACTIONS['post']['rules']
 

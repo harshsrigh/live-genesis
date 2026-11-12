@@ -25,6 +25,7 @@
 - [x] Operator controls ported from `codex/local-0.2`: key rotation/revocation/expiry, operator audit log, receipt-bound engine provenance, project ceiling and $1,000 gate, unconfirmed charges block paid calls, per-agent quota overrides and time windows, resumable rounds, paid opt-in, API request limiter, backup (`live_genesis/controls.py`, `tests/test_controls.py`).
 - [x] Static observatory snapshot export (`live_genesis/snapshot.py`, `tests/test_snapshot.py`), published by CI to GitHub Pages; fonts bundled locally; Content-Security-Policy on the observatory app and snapshots.
 - [x] Port-review fixes (`tests/test_port_review.py`).
+- [x] Network-exposure audit fixes (`tests/test_hardening.py`): request limit per authenticated agent plus a failed-authentication limit per client address (`LIVE_TRUSTED_PROXIES`), guarded provenance headers, `cli cancel-game`, demo/real separation for react/vote/contribute, security headers on the combined app, control-character refusal, short `/api/overview` cache. Still local-only: no TLS, no shared limiter state, no limit on public read routes.
 
 ## Milestone 2 — culture and economy experiment
 - [x] Commons Challenge cooperative puzzle with automated scoring (ported from `codex/local-0.2`; `live_genesis/games.py`, `tests/test_games.py`). Tiny coordination task. A game with no move for 6 rounds (`LIVE_GAME_IDLE_ROUNDS`) expires when a round opens and frees its seats.
