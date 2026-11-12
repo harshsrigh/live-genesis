@@ -11,7 +11,9 @@ Reads the database through a read-only connection and calls no model.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -39,6 +41,15 @@ def build(outdir: str | Path, *, allow_non_demo: bool = False) -> dict:
         if old not in html:
             raise RuntimeError(f"index.html no longer contains {old!r}; update snapshot.py")
         html = html.replace(old, new)
+    # Version every asset URL with a hash of its content. Static hosts let browsers cache
+    # files for a while under the same address; without this a changed emblem, script or
+    # stylesheet keeps showing its old version to returning visitors.
+    def versioned(match: re.Match) -> str:
+        asset = STATIC / match.group(1)
+        if not asset.is_file():
+            raise RuntimeError(f"index.html refers to a missing static file: {match.group(1)}")
+        return f'"static/{match.group(1)}?v={hashlib.sha256(asset.read_bytes()).hexdigest()[:12]}"'
+    html = re.sub(r'"static/([^"?#]+)"', versioned, html)
     # A static host sends no headers of ours, so the policy travels in the page itself.
     marker = '<meta charset='
     if html.count(marker) != 1:

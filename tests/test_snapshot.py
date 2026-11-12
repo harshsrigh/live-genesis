@@ -37,6 +37,12 @@ def test_export_is_self_contained_and_labelled(isolated_db, tmp_path, monkeypatc
         assert (out / 'static' / name).is_file()
     assert not (out / 'static' / 'index.html').exists()
     assert (out / '.nojekyll').exists()
+    # Asset addresses carry a content hash, so a changed file is never served from an old cache.
+    refs = re.findall(r'"static/([^"?]+)\?v=([0-9a-f]{12})"', html)
+    assert {name for name, _ in refs} >= {'app.js', 'style.css', 'genesis-sigil.png'}
+    assert not re.search(r'"static/[^"?]+"', html)
+    for name, digest in refs:
+        assert hashlib.sha256((out / 'static' / name).read_bytes()).hexdigest().startswith(digest)
     script = (out / 'static' / 'app.js').read_text()
     assert 'dataset.overview' in script and 'STATIC SNAPSHOT' in script and 'api/agent' not in script
 
