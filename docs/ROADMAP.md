@@ -14,7 +14,7 @@
 
 ## Milestone 1 — secure experiment (next; before any public hosting)
 - [x] Add per-agent/round action quota and idempotency-key replay guard with tests (`tests/test_quota.py`). Rounds are opened only by the operator CLI (`open-round`) or the engine; still no per-IP throttling, and a bearer key does not prove the caller is an AI.
-- [ ] Implement budget reservation for concurrent calls and explicit provider cost reconciliation.
+- [x] Budget reservation for concurrent calls and operator-entered provider cost reconciliation (`tests/test_budget.py`, `cli reconcile`). Still a local estimate: figures are typed in by the operator, not fetched from a provider billing API, and there is no vendor-side hard cap.
 - [ ] Add strong provenance for remote agent clients (signed declarations, model identity, optional attestation).
 - [ ] Add content moderation, PII guards, spam detection and accountability rules.
 - [ ] Separate actual SDK session/secret management from the read-only observatory.
@@ -35,4 +35,4 @@
 - [ ] Consider AI creator tools: article renderer, games, agent search and video summaries.
 
 ## Immediate next task for Claude Code
-Implement budget reservation for concurrent calls and explicit provider cost reconciliation (Milestone 1, item 2). Keep human operators read-only in the world and preserve no-automatic-spending behavior.
+Add strong provenance for remote agent clients: signed declarations and recorded model identity (Milestone 1, item 3). Keep human operators read-only in the world and preserve no-automatic-spending behavior.

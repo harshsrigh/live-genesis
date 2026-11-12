@@ -122,6 +122,16 @@ def init_db() -> None:
             created_at TEXT NOT NULL, UNIQUE (agent_id, idempotency_key)
         );
         CREATE INDEX IF NOT EXISTS round_actions_quota ON round_actions(agent_id, round_id);
+        CREATE TABLE IF NOT EXISTS budget_reservations (
+            id INTEGER PRIMARY KEY, agent_id INTEGER REFERENCES agents(id), model TEXT NOT NULL,
+            reserved_usd REAL NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('held','settled','released','unconfirmed')),
+            usage_id INTEGER REFERENCES api_usage(id), created_at TEXT NOT NULL, closed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS cost_reconciliations (
+            id INTEGER PRIMARY KEY, provider_reported_usd REAL NOT NULL, estimated_usd REAL NOT NULL,
+            last_usage_id INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+        );
         ''')
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
@@ -333,27 +343,118 @@ def overview() -> dict:
         total_likes = cx.execute("SELECT COUNT(*) FROM reactions WHERE choice='like'").fetchone()[0]
         total_dislikes = cx.execute("SELECT COUNT(*) FROM reactions WHERE choice='dislike'").fetchone()[0]
         round_id = _current_round(cx)
+        budget = _budget(cx)
     return {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
             "metrics":{"citizens":len(agents),"posts":total_posts,"proposals":total_proposals,
                        "likes":total_likes,"dislikes":total_dislikes,
                        "recorded_actions":sum(a["actions"] for a in agents),
                        "cost_usd":round(spend,6),"tokens":token_total,
                        "round":round_id,"actions_per_round":actions_per_round(),
+                       "reserved_usd":budget["reserved_usd"],"committed_usd":budget["committed_usd"],
+                       "provider_reported_usd":(budget["last_reconciliation"] or {}).get("provider_reported_usd"),
                        "spend_limit_usd":float(os.getenv("LIVE_SPEND_LIMIT_USD","10"))}}
 
-def record_usage(agent_id:int, model:str, input_tokens:int, output_tokens:int) -> float:
+def _insert_usage(cx: sqlite3.Connection, agent_id:int, model:str, input_tokens:int, output_tokens:int) -> tuple[int,float]:
     input_rate = float(os.getenv("LIVE_INPUT_USD_PER_M", "0.40"))
     output_rate = float(os.getenv("LIVE_OUTPUT_USD_PER_M", "1.50"))
     amount = input_tokens*input_rate/1e6+output_tokens*output_rate/1e6
+    cur = cx.execute("INSERT INTO api_usage(agent_id,model,input_tokens,output_tokens,estimated_usd,created_at) VALUES (?,?,?,?,?,?)",
+                     (agent_id,model,input_tokens,output_tokens,amount,utcnow()))
+    if cx.execute("SELECT 1 FROM events WHERE demo=1 LIMIT 1").fetchone():
+        cx.execute("UPDATE settings SET value='MIXED' WHERE key='mode'")
+    else:
+        cx.execute("UPDATE settings SET value='LIVE' WHERE key='mode' AND value!='MIXED'")
+    return int(cur.lastrowid), amount
+
+def record_usage(agent_id:int, model:str, input_tokens:int, output_tokens:int) -> float:
     with connect() as cx:
-        cx.execute("INSERT INTO api_usage(agent_id,model,input_tokens,output_tokens,estimated_usd,created_at) VALUES (?,?,?,?,?,?)",
-                   (agent_id,model,input_tokens,output_tokens,amount,utcnow()))
-        cx.execute("UPDATE settings SET value='LIVE' WHERE key='mode' AND value!='MIXED'") if not cx.execute("SELECT 1 FROM events WHERE demo=1 LIMIT 1").fetchone() else cx.execute("UPDATE settings SET value='MIXED' WHERE key='mode'")
-    return amount
+        return _insert_usage(cx, agent_id, model, input_tokens, output_tokens)[1]
 
 def spent_usd() -> float:
+    """Local ESTIMATE from reported token counts and configured rates. Not a provider invoice."""
     with connect() as cx:
         return float(cx.execute('SELECT COALESCE(SUM(estimated_usd),0) FROM api_usage').fetchone()[0])
+
+# ---- Budget reservations and operator reconciliation --------------------------------
+# A reservation holds an estimated amount BEFORE a paid call so that concurrent rounds
+# (threads or separate processes) cannot jointly overshoot the local ceiling.
+#   held        -> call in flight (or the process died mid-call)
+#   settled     -> usage recorded; the actual estimate replaces the hold
+#   released    -> no provider request was made, or the operator cleared it
+#   unconfirmed -> the call failed after it may have reached the provider; still counted
+# This remains a SOFTWARE estimate. Only the provider's billing page shows real charges.
+
+class BudgetExceeded(Exception):
+    """Raised when a reservation would push committed spend above the local ceiling."""
+
+def _budget(cx: sqlite3.Connection) -> dict[str,Any]:
+    estimated = float(cx.execute('SELECT COALESCE(SUM(estimated_usd),0) FROM api_usage').fetchone()[0])
+    open_usd, open_count = cx.execute("SELECT COALESCE(SUM(reserved_usd),0),COUNT(*) FROM budget_reservations WHERE status IN ('held','unconfirmed')").fetchone()
+    rec = cx.execute('SELECT * FROM cost_reconciliations ORDER BY id DESC LIMIT 1').fetchone()
+    basis = estimated
+    reported = None
+    if rec:
+        since = float(cx.execute('SELECT COALESCE(SUM(estimated_usd),0) FROM api_usage WHERE id>?', (rec["last_usage_id"],)).fetchone()[0])
+        reported = {"provider_reported_usd":rec["provider_reported_usd"],"estimated_usd_at_entry":rec["estimated_usd"],
+                    "difference_usd":round(rec["provider_reported_usd"]-rec["estimated_usd"],6),
+                    "estimated_usd_since":round(since,6),"note":rec["note"],"created_at":rec["created_at"]}
+        # Never let a lower operator figure reduce the gate below the local estimate.
+        basis = max(estimated, rec["provider_reported_usd"] + since)
+    return {"estimated_usd":round(estimated,6),"open_reservations":int(open_count),"reserved_usd":round(float(open_usd),6),
+            "committed_usd":round(basis+float(open_usd),6),"last_reconciliation":reported}
+
+def budget_status() -> dict[str,Any]:
+    with connect() as cx:
+        return _budget(cx)
+
+def reserve_budget(agent_id: int | None, model: str, amount_usd: float, limit_usd: float) -> int:
+    """Atomically hold amount_usd against the ceiling. Raises BudgetExceeded when it does not fit."""
+    if amount_usd <= 0:
+        raise ValueError("Reservation must be positive")
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")  # write lock: serializes concurrent reservers
+        if _budget(cx)["committed_usd"] + amount_usd > limit_usd:
+            raise BudgetExceeded("Local estimated spending ceiling reached")
+        return int(cx.execute("INSERT INTO budget_reservations(agent_id,model,reserved_usd,status,created_at) VALUES (?,?,?,'held',?)",
+                              (agent_id,model,amount_usd,utcnow())).lastrowid)
+
+def settle_reservation(reservation_id: int, input_tokens: int, output_tokens: int) -> float:
+    """Record reported usage and close the hold in one transaction. Returns the estimated USD."""
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        row = cx.execute("SELECT * FROM budget_reservations WHERE id=?", (reservation_id,)).fetchone()
+        if not row or row["status"] != "held":
+            raise ValueError("Reservation is not open")
+        usage_id, amount = _insert_usage(cx, row["agent_id"], row["model"], input_tokens, output_tokens)
+        cx.execute("UPDATE budget_reservations SET status='settled',usage_id=?,closed_at=? WHERE id=?", (usage_id,utcnow(),reservation_id))
+        return amount
+
+def close_reservation(reservation_id: int, status: str) -> None:
+    """Close a held reservation without usage: 'released' (no request sent) or 'unconfirmed'."""
+    if status not in ("released", "unconfirmed"):
+        raise ValueError("status must be released or unconfirmed")
+    with connect() as cx:
+        done = cx.execute("UPDATE budget_reservations SET status=?,closed_at=? WHERE id=? AND status='held'", (status,utcnow(),reservation_id)).rowcount
+    if not done:
+        raise ValueError("Reservation is not open")
+
+def record_reconciliation(provider_reported_usd: float, note: str = "", *, release_open: bool = False) -> dict[str,Any]:
+    """Operator-entered cumulative spend read from the provider's billing page.
+
+    release_open also clears held/unconfirmed reservations: use it only when the entered
+    figure already covers those calls. Nothing here contacts a provider or moves money.
+    """
+    if not isinstance(provider_reported_usd, (int, float)) or not 0 <= provider_reported_usd < 1_000_000:
+        raise ValueError("Provider-reported spend must be a non-negative number")
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        estimated = float(cx.execute('SELECT COALESCE(SUM(estimated_usd),0) FROM api_usage').fetchone()[0])
+        last_usage = cx.execute('SELECT COALESCE(MAX(id),0) FROM api_usage').fetchone()[0]
+        cx.execute("INSERT INTO cost_reconciliations(provider_reported_usd,estimated_usd,last_usage_id,note,created_at) VALUES (?,?,?,?,?)",
+                   (float(provider_reported_usd),estimated,last_usage,note.strip()[:300],utcnow()))
+        if release_open:
+            cx.execute("UPDATE budget_reservations SET status='released',closed_at=? WHERE status IN ('held','unconfirmed')", (utcnow(),))
+        return _budget(cx)
 
 def update_memory(agent_id: int, memory: str) -> None:
     with connect() as cx:

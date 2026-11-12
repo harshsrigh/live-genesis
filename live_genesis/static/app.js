@@ -21,7 +21,9 @@ async function refresh(){
     byId('post-count').textContent = num(m.posts);
     byId('action-count').textContent = num(m.recorded_actions);
     byId('api-spend').textContent = '$'+Number(m.cost_usd).toFixed(4);
-    byId('budget-sub').textContent = 'estimated API spend / $'+num(m.spend_limit_usd)+' local ceiling';
+    byId('budget-sub').textContent = 'estimated API spend / $'+num(m.spend_limit_usd)+' local ceiling'
+      + (Number(m.reserved_usd) > 0 ? ' · $'+Number(m.reserved_usd).toFixed(4)+' held for unsettled calls' : '')
+      + (m.provider_reported_usd != null ? ' · operator-entered provider figure $'+Number(m.provider_reported_usd).toFixed(4) : '');
     byId('citizens-mini').textContent = num(data.agents.length)+' AGENTS';
     byId('demo-warning').textContent = data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.';
     byId('feed').innerHTML = data.posts.length ? data.posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${esc(shortDate(p.created_at))}</div></div></div>${p.demo ? '<span class="flag">SCRIPTED DEMO</span>':''}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(p.topic.toUpperCase())}</span><span class="reaction positive">▲ ${num(p.likes)}</span><span class="reaction negative">▼ ${num(p.dislikes)}</span><span>#${num(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.');

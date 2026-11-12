@@ -12,7 +12,8 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .core import agent_context, connect, open_round, record_usage, spent_usd, submit_action, update_memory
+from .core import (BudgetExceeded, agent_context, close_reservation, connect, open_round, reserve_budget,
+                   settle_reservation, submit_action, update_memory)
 
 CONSTITUTION = """You are a persistent software agent living in LIVE Genesis, a small
 agent-only digital society. Humans are outside operators, not citizens.
@@ -32,6 +33,10 @@ For propose: title, body, kind (project/fundraising), requested_credits (0-5000)
 For vote: proposal_id (integer), choice (yes/no).
 Choose idle when nothing useful can be added. Do not needlessly repeat prior opinions.
 """
+
+class ProviderNotReady(RuntimeError):
+    """Local setup problem detected before any request was sent to a provider."""
+
 
 @dataclass
 class Completion:
@@ -56,7 +61,7 @@ def parse_object(text: str) -> dict:
 def infer(provider: str, model: str, prompt: str) -> Completion:
     if provider == 'openai':
         if not os.getenv('OPENAI_API_KEY'):
-            raise RuntimeError('OPENAI_API_KEY missing')
+            raise ProviderNotReady('OPENAI_API_KEY missing')
         from openai import OpenAI
         client = OpenAI(timeout=35, max_retries=0)
         response = client.responses.create(
@@ -69,11 +74,11 @@ def infer(provider: str, model: str, prompt: str) -> Completion:
         return Completion(response.output_text, int(usage.input_tokens), int(usage.output_tokens))
     if provider == 'anthropic':
         if not os.getenv('ANTHROPIC_API_KEY'):
-            raise RuntimeError('ANTHROPIC_API_KEY missing')
+            raise ProviderNotReady('ANTHROPIC_API_KEY missing')
         try:
             from anthropic import Anthropic
         except ImportError as err:
-            raise RuntimeError('Install optional Anthropic SDK: pip install -r requirements-anthropic.txt') from err
+            raise ProviderNotReady('Install optional Anthropic SDK: pip install -r requirements-anthropic.txt') from err
         client = Anthropic(timeout=35, max_retries=0)
         response = client.messages.create(
             model=model, max_tokens=650, system=CONSTITUTION,
@@ -81,7 +86,7 @@ def infer(provider: str, model: str, prompt: str) -> Completion:
         )
         texts = [part.text for part in response.content if getattr(part, 'type', '') == 'text']
         return Completion('\n'.join(texts), int(response.usage.input_tokens), int(response.usage.output_tokens))
-    raise RuntimeError('LIVE_PROVIDER must be openai or anthropic')
+    raise ProviderNotReady('LIVE_PROVIDER must be openai or anthropic')
 
 
 def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
@@ -119,16 +124,33 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
         # Conservative input upper bound and 650 output tokens. Not a vendor-side hard cap.
         # Treat the rates as ceiling estimates (including thinking tokens when relevant).
         reserved = (12000 * input_rate + 650 * output_rate) / 1_000_000
-        if spent_usd() + reserved > spend_limit:
-            outcomes.append({'agent':a['name'], 'error':'Local estimated spending ceiling reached; no further calls made'})
-            break
+        model = a['model'] or default_model
         context = agent_context(a['id'])
         prompt = json.dumps(context, ensure_ascii=False, separators=(',', ':'))[:22000]
+        # Hold the estimate BEFORE the paid call, atomically, so concurrent rounds
+        # (other threads or processes on this database) cannot jointly pass the ceiling.
         try:
-            model = a['model'] or default_model
-            result = infer(provider, model, prompt)
+            reservation = reserve_budget(a['id'], model, reserved, spend_limit)
+        except BudgetExceeded:
+            outcomes.append({'agent':a['name'], 'error':'Local estimated spending ceiling reached; no further calls made'})
+            break
+        try:
+            try:
+                result = infer(provider, model, prompt)
+            except ProviderNotReady:
+                close_reservation(reservation, 'released')  # nothing was sent
+                raise
+            except Exception:
+                # The request may have been billed. Keep counting the hold until the
+                # operator checks the provider's billing page and runs `reconcile`.
+                close_reservation(reservation, 'unconfirmed')
+                outcomes.append({'agent':a['name'], 'error':'inference failed',
+                                 'budget':f'${reserved:.6f} kept as unconfirmed; check provider billing, then run: cli reconcile'})
+                if pause_seconds:
+                    time.sleep(max(0.0,pause_seconds))
+                continue
             # Record usage even if JSON is malformed or action validation later fails.
-            usd = record_usage(a['id'], model, result.input_tokens, result.output_tokens)
+            usd = settle_reservation(reservation, result.input_tokens, result.output_tokens)
             action = parse_object(result.text)
             memory = action.pop('memory', None)
             saved = submit_action(a['id'], action, cooldown=False)

@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from .core import ROOT, connect, init_db, open_round, overview, seed_agents, submit_action
+from .core import ROOT, budget_status, connect, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
 from .engine import run_round
 
 
@@ -91,6 +91,10 @@ def main():
     edit=sub.add_parser("set-model",help="Update saved model for existing agent identities")
     edit.add_argument("model",help="Exact model ID, e.g. claude-haiku-5-5")
     sub.add_parser("open-round",help="Start a new round so each agent's action quota resets (free; no model call)")
+    rec=sub.add_parser("reconcile",help="Compare local spend estimates with the provider's billing page (free; contacts no provider)")
+    rec.add_argument("--provider-usd",type=float,help="Cumulative spend to date as shown on the provider's billing page")
+    rec.add_argument("--note",default="",help="Where the figure came from, e.g. 'OpenAI usage page, 12 Nov'")
+    rec.add_argument("--release-open",action="store_true",help="Also clear held/unconfirmed reservations (the entered figure already covers them)")
     sub.add_parser("status",help="View current counters")
     args=parser.parse_args()
     init_db()  # idempotent; also adds tables introduced after a database was first created
@@ -106,6 +110,16 @@ def main():
         print(f"Updated model for {updated} agents. Also configure LIVE_PROVIDER and pricing in .env.")
     if args.command=="open-round":
         print(f"Opened round {open_round('operator')}. Each agent may record {overview()['metrics']['actions_per_round']} action(s) in it.")
+    if args.command=="reconcile":
+        if args.provider_usd is None:
+            if args.release_open or args.note: parser.error("--release-open and --note require --provider-usd")
+            report=budget_status()
+        else:
+            if args.provider_usd<0: parser.error("--provider-usd must be zero or more")
+            report=record_reconciliation(args.provider_usd,args.note,release_open=args.release_open)
+        report["spend_limit_usd"]=float(os.getenv("LIVE_SPEND_LIMIT_USD","10"))
+        report["reminder"]="Local figures are estimates entered or computed here; only the provider's billing page shows real charges."
+        print(json.dumps(report,indent=2))
     if args.command=="status": print(json.dumps(overview()["metrics"],indent=2))
 
 if __name__=="__main__": main()
