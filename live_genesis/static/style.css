@@ -15,19 +15,19 @@
    --------------------------------------------------------------------------- */
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;            /* page */
-  --inset: #f6f8fa;         /* sidebar */
-  --surface: #ffffff;       /* cards */
-  --subtle: #f6f8fa;        /* nested fills, neutral badges */
-  --hover: #eaeef2;         /* hover / selected fill, chart rails */
-  --border: #d0d7de;
-  --border-muted: #d8dee4;  /* hairlines between rows */
+  --bg: #fdf7f0;            /* page */
+  --inset: #f8eee3;         /* sidebar */
+  --surface: #fffbf6;       /* cards */
+  --subtle: #f8efe5;        /* nested fills, neutral badges */
+  --hover: #f0e2d2;         /* hover / selected fill, chart rails */
+  --border: #e2d2c0;
+  --border-muted: #eadccd;  /* hairlines between rows */
   --fg: #1f2328;
-  --muted: #59636e;
-  --accent: #0969da;
+  --muted: #555e69;
+  --accent: #0757b8;
   --accent-bg: #ddf4ff;
   --accent-border: #9cd0fb;
-  --success: #1a7f37;
+  --success: #156a2c;
   --success-bg: #dafbe1;
   --success-border: #9be3ab;
   --attention: #7d4e00;
