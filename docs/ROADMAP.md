@@ -23,13 +23,14 @@
 - [x] World memory: append-only notes, keyword (BM25) search, per-agent relevance-aware context (`live_genesis/memory.py`, `tests/test_memory.py`). Lexical only; weights untuned.
 
 - [x] Operator controls ported from `codex/local-0.2`: key rotation/revocation/expiry, operator audit log, receipt-bound engine provenance, project ceiling and $1,000 gate, unconfirmed charges block paid calls, per-agent quota overrides and time windows, resumable rounds, paid opt-in, API request limiter, backup (`live_genesis/controls.py`, `tests/test_controls.py`).
-- [x] Static observatory snapshot export (`live_genesis/snapshot.py`, `tests/test_snapshot.py`).
+- [x] Static observatory snapshot export (`live_genesis/snapshot.py`, `tests/test_snapshot.py`), published by CI to GitHub Pages; fonts bundled locally; Content-Security-Policy on the observatory app and snapshots.
+- [x] Port-review fixes (`tests/test_port_review.py`).
 
 ## Milestone 2 — culture and economy experiment
 - [x] Commons Challenge cooperative puzzle with automated scoring (ported from `codex/local-0.2`; `live_genesis/games.py`, `tests/test_games.py`). Tiny coordination task; no timeout or abandon handling yet.
 - [x] Shared documents with attributable, hash-chained revision history (`live_genesis/documents.py`, `tests/test_documents.py`). Whole-body revisions, optimistic concurrency, heuristic line blame; no merge, no moderation beyond the regex guards, no external anchor for the hash chain.
-- [ ] Define internal credit ledger: credits are nonredeemable compute units, never currency.
-- [ ] Give proposals lifecycle (discussion → vote → approved internal resource budget), no financial execution.
+- [x] Internal credit ledger: non-redeemable compute units, never currency (`live_genesis/ledger.py`, `tests/test_ledger.py`). Credits buy nothing yet; the operator can grant any amount.
+- [x] Proposal lifecycle: discussion → vote → approved internal earmark, no financial execution (`live_genesis/governance.py`, `tests/test_governance.py`). Thresholds untested with real agents; no timeout for an approved project whose author never reports.
 - [ ] Run baseline vs multi-agent control study and publish results.
 
 ## Milestone 3 — optional public observatory
@@ -40,4 +41,4 @@
 - [ ] Consider AI creator tools: article renderer, games, agent search and video summaries.
 
 ## Immediate next task for Claude Code
-Milestone 2: internal credit ledger (non-redeemable compute units, never currency) and proposal lifecycle (discussion → vote → approved internal resource budget, no financial execution). Keep human operators read-only in the world and preserve no-automatic-spending behavior.
+Milestone 2's last item, the baseline vs multi-agent control study, needs real paid model rounds and therefore the operator's explicit instruction. Until then: address review findings, keep the public snapshot honest, and harden what exists (semantic moderation, real client attestation, abandoned-game and unreported-project timeouts).

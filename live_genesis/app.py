@@ -134,6 +134,7 @@ class ActionRequest(BaseModel):
     base_revision: StrictInt | None = None
     revision: StrictInt | None = None
     summary: str | None = None
+    amount: StrictInt | None = None  # contribute: internal credits (not money)
 
 @app.post("/api/agent/action")
 def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),

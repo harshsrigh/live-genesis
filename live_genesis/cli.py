@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from . import controls
+from . import controls, governance, ledger
 from .config import load_provider_credentials
 from .core import ROOT, budget_status, connect, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
 from .engine import run_round
@@ -70,16 +70,41 @@ def demo() -> None:
         ("Echo-7","The Commons Challenge","like"),
     ]:
         submit_action(ids[name],{"action":"react","post_id":recorded[post],"choice":choice},demo=True,cooldown=False,quota=False)
-    for name,proposal,choice in [
-        ("Nori","Community memory commons","yes"),("Quill","Community memory commons","yes"),
-        ("Orbit","Community memory commons","no"),
-        ("Vela","Create the first playable logic game","yes"),
-        ("Astra","Create the first playable logic game","yes"),
-        ("Moss","Sponsor the first independent puzzle tournament","yes"),
-        ("Lumen","Sponsor the first independent puzzle tournament","no"),
-    ]:
-        submit_action(ids[name],{"action":"vote","proposal_id":recorded[proposal],"choice":choice},demo=True,cooldown=False,quota=False)
+    demo_governance(ids,recorded)
     print("Added clearly labeled simulated demonstration data; NO model was called.")
+    print("The scripted proposals were walked through discussion, voting and a decision by this script (rounds opened with source 'demo').")
+    print("Credits shown are internal accounting units with no monetary value; no money was requested, collected or moved.")
+
+
+def _open_demo_rounds(waiting_status: str) -> None:
+    """Open rounds (source 'demo') until no proposal is left in `waiting_status`. Bounded by the configured windows."""
+    for _ in range(governance.discussion_rounds()+governance.voting_rounds()+2):
+        with connect() as cx:
+            if not cx.execute("SELECT 1 FROM proposals WHERE status=?",(waiting_status,)).fetchone(): return
+        open_round("demo")
+
+
+def demo_governance(ids: dict, recorded: dict) -> None:
+    """Scripted continuation of `demo`: every record is flagged demo and no model is called.
+
+    Agents contribute internal credits to the commons pool, the three sample proposals pass
+    discussion and voting, and each ends differently: the project with a quorum and a majority
+    gets an earmark, the fundraising TEXT is only endorsed for human operator review (no money
+    requested, collected or authorized), and the third project is rejected."""
+    script=dict(demo=True,cooldown=False,quota=False)
+    for name in ("Astra","Moss","Quill","Vela","Orbit","Kairo","Echo-7","Nori"):
+        submit_action(ids[name],{"action":"contribute","amount":30},**script)
+    _open_demo_rounds("DISCUSSION")
+    commons,sponsor,game="Community memory commons","Sponsor the first independent puzzle tournament","Create the first playable logic game"
+    for name,proposal,choice in [
+        ("Nori",commons,"yes"),("Quill",commons,"yes"),("Orbit",commons,"no"),
+        ("Astra",commons,"yes"),("Echo-7",commons,"yes"),("Kairo",commons,"yes"),
+        ("Vela",game,"yes"),("Astra",game,"yes"),("Moss",game,"no"),("Lumen",game,"no"),("Solace",game,"no"),
+        ("Moss",sponsor,"yes"),("Lumen",sponsor,"no"),("Astra",sponsor,"yes"),("Quill",sponsor,"yes"),
+        ("Nori",sponsor,"yes"),("Echo-7",sponsor,"yes"),
+    ]:
+        submit_action(ids[name],{"action":"vote","proposal_id":recorded[proposal],"choice":choice},**script)
+    _open_demo_rounds("VOTING")
 
 
 def demo_game() -> None:
@@ -159,6 +184,15 @@ def add_control_parsers(sub) -> None:
     lim.add_argument("maximum",help='Integer 0-10000, or "default"')
     bak=sub.add_parser("backup",help="SQLite online backup to a NEW file (the copy contains private agent memory and key hashes)")
     bak.add_argument("destination")
+    gr=sub.add_parser("grant-credits",help="Create internal compute-accounting credits for one agent or the commons pool (audited; NOT money, never tied to any dollar figure)")
+    gr.add_argument("target",help='Agent id, or "commons" for the shared pool')
+    gr.add_argument("amount",type=int,help="Whole number of credits, 1 or more")
+    gr.add_argument("--reason",required=True,help="Why; stored in the operator audit log")
+    rv=sub.add_parser("review-proposal",help="Record that you read an agent-endorsed fundraising text (audited). Authorizes NOTHING, whichever value you give")
+    rv.add_argument("proposal_id",type=int)
+    rv.add_argument("review",choices=governance.REVIEW_CHOICES)
+    rv.add_argument("--note",default="",help="Optional short note; shown publicly on the observatory")
+    sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
 
 
 def handle_control_command(args,parser) -> bool:
@@ -188,6 +222,24 @@ def handle_control_command(args,parser) -> bool:
         try: controls.set_limit(args.agent_id,args.kind,None if args.maximum=="default" else int(args.maximum))
         except ValueError as err: parser.error(str(err))
         print(f"Agent {args.agent_id} {args.kind} quota set to {args.maximum}.")
+        return True
+    if args.command=="grant-credits":
+        target="commons" if args.target=="commons" else int(args.target) if args.target.isdigit() else None
+        if target is None: parser.error('target must be an agent id or "commons"')
+        try: done=ledger.grant(target,args.amount,args.reason)
+        except ValueError as err: parser.error(str(err))
+        print(f"Granted {done['granted']} credits to {done['target']}. Balance {done['balance']}; total supply {done['total_supply']}. Recorded in the operator audit log.")
+        print(ledger.UNIT_NOTE)
+        return True
+    if args.command=="review-proposal":
+        try: done=governance.review(args.proposal_id,args.review,args.note)
+        except ValueError as err: parser.error(str(err))
+        print(f"Proposal {done['proposal_id']}: operator review recorded as {done['operator_review']}. Status stays {done['status']}.")
+        print(done["meaning"])
+        return True
+    if args.command=="verify-ledger":
+        problems=ledger.verify()
+        print("\n".join(problems) if problems else "Credit ledger consistent: balances follow from the entries, cached copies match, supply equals opening entries plus operator grants.")
         return True
     if args.command=="backup":
         try: saved=controls.backup(args.destination)

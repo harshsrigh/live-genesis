@@ -295,13 +295,13 @@ def world_for_agent(cx: sqlite3.Connection, agent: dict[str, Any]) -> dict[str, 
     `agent` needs id, role, persona, memory. Same fields per item as before plus `why`:
       recent   - one of the newest items, shown to every agent (shared current events)
       relevant - older, chosen by text relevance to this agent's role/persona/memory/own posts
-      unvoted  - older proposal this agent has not voted on
+      unvoted  - older proposal in VOTING that this agent may vote on and has not yet
       yours    - this agent's own older item that other agents reacted to or voted on
     """
     me = agent["id"]
     posts = cx.execute("SELECT p.id,p.topic,p.title,p.body,p.agent_id,a.name author FROM posts p JOIN agents a ON a.id=p.agent_id "
                        "ORDER BY p.id DESC LIMIT ?", (SCAN_LIMIT,)).fetchall()
-    proposals = cx.execute("SELECT p.id,p.title,p.body,p.kind,p.requested_usd,p.requested_credits,p.agent_id,a.name author "
+    proposals = cx.execute("SELECT p.id,p.title,p.body,p.kind,p.requested_usd,p.requested_credits,p.agent_id,p.status,a.name author "
                            "FROM proposals p JOIN agents a ON a.id=p.agent_id ORDER BY p.id DESC LIMIT ?", (SCAN_LIMIT,)).fetchall()
     profile = _profile(agent, posts, proposals)
     answered_posts = {r[0] for r in cx.execute(
@@ -315,7 +315,8 @@ def world_for_agent(cx: sqlite3.Connection, agent: dict[str, Any]) -> dict[str, 
 
     def proposal_bonus(row: sqlite3.Row) -> tuple[float, str | None]:
         extra, label = 0.0, None
-        if row["id"] not in voted:
+        # Open business only: a vote is possible while the proposal is in VOTING and never for its author.
+        if row["id"] not in voted and row["status"] == "VOTING" and row["agent_id"] != me:
             extra, label = extra + BONUS_UNVOTED, "unvoted"
         if row["id"] in answered_proposals:
             extra, label = extra + BONUS_YOURS, "yours"

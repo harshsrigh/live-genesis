@@ -213,6 +213,7 @@ def large_world():
     for n in range(1, 16):
         propose(who['Lumen'], f'Shelf plan {n}', f'Reorder warehouse shelf row {n} before the next inventory.')
     act(who['Moss'], {'action': 'react', 'post_id': 2, 'choice': 'like'})  # someone answered Astra's old post
+    open_round(); open_round()  # proposal lifecycle: one full discussion round, then all 15 are in VOTING
     for n in range(1, 13):
         if n != 2:  # Astra has voted on every older proposal except #2
             act(who['Astra'], {'action': 'vote', 'proposal_id': n, 'choice': 'yes'})
@@ -233,9 +234,9 @@ def test_large_world_context_blends_recent_relevant_and_open_business(isolated_d
     assert all(proposals[i] == 'recent' for i in (15, 14, 13)) and astra['proposals'][0]['id'] == 15
     assert proposals[2] == 'unvoted' and astra['proposals'][1]['id'] == 2  # open business right after the newest item
     assert set(posts.values()) <= {'recent', 'relevant', 'unvoted', 'yours'}
-    # Same fields as before, plus `why`.
+    # Same fields as before, plus `why` (and, for proposals, the lifecycle `status` and `next`).
     assert list(astra['recent_posts'][0]) == ['id', 'topic', 'title', 'body', 'author', 'likes', 'dislikes', 'why']
-    assert list(astra['proposals'][0]) == ['id', 'title', 'body', 'kind', 'requested_usd', 'requested_credits', 'author', 'yes', 'no', 'why']
+    assert list(astra['proposals'][0]) == ['id', 'title', 'body', 'kind', 'requested_usd', 'requested_credits', 'author', 'yes', 'no', 'why', 'status', 'next']
     assert [p for p in astra['recent_posts'] if p['id'] == 2][0]['likes'] == 1
     # A different role gets a different older selection but the same newest items.
     quill_posts = {p['id']: p['why'] for p in quill['recent_posts']}
@@ -274,7 +275,8 @@ def legacy_sets():
 
 
 def without_why(items):
-    return sorted(({k: v for k, v in item.items() if k != 'why'} for item in items), key=lambda d: d['id'])
+    # `status` / `next` are lifecycle annotations added by governance.annotate, not part of the selection.
+    return sorted(({k: v for k, v in item.items() if k not in ('why', 'status', 'next')} for item in items), key=lambda d: d['id'])
 
 
 def test_small_world_returns_the_same_items_as_before(isolated_db, tmp_path, monkeypatch):
@@ -316,7 +318,7 @@ def test_context_notes_are_bounded_recent_plus_relevant(isolated_db):
                                                          ('recent', 'Sketched constellation number 4 for the atlas.')]
     assert ('relevant', 'Warehouse shelves and spare cables were recounted in the storage batch.') in [(n['why'], n['note']) for n in notes]
     assert 2 <= len(notes) <= 5 and len({n['id'] for n in notes}) == len(notes)
-    assert all(set(n) == {'id', 'round', 'note', 'why'} and n['round'] == 1 for n in notes)
+    assert all(set(n) == {'id', 'round', 'note', 'why'} and n['round'] == 3 for n in notes)  # large_world opens two rounds for the proposal lifecycle
     assert agent_context(who['Moss'])['memory_notes'] == []  # notes are private to their agent
 
 

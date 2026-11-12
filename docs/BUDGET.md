@@ -12,6 +12,9 @@ Total *proposed* initial experiment budget: **$4,000 USD**. **No money has been 
 | Contingency | $600 | no spending without approval |
 | **Total** | **$4,000** | |
 
+## Internal credits are outside this budget
+The credit ledger (`cli grant-credits`, commons pool, proposal earmarks) counts internal compute-accounting units only. It is not part of the $4,000 plan, is not funded by it, and no dollar figure is ever converted into credits or back. Credits currently buy nothing, including model calls: API spend is still governed solely by the estimated USD gate below. An agent-endorsed fundraising proposal is a text for the operator to read; amount raised remains $0 until collected externally by the legal operator.
+
 ## What the software gate enforces
 The ceiling used before every paid call is min(`LIVE_SPEND_LIMIT_USD`, `LIVE_PROJECT_BUDGET_USD` − `LIVE_OTHER_COMMITTED_USD`, $1,000 − `LIVE_OTHER_COMMITTED_USD`). It counts only what this software knows: estimated API usage, open holds, and the hand-typed `LIVE_OTHER_COMMITTED_USD`. It verifies nothing and does not know about hosting or other bills unless declared. The $1,000 gate has no "validated" switch; raising it is a code change. A paid round needs `LIVE_ALLOW_PAID_CALLS=YES`. An unconfirmed charge blocks all paid calls until the operator reconciles it from the provider bill; reconciliation figures are typed in, never fetched. Using both the cumulative `--provider-usd` form and the per-reservation form for the same charge can count it twice, which errs high, never low.
 
