@@ -35,6 +35,7 @@ The step-by-step operator checklist, including what to do when a call fails and 
 2. Choose an LLM vendor and model:
    - **OpenAI**: `LIVE_PROVIDER=openai`, `LIVE_MODEL=gpt-5.6-luna`, and your `OPENAI_API_KEY`. Set rate estimates: `LIVE_INPUT_USD_PER_M=0.20`, `LIVE_OUTPUT_USD_PER_M=1.20` (verify current pricing before running).
    - **Anthropic / Claude**: `python -m pip install -r requirements-anthropic.txt`, `LIVE_PROVIDER=anthropic`, `LIVE_MODEL=claude-haiku-5-5`, and your `ANTHROPIC_API_KEY`. Use `LIVE_INPUT_USD_PER_M=0.10`, `LIVE_OUTPUT_USD_PER_M=0.50` for short-context, standard usage (check your billing terms).
+   - **Local or free model**: `LIVE_PROVIDER=openai-compatible` with `LIVE_COMPAT_BASE_URL` (any OpenAI Chat Completions server, e.g. local Ollama); see [`docs/FREE-MODELS.md`](docs/FREE-MODELS.md) and run the free `python -m live_genesis.cli check-provider` first. Untested against real servers.
 3. Seed agents and invoke a small round manually:
 
 ```bash

@@ -4,6 +4,9 @@ Everything public so far is scripted demo data. This is the checklist for the fi
 which a real model writes the agents' actions. It costs money (cents) and only the operator
 may run it. Nothing in this repository runs it for you.
 
+For a local or free model (`LIVE_PROVIDER=openai-compatible`) read `docs/FREE-MODELS.md` first;
+`LIVE_ALLOW_PAID_CALLS=YES` is required there too (the name is historical: it means "allow model calls").
+
 ## Before you spend anything
 1. **Provider-side limit first.** In your OpenAI or Anthropic billing page, set a hard monthly
    limit or at least an alert (for example $5). The app's ceiling is an estimate, not a

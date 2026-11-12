@@ -1,4 +1,4 @@
-"""Metered agent-turn runner for OpenAI and Anthropic.
+"""Metered agent-turn runner for OpenAI, Anthropic and OpenAI-compatible (Chat Completions) servers.
 
 No payment, outbound email, browser, or third-party posting tools are exposed.
 Each invocation triggers at most one LLM inference per selected agent.
@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from . import controls, study
+from . import controls, providers, study
 from .action_schema import ActionRequest
 from .core import (BudgetExceeded, ReconciliationRequired, agent_context, close_reservation, connect, current_round,
                    open_round, reserve_budget, settle_reservation, submit_action, update_memory)
@@ -85,11 +85,38 @@ def parse_object(text: str) -> dict:
 def infer(provider: str, model: str, prompt: str, *, system: str = CONSTITUTION, max_output_tokens: int = 650) -> Completion:
     """One provider request. `system` and `max_output_tokens` default to the resident turn's values;
     only live_genesis/study.py passes others (its calls are not resident turns)."""
+    try:
+        timeout = providers.timeout_seconds()  # LIVE_INFER_TIMEOUT_SECONDS: default 35, clamped 5-600
+        compat = providers.compat_settings() if provider == providers.COMPATIBLE else None
+        compat_key = providers.compat_api_key(compat) if compat else None
+    except providers.ProviderConfigError as err:
+        raise ProviderNotReady(str(err)) from None
+    if compat:
+        # Any server speaking the OpenAI Chat Completions API (local or hosted). The base URL and key are
+        # passed explicitly, never taken from OPENAI_* variables. Exceptions from here on are caught by the
+        # callers, which never echo their text.
+        from openai import OpenAI
+        client = OpenAI(base_url=compat.base_url, api_key=compat_key, timeout=timeout, max_retries=0)
+        request: dict[str, Any] = {'model': model, 'max_tokens': max_output_tokens,
+                                   'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': prompt}]}
+        if compat.json_mode:
+            request['response_format'] = {'type': 'json_object'}
+        if compat.reasoning_effort:
+            request['reasoning_effort'] = compat.reasoning_effort
+        response = client.chat.completions.create(**request)
+        usage = getattr(response, 'usage', None)
+        tokens = (getattr(usage, 'prompt_tokens', None), getattr(usage, 'completion_tokens', None))
+        if any(type(n) is not int or n < 0 for n in tokens):
+            # No numbers are invented: the callers keep the hold as unconfirmed and stop.
+            raise RuntimeError('Provider usage missing; inference not recorded as priced')
+        choices = getattr(response, 'choices', None) or []
+        text = getattr(getattr(choices[0], 'message', None), 'content', None) if choices else None
+        return Completion(text if isinstance(text, str) else '', tokens[0], tokens[1])
     if provider == 'openai':
         if not os.getenv('OPENAI_API_KEY'):
             raise ProviderNotReady('OPENAI_API_KEY missing')
         from openai import OpenAI
-        client = OpenAI(timeout=35, max_retries=0)
+        client = OpenAI(timeout=timeout, max_retries=0)
         response = client.responses.create(
             model=model, instructions=system,
             input=prompt, max_output_tokens=max_output_tokens,
@@ -105,14 +132,14 @@ def infer(provider: str, model: str, prompt: str, *, system: str = CONSTITUTION,
             from anthropic import Anthropic
         except ImportError as err:
             raise ProviderNotReady('Install optional Anthropic SDK: pip install -r requirements-anthropic.txt') from err
-        client = Anthropic(timeout=35, max_retries=0)
+        client = Anthropic(timeout=timeout, max_retries=0)
         response = client.messages.create(
             model=model, max_tokens=max_output_tokens, system=system,
             messages=[{'role':'user', 'content':prompt}],
         )
         texts = [part.text for part in response.content if getattr(part, 'type', '') == 'text']
         return Completion('\n'.join(texts), int(response.usage.input_tokens), int(response.usage.output_tokens))
-    raise ProviderNotReady('LIVE_PROVIDER must be openai or anthropic')
+    raise ProviderNotReady(providers.UNKNOWN_PROVIDER)
 
 
 # The unpatched adapter. study.py compares `engine.infer` with this to flag any run made
@@ -195,22 +222,20 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> 
     if not 1 <= limit <= 10:
         raise ValueError('Between 1 and 10 agents may be run per round')
     provider = os.getenv('LIVE_PROVIDER','openai').strip().lower()
-    if provider not in ('openai', 'anthropic'):
-        raise RuntimeError('LIVE_PROVIDER must be openai or anthropic')
-    required_key = 'OPENAI_API_KEY' if provider == 'openai' else 'ANTHROPIC_API_KEY'
-    if not os.getenv(required_key):
-        raise RuntimeError(f'{required_key} missing. For a free illustrated sample, run: python -m live_genesis.cli demo')
-    # A key lying in the environment is not consent to spend.
+    try:
+        providers.check_ready(provider)  # known provider, usable settings, key where one is needed; sends nothing
+    except providers.ProviderConfigError as err:
+        hint = ' For a free illustrated sample, run: python -m live_genesis.cli demo' if str(err).endswith('missing') else ''
+        raise RuntimeError(f'{err}.{hint}') from None
+    # A key lying in the environment is not consent to spend. The opt-in covers every provider, local ones included.
     if os.getenv('LIVE_ALLOW_PAID_CALLS') != 'YES':
         raise RuntimeError('Explicit opt-in required for paid calls: set LIVE_ALLOW_PAID_CALLS=YES')
     # Fail closed on unusable budget settings (non-numeric, NaN, infinite, zero, negative,
     # project budget of $4,000 or more) before a round is opened or a provider is contacted.
     budget = controls.budget_config()
     spend_limit, input_rate, output_rate = budget['spend_limit_usd'], budget['input_rate'], budget['output_rate']
-    if provider == 'openai':
-        default_model = 'gpt-5.6-luna'
-    else:
-        default_model = 'claude-haiku-5-5'
+    # openai-compatible has no built-in default: the operator names the model the server expects.
+    default_model = providers.DEFAULT_MODELS.get(provider) or os.getenv('LIVE_MODEL', '').strip()
     with connect() as cx:
         # Revoked agents are never called. As before, the first `limit` (enabled) agents by id.
         # Externally operated agents (cli set-external) act through their own client and key: never selected,
@@ -234,6 +259,9 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> 
     outcomes: list[dict[str,Any]] = []
     for a in agents:
         model = a['model'] or default_model
+        if not model:
+            outcomes.append({'agent':a['name'], 'error':'no model configured (set LIVE_MODEL or run cli set-model); not called'})
+            continue
         try:
             prompt = build_prompt(agent_context(a['id']))
         except ValueError:

@@ -37,5 +37,8 @@ def isolated_db(tmp_path,monkeypatch):
     monkeypatch.setattr('live_genesis.cli.ROOT',tmp_path)
     monkeypatch.delenv('OPENAI_API_KEY',raising=False)
     monkeypatch.delenv('ANTHROPIC_API_KEY',raising=False)
+    for name in ('OPENAI_COMPATIBLE_API_KEY','LIVE_COMPAT_BASE_URL','LIVE_COMPAT_JSON_MODE','LIVE_COMPAT_REASONING_EFFORT',
+                 'LIVE_INFER_TIMEOUT_SECONDS','LIVE_MODEL'):
+        monkeypatch.delenv(name,raising=False)  # provider settings from the developer's shell or .env never leak in
     init_db()
     return path

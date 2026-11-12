@@ -32,6 +32,8 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
+from . import providers
+
 
 def now() -> float:
     """Seconds since the epoch. Replaced in tests."""
@@ -310,11 +312,16 @@ def project_gates() -> dict[str, float]:
 
 
 def budget_config() -> dict[str, float]:
-    """Everything a paid round needs, validated up front."""
+    """Everything a paid round needs, validated up front.
+
+    Rates must be positive (fail closed). The one exception: `openai-compatible` with a loopback
+    base URL may use zero rates, so a model running on this machine is recorded as $0 estimated
+    (providers.zero_rates_allowed). A hosted endpoint, free tier or not, still needs positive rates."""
     gates = project_gates()
     gates["spend_limit_usd"] = _number("LIVE_SPEND_LIMIT_USD", "10", positive=True)
-    gates["input_rate"] = _number("LIVE_INPUT_USD_PER_M", "0", positive=True)
-    gates["output_rate"] = _number("LIVE_OUTPUT_USD_PER_M", "0", positive=True)
+    positive = not providers.zero_rates_allowed()
+    gates["input_rate"] = _number("LIVE_INPUT_USD_PER_M", "0", positive=positive)
+    gates["output_rate"] = _number("LIVE_OUTPUT_USD_PER_M", "0", positive=positive)
     return gates
 
 
