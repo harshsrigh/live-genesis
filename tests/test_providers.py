@@ -73,7 +73,7 @@ def test_adapter_request_shape_defaults(monkeypatch):
     assert (done.text, done.input_tokens, done.output_tokens) == (POST, 210, 64)
     assert seen[0]['init'] == {'base_url': LOCAL, 'api_key': providers.LOCAL_PLACEHOLDER_KEY, 'timeout': 35.0, 'max_retries': 0}
     assert seen[0]['create'] == {
-        'model': 'qwen3:8b', 'max_tokens': 650, 'response_format': {'type': 'json_object'},
+        'model': 'qwen3:8b', 'max_tokens': engine.MAX_OUTPUT_TOKENS, 'response_format': {'type': 'json_object'},
         'messages': [{'role': 'system', 'content': engine.CONSTITUTION}, {'role': 'user', 'content': 'the prompt'}]}
 
 
@@ -304,7 +304,7 @@ def test_invalid_json_from_the_model_is_an_error_outcome_with_usage_recorded(iso
     seed_agents()
     fake_sdk(monkeypatch, text='Sure! Here is my action: post something')
     outcomes = engine.run_round(limit=2)
-    assert [o['error'] for o in outcomes] == ['ValueError', 'ValueError']  # each agent only; the round continues
+    assert [o['error'] for o in outcomes] == [engine.NOT_JSON, engine.NOT_JSON]  # each agent only; the round continues
     assert [r['status'] for r in reservations()] == ['settled', 'settled']
     assert overview()['metrics']['posts'] == 0 and overview()['metrics']['tokens'] == 2 * (210 + 64)
 

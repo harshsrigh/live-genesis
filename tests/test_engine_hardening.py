@@ -82,9 +82,9 @@ def test_hold_formula_mirrors_the_study_and_keeps_its_order_of_magnitude():
     system_bytes = len(engine.CONSTITUTION.encode('utf-8'))
     assert engine.input_token_bound(prompt) == system_bytes + 5000 + study.INPUT_TOKEN_MARGIN
     assert engine.input_token_bound(WIDE * 10) == system_bytes + 40 + study.INPUT_TOKEN_MARGIN
-    assert engine.call_hold(prompt, 0.20, 1.20) == pytest.approx((system_bytes + 5200) * 0.20 / 1e6 + 650 * 1.20 / 1e6)
+    assert engine.call_hold(prompt, 0.20, 1.20) == pytest.approx((system_bytes + 5200) * 0.20 / 1e6 + engine.MAX_OUTPUT_TOKENS * 1.20 / 1e6)
     worst = engine.call_hold('x' * engine.PROMPT_BYTE_LIMIT, 0.20, 1.20)
-    assert worst == pytest.approx((engine.INPUT_BYTE_LIMIT + study.INPUT_TOKEN_MARGIN) * 0.20 / 1e6 + 650 * 1.20 / 1e6)
+    assert worst == pytest.approx((engine.INPUT_BYTE_LIMIT + study.INPUT_TOKEN_MARGIN) * 0.20 / 1e6 + engine.MAX_OUTPUT_TOKENS * 1.20 / 1e6)
     assert 0.001 < engine.call_hold('{}', 0.20, 1.20) < worst < 0.01  # the old constant hold was $0.00318
 
 

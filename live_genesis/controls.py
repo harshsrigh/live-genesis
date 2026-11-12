@@ -86,7 +86,64 @@ def migrate(cx: sqlite3.Connection) -> None:
         count INTEGER NOT NULL, PRIMARY KEY (agent_id, kind)
     );
     CREATE INDEX IF NOT EXISTS budget_reservations_round ON budget_reservations(round_id, agent_id);
+    -- One row per engine turn, for the operator only (`cli turns`). Categories and counts: never model text,
+    -- never provider error text. Not part of /api/overview or of any export.
+    CREATE TABLE IF NOT EXISTS engine_turns (
+        id INTEGER PRIMARY KEY, round_id INTEGER NOT NULL REFERENCES rounds(id),
+        agent_id INTEGER NOT NULL REFERENCES agents(id),
+        reservation_id INTEGER REFERENCES budget_reservations(id),
+        outcome TEXT NOT NULL CHECK(outcome IN ('recorded','truncated','invalid_json','invalid_schema',
+                                                'action_refused','inference_failed','not_called')),
+        stop TEXT CHECK(stop IN ('end','length','other','unknown')),
+        input_tokens INTEGER, output_tokens INTEGER,
+        memory TEXT NOT NULL DEFAULT 'none' CHECK(memory IN ('written','unchanged','omitted','not_text','refused','none')),
+        memory_refusal TEXT, created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS engine_turns_round ON engine_turns(round_id, id);
+    CREATE TRIGGER IF NOT EXISTS engine_turns_no_update BEFORE UPDATE ON engine_turns
+        BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS engine_turns_no_delete BEFORE DELETE ON engine_turns
+        BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
     ''')
+
+
+# ---- Engine turn diagnostics (operator-only) -------------------------------------------
+# outcome: recorded (an action was stored) | truncated (reply cut off at the output limit) | invalid_json |
+#          invalid_schema | action_refused (validation, guards, quota, engine contribute cap) |
+#          inference_failed (the call or its usage failed; see the reservation) | not_called (nothing was sent).
+# memory:  written | unchanged (same text as the previous note, or blank) | omitted (the reply had no `memory`) |
+#          not_text (`memory` was not a string) | refused (a content guard; category in memory_refusal) |
+#          none (no action was recorded, so memory was not considered).
+
+def record_turn(round_id: int, agent_id: int, outcome: str, *, reservation: int | None = None, stop: str | None = None,
+                input_tokens: int | None = None, output_tokens: int | None = None, memory: str = "none",
+                memory_refusal: str | None = None) -> int:
+    """Append one engine-turn diagnostic. Callers pass categories and counts only: `memory_refusal` is a guard
+    CATEGORY (as returned by core.update_memory), never model text or a provider message."""
+    from . import core  # local import: core imports this module
+    with core.connect() as cx:
+        return int(cx.execute(
+            "INSERT INTO engine_turns(round_id,agent_id,reservation_id,outcome,stop,input_tokens,output_tokens,memory,"
+            "memory_refusal,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (round_id, agent_id, reservation, outcome, stop, input_tokens, output_tokens, memory,
+             memory_refusal[:120] if isinstance(memory_refusal, str) else None, _stamp())).lastrowid)
+
+
+def turns(round_id: int | None = None) -> dict[str, Any]:
+    """Engine turns of one round (default: the latest round that has any), oldest first, with counts by outcome."""
+    from . import core
+    with core.connect() as cx:
+        if round_id is None:
+            round_id = cx.execute("SELECT MAX(round_id) FROM engine_turns").fetchone()[0]
+        rows = [] if round_id is None else [dict(r) for r in cx.execute(
+            "SELECT t.id,t.round_id AS round,a.name AS agent,t.reservation_id AS reservation,t.outcome,t.stop,"
+            "t.input_tokens,t.output_tokens,t.memory,t.memory_refusal,t.created_at "
+            "FROM engine_turns t JOIN agents a ON a.id=t.agent_id WHERE t.round_id=? ORDER BY t.id", (round_id,))]
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row["outcome"]] = counts.get(row["outcome"], 0) + 1
+    return {"round": round_id, "outcomes": counts, "turns": rows,
+            "note": "Operator diagnostics: categories and token counts only, no model text. Never shown on the public page."}
 
 
 def audit(cx: sqlite3.Connection, operation: str, agent_id: int | None = None) -> None:

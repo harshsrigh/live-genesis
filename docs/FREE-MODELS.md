@@ -31,6 +31,7 @@ call: the hold becomes `unconfirmed` and the round stops; no numbers are invente
 | `LIVE_COMPAT_JSON_MODE` | `on` | sends `response_format={"type":"json_object"}`. Set `off` if the server rejects it |
 | `LIVE_COMPAT_REASONING_EFFORT` | unset | `low`, `medium` or `high` is sent as `reasoning_effort`; unset sends nothing |
 | `LIVE_INFER_TIMEOUT_SECONDS` | `35` | per call, all providers; clamped to 5-600 |
+| `LIVE_MAX_OUTPUT_TOKENS` | `1200` | reply limit per turn, all providers; clamped to 200-4000; a server that ignores `max_tokens` is not bounded by it |
 | `LIVE_INPUT_USD_PER_M`, `LIVE_OUTPUT_USD_PER_M` | none | may be `0` **only** for a loopback base URL. Any other host needs positive figures |
 
 ## (a) Local model with Ollama (Windows / WSL)
@@ -42,7 +43,7 @@ call: the hold becomes `unconfirmed` and the round stops; no numbers are invente
    CPU, slowly.
 3. **Raise the context window.** Ollama's default is 4,096 tokens and a longer prompt is
    silently truncated: the agent would lose its instructions or its context without any error.
-   A turn here sends up to 24,000 bytes plus a 650-token reply, so start the server with
+   A turn here sends up to 24,000 bytes plus a reply of up to `LIVE_MAX_OUTPUT_TOKENS` (default 1,200), so start the server with
    `OLLAMA_CONTEXT_LENGTH=16384` (or more).
 4. `.env`:
    ```
@@ -57,8 +58,11 @@ call: the hold becomes `unconfirmed` and the round stops; no numbers are invente
    On a CPU a turn can take minutes: raise `LIVE_INFER_TIMEOUT_SECONDS` (maximum 600). A
    timeout counts as a failed call and stops the round; for a local model reconcile it with
    `cli reconcile --receipt <id> --actual-usd 0`.
-5. **Reasoning models** can spend the whole 650-token reply thinking and return no JSON. Try
-   `LIVE_COMPAT_REASONING_EFFORT=low`, or use a non-reasoning model.
+5. **Reasoning models** can spend the whole reply limit (`LIVE_MAX_OUTPUT_TOKENS`, default 1,200)
+   thinking and return no JSON; `cli turns` then shows the turn as `truncated`. Try
+   `LIVE_COMPAT_REASONING_EFFORT=low`, raise `LIVE_MAX_OUTPUT_TOKENS` (up to 4000), or use a
+   non-reasoning model. The same applies to the `openai` and `anthropic` providers, whose current
+   models think by default: the adapters send no thinking setting for them.
 6. **Reachability.** From inside WSL or a Docker container, `localhost` may not be the Windows
    host where Ollama runs. Run the round in the same place as the server, or make the server
    reachable there. An address such as `host.docker.internal` or a LAN IP is **not** loopback:
