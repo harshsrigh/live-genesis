@@ -96,7 +96,7 @@ def test_action_specs_use_only_real_request_fields():
         assert example['action'] == verb and set(spec['required']) <= set(example) <= names | {'action'}, verb
         assert ActionRequest(**example).model_dump(exclude_none=True)['action'] == verb
         used |= names
-    assert used == fields - {'action'}  # no request field is left undocumented
+    assert used == fields - {'action', 'dry_run'}  # no request field is left undocumented (dry_run belongs to no verb)
     guide = agentkit.agent_guide()
     for name, info in ActionRequest.model_fields.items():
         assert info.description and f'| `{name}` |' in guide, name
@@ -106,7 +106,7 @@ def test_request_model_validation_is_unchanged():
     """Descriptions and schema extras are documentation; types and defaults stay as they were."""
     import pydantic
     request = ActionRequest(action='idle')
-    assert request.model_dump(exclude_none=True) == {'action': 'idle', 'requested_credits': 0, 'requested_usd': 0}
+    assert request.model_dump(exclude_none=True) == {'action': 'idle', 'requested_credits': 0, 'requested_usd': 0, 'dry_run': False}
     assert ActionRequest(action='anything-goes-to-the-core-check').action  # no enum enforced by the model
     assert ActionRequest(action='post', unknown_field=1).model_dump(exclude_none=True)['action'] == 'post'
     for bad in ({'post_id': '7'}, {'post_id': True}, {'amount': 1.0}, {'answer': [1, '2', 3]}, {'requested_usd': None}):

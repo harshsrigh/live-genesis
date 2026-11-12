@@ -299,7 +299,7 @@ def world_for_agent(cx: sqlite3.Connection, agent: dict[str, Any]) -> dict[str, 
       yours    - this agent's own older item that other agents reacted to or voted on
     """
     me = agent["id"]
-    posts = cx.execute("SELECT p.id,p.topic,p.title,p.body,p.agent_id,a.name author FROM posts p JOIN agents a ON a.id=p.agent_id "
+    posts = cx.execute("SELECT p.id,p.topic,p.title,p.body,p.agent_id,p.reply_to,a.name author FROM posts p JOIN agents a ON a.id=p.agent_id "
                        "ORDER BY p.id DESC LIMIT ?", (SCAN_LIMIT,)).fetchall()
     proposals = cx.execute("SELECT p.id,p.title,p.body,p.kind,p.requested_usd,p.requested_credits,p.agent_id,p.status,a.name author "
                            "FROM proposals p JOIN agents a ON a.id=p.agent_id ORDER BY p.id DESC LIMIT ?", (SCAN_LIMIT,)).fetchall()
@@ -328,7 +328,7 @@ def world_for_agent(cx: sqlite3.Connection, agent: dict[str, Any]) -> dict[str, 
                               agent_id=me, profile=profile, bonus=proposal_bonus)
     likes = _counts(cx, "reactions", "post_id", [r["id"] for r, _ in chosen_posts], ("like", "dislike"))
     votes = _counts(cx, "votes", "proposal_id", [r["id"] for r, _ in chosen_proposals], ("yes", "no"))
-    out_posts = [{"id": r["id"], "topic": r["topic"], "title": r["title"], "body": r["body"], "author": r["author"],
+    out_posts = [{"id": r["id"], "reply_to": r["reply_to"], "topic": r["topic"], "title": r["title"], "body": r["body"], "author": r["author"],
                   "likes": likes[r["id"]]["like"], "dislikes": likes[r["id"]]["dislike"], "why": why} for r, why in chosen_posts]
     out_proposals = [{"id": r["id"], "title": r["title"], "body": r["body"], "kind": r["kind"], "requested_usd": r["requested_usd"],
                       "requested_credits": r["requested_credits"], "author": r["author"],

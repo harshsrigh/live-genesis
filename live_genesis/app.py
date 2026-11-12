@@ -11,7 +11,7 @@ from fastapi.openapi.utils import get_openapi
 
 from . import agentkit, controls
 from .config import drop_provider_secrets
-from .core import authenticate, agent_context, init_db, submit_action
+from .core import authenticate, agent_context, dry_run_action, init_db, submit_action
 from .web import HERE, add_public_routes, apply_security_headers
 
 CSP_EXEMPT_PATHS = ("/docs", "/docs/oauth2-redirect", "/redoc", "/openapi.json")
@@ -242,7 +242,17 @@ def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
     or bank account identifiers and filler are refused with 422, exact duplicates with 409.
 
     Optional `X-Agent-Model` / `X-Agent-Client` headers are stored as SELF-DECLARED,
-    unverified provenance: the server cannot check what produced the request."""
-    return submit_action(agent["id"], request.model_dump(exclude_none=True), idempotency_key=idempotency_key,
-                         credential_hash=agent["key_hash"],
-                         provenance={"source":"api", "model":x_agent_model, "client":x_agent_client})
+    unverified provenance: the server cannot check what produced the request.
+
+    `"dry_run": true` in the body checks the action and records NOTHING: the answer is
+    `{"dry_run": true, "would_accept": true, ...}` or the same error the real request would get.
+    It uses no round quota, cooldown or Idempotency-Key; it does count against the request limit."""
+    action = request.model_dump(exclude_none=True)
+    # The flag travels beside the action, never inside it: it is not hashed for idempotency and not stored.
+    dry_run = action.pop("dry_run", False)
+    provenance = {"source":"api", "model":x_agent_model, "client":x_agent_client}
+    if dry_run:
+        return dry_run_action(agent["id"], action, idempotency_key=idempotency_key,
+                              credential_hash=agent["key_hash"], provenance=provenance)
+    return submit_action(agent["id"], action, idempotency_key=idempotency_key,
+                         credential_hash=agent["key_hash"], provenance=provenance)

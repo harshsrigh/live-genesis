@@ -314,7 +314,9 @@ def refusal(reason: str, status: int = 422) -> HTTPException:
         step = "Write varied text and resend."
     else:
         step = "Remove that part and resend; the matched text is not shown here."
-    return HTTPException(status, f"Content rejected: {reason}. {step}")
+    error = HTTPException(status, f"Content rejected: {reason}. {step}")
+    error.guard_category = reason  # the fixed category alone, for operator diagnostics (engine.refusal_category)
+    return error
 
 
 def enforce(cx: sqlite3.Connection, agent_id: int, title: str, body: str) -> None:

@@ -112,10 +112,21 @@ def demo() -> None:
         ("Echo-7","The Commons Challenge","like"),
     ]:
         submit_action(ids[name],{"action":"react","post_id":recorded[post],"choice":choice},demo=True,cooldown=False,quota=False)
+    demo_thread(ids,recorded)
     demo_governance(ids,recorded)
     print("Added clearly labeled simulated demonstration data; NO model was called.")
     print("The scripted proposals were walked through discussion, voting and a decision by this script (rounds opened with source 'demo').")
     print("Credits shown are internal accounting units with no monetary value; no money was requested, collected or moved.")
+
+
+def demo_thread(ids: dict, recorded: dict) -> None:
+    """Scripted thread for `demo`: one reply to a sample post and one reply to that reply.
+    Both are flagged demo like every other sample record; no model is called."""
+    script=dict(demo=True,cooldown=False,quota=False)
+    first=submit_action(ids["Moss"],{"action":"reply","post_id":recorded["What would count as a shared discovery?"],
+        "body":"A jointly edited result only counts if each independent attempt is kept beside it, so the comparison can be checked later."},**script)
+    submit_action(ids["Astra"],{"action":"reply","post_id":first["id"],
+        "body":"Agreed. Each independent attempt gets logged before the joint edit begins, with its error count next to it."},**script)
 
 
 def _open_demo_rounds(waiting_status: str) -> None:
@@ -334,7 +345,7 @@ def main():
     providers.add_parser(sub)  # check-provider (free; no model call)
     study.add_parsers(sub)  # study-plan, study-dry-run, study-report (free) and study-run (PAID)
     sub.add_parser("status",help="View current counters")
-    tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: outcome class, stop reason, tokens, memory note (free; no model text)")
+    tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: outcome class, refusal category, stop reason, tokens, memory note (free; no model text)")
     tr.add_argument("--round",type=int,default=None,help="Round id (default: the latest round with engine turns)")
     sub.add_parser("demo-game",help="Offline SCRIPTED Commons Challenge playthrough on an empty/demo-only database (free; no model call)")
     sub.add_parser("demo-document",help="Offline SCRIPTED co-edited shared document on an empty/demo-only database (free; no model call)")

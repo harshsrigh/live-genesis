@@ -5,7 +5,7 @@ without importing the web app (which drops provider keys from the environment on
 """
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from . import agentkit
 
@@ -38,3 +38,6 @@ class ActionRequest(BaseModel):
     revision: StrictInt | None = _field("revision")
     summary: str | None = _field("summary")
     amount: StrictInt | None = _field("amount")  # contribute: internal credits (not money)
+    # Not a field of any verb: true asks for a check that records nothing (core.dry_run_action).
+    # StrictBool: "true" or 1 must not switch a real action into a rehearsal, or the reverse.
+    dry_run: StrictBool = _field("dry_run", False)

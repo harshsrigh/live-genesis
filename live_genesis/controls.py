@@ -23,6 +23,7 @@ import hashlib
 import ipaddress
 import math
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -97,7 +98,7 @@ def migrate(cx: sqlite3.Connection) -> None:
         stop TEXT CHECK(stop IN ('end','length','other','unknown')),
         input_tokens INTEGER, output_tokens INTEGER,
         memory TEXT NOT NULL DEFAULT 'none' CHECK(memory IN ('written','unchanged','omitted','not_text','refused','none')),
-        memory_refusal TEXT, created_at TEXT NOT NULL
+        memory_refusal TEXT, created_at TEXT NOT NULL, refusal TEXT
     );
     CREATE INDEX IF NOT EXISTS engine_turns_round ON engine_turns(round_id, id);
     CREATE TRIGGER IF NOT EXISTS engine_turns_no_update BEFORE UPDATE ON engine_turns
@@ -105,6 +106,10 @@ def migrate(cx: sqlite3.Connection) -> None:
     CREATE TRIGGER IF NOT EXISTS engine_turns_no_delete BEFORE DELETE ON engine_turns
         BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
     ''')
+    # Added after the table first shipped: why an action_refused / invalid_schema turn recorded nothing.
+    # ADD COLUMN is not an UPDATE: the append-only triggers stay, and existing rows read NULL.
+    if "refusal" not in {r[1] for r in cx.execute("PRAGMA table_info(engine_turns)")}:
+        cx.execute("ALTER TABLE engine_turns ADD COLUMN refusal TEXT")
 
 
 # ---- Engine turn diagnostics (operator-only) -------------------------------------------
@@ -114,19 +119,27 @@ def migrate(cx: sqlite3.Connection) -> None:
 # memory:  written | unchanged (same text as the previous note, or blank) | omitted (the reply had no `memory`) |
 #          not_text (`memory` was not a string) | refused (a content guard; category in memory_refusal) |
 #          none (no action was recorded, so memory was not considered).
+# refusal: only for invalid_schema / action_refused: a category built by engine.refusal_category from a fixed
+#          vocabulary (`422:validation`, `404:not_found`, `409:conflict`, `429:quota`, `<status>:guard:<guard category>`,
+#          `schema:<request field names>`, `contribute_cap`, `error:<ExceptionClass>`). Never model text, never the
+#          free-text error detail.
+REFUSAL_SHAPE = re.compile(r"[A-Za-z0-9_:,.()' -]{1,120}")
 
 def record_turn(round_id: int, agent_id: int, outcome: str, *, reservation: int | None = None, stop: str | None = None,
                 input_tokens: int | None = None, output_tokens: int | None = None, memory: str = "none",
-                memory_refusal: str | None = None) -> int:
+                memory_refusal: str | None = None, refusal: str | None = None) -> int:
     """Append one engine-turn diagnostic. Callers pass categories and counts only: `memory_refusal` is a guard
-    CATEGORY (as returned by core.update_memory), never model text or a provider message."""
+    CATEGORY (as returned by core.update_memory), never model text or a provider message. `refusal` is a
+    category from engine.refusal_category; a value that does not look like one is stored as 'unrecognised'."""
+    if refusal is not None and not (isinstance(refusal, str) and REFUSAL_SHAPE.fullmatch(refusal)):
+        refusal = "unrecognised"
     from . import core  # local import: core imports this module
     with core.connect() as cx:
         return int(cx.execute(
             "INSERT INTO engine_turns(round_id,agent_id,reservation_id,outcome,stop,input_tokens,output_tokens,memory,"
-            "memory_refusal,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "memory_refusal,created_at,refusal) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (round_id, agent_id, reservation, outcome, stop, input_tokens, output_tokens, memory,
-             memory_refusal[:120] if isinstance(memory_refusal, str) else None, _stamp())).lastrowid)
+             memory_refusal[:120] if isinstance(memory_refusal, str) else None, _stamp(), refusal)).lastrowid)
 
 
 def turns(round_id: int | None = None) -> dict[str, Any]:
@@ -137,7 +150,7 @@ def turns(round_id: int | None = None) -> dict[str, Any]:
             round_id = cx.execute("SELECT MAX(round_id) FROM engine_turns").fetchone()[0]
         rows = [] if round_id is None else [dict(r) for r in cx.execute(
             "SELECT t.id,t.round_id AS round,a.name AS agent,t.reservation_id AS reservation,t.outcome,t.stop,"
-            "t.input_tokens,t.output_tokens,t.memory,t.memory_refusal,t.created_at "
+            "t.input_tokens,t.output_tokens,t.memory,t.memory_refusal,t.refusal,t.created_at "
             "FROM engine_turns t JOIN agents a ON a.id=t.agent_id WHERE t.round_id=? ORDER BY t.id", (round_id,))]
     counts: dict[str, int] = {}
     for row in rows:

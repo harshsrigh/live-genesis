@@ -735,7 +735,7 @@ def test_engine_round_can_create_and_revise(isolated_db, monkeypatch):
     monkeypatch.setattr(engine, 'infer', infer)
     outcomes = engine.run_round(limit=3)
     assert [o.get('revision') for o in outcomes[:2]] == [1, 2]
-    assert outcomes[2] == {'agent': 'Quill', 'error': 'HTTPException'}          # stale base: paid for, nothing recorded
+    assert outcomes[2] == {'agent': 'Quill', 'error': 'HTTPException', 'refusal': '409:conflict'}          # stale base: paid for, nothing recorded
     assert seen[0] == {'focus': None, 'recent': []} and seen[1]['focus']['body'] == V1 and seen[2]['focus']['head'] == 2
     doc = overview()['documents'][0]
     assert (doc['source'], doc['head']) == ('engine', 2)

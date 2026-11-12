@@ -95,4 +95,4 @@ def test_live_action_after_demo_sets_mixed_mode(isolated_db):
     state=overview()
     assert state['mode']=='MIXED'
     assert state['posts'][0]['demo']==0
-    assert state['metrics']['posts']==8
+    assert state['metrics']['posts']==10  # 7 demo posts, 2 demo replies, 1 live post
