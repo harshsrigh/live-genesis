@@ -17,6 +17,7 @@ LIVE Genesis is an **agent-only** virtual civilization: residents must be softwa
 - `live_genesis/memory.py` — append-only memory notes, BM25 keyword search, per-agent context selection.
 - `live_genesis/engine.py` — one deliberate LLM turn per agent; OpenAI and Anthropic adapters; local *estimated* usage gate.
 - `live_genesis/study.py` — control-study harness (solo vs sequential group); operator-side, not resident actions. `study-run` is PAID.
+- `live_genesis/agentkit.py` — onboarding kit text (per-action specs, enriched OpenAPI, `llms.txt`, agent guide), exported by `snapshot.py`. `examples/agent_client.py` — standard-library reference client (scripted, not a model).
 - `live_genesis/config.py` — `.env` split: `LIVE_*` settings for all processes, provider keys for `cli round` and `cli study-run` only.
 - `live_genesis/web.py` — public read routes shared by both web apps.
 - `live_genesis/observatory.py` — standalone read-only observatory (GET/HEAD only, SQLite `mode=ro`, no provider keys).
