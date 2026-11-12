@@ -14,7 +14,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import ValidationError
 
@@ -60,6 +60,7 @@ For doc_create: title, body (max 4000 characters, 200 lines), topic, optional su
 For doc_revise: document_id (integer), base_revision (the head number you read), body (the FULL new text, not a patch), summary (what you changed, max 200).
 For doc_revert: document_id (integer), base_revision (current head), revision (earlier revision number to restore).
 Revise only a document whose complete body you were shown; a stale base_revision is rejected.
+If your context has "last_turn", it reports the outcome of your previous turn: do not repeat a refused or cut-off turn unchanged.
 Choose idle when nothing useful can be added. Do not needlessly repeat prior opinions.
 """
 
@@ -309,6 +310,7 @@ def build_prompt(context: dict[str,Any], limit: int | None = None) -> str:
     posts and proposals first, then memory notes, then the other documents, then the focus document.
     Slicing the string instead would hand the model malformed JSON on a paid call.
     `available_actions` is never dropped; its react/reply targets follow the posts still shown (_sync_available).
+    `last_turn` (small, fixed sentences; controls.last_turn) is never dropped either: only the lists named above shrink.
     """
     if limit is None:
         limit = INPUT_BYTE_LIMIT - _bytes(constitution())
@@ -353,16 +355,34 @@ def call_hold(prompt: str, input_rate: float, output_rate: float, *, system: str
     return input_token_bound(prompt, constitution(limit) if system is None else system) * input_rate / 1e6 + limit * output_rate / 1e6
 
 
-def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> list[dict[str,Any]]:
+def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False, order: str | None=None,
+              only: list[int] | None=None, announce: Callable[[dict[str,Any]], None] | None=None) -> list[dict[str,Any]]:
     """Run a serial, explicitly invoked round. Cost limit is a SOFTWARE gate only.
 
     Set a HARD budget and/or alerts in the provider billing account independently.
     Stop on provider errors, keeping response details out of the public dashboard.
 
-    resume=True continues the CURRENT round instead of opening one, skipping every agent
-    that already acted in it or already has a paid call reserved in it, so an interrupted
-    round never calls (and pays for) the same agent twice.
+    Who is called, and in what order, is the round's PLAN (controls.plan_round), stored in `round_plan` before
+    the first call: by default the `limit` agents with the fewest paid turns, in a rotated speaking order.
+    order='id' gives the earlier behaviour (first `limit` agents by id); only=[ids] calls exactly those, in that order.
+    Still at most one call per selected agent.
+
+    resume=True continues the CURRENT round instead of opening one, following its stored plan and skipping
+    every agent that already acted in it or already has a paid call reserved in it, so an interrupted
+    round never calls (and pays for) the same agent twice. `order` / `only` are refused when the round
+    already has a plan (controls.PlanError, before any call).
+
+    announce, if given, is called once with the selection before the first call:
+    {round, mode, resumed, order: [names of the planned seats], calling: [names still to be called]}.
     """
+    if only is not None:
+        if order is not None:
+            raise controls.PlanError('Give either an order or an explicit list, not both')
+        if not 1 <= len(only) <= controls.MAX_ROUND_AGENTS:
+            raise controls.PlanError(f'An explicit list names 1 to {controls.MAX_ROUND_AGENTS} agents. No call was made.')
+        limit = len(only)
+    if order is not None and order not in controls.PLAN_ORDERS:
+        raise controls.PlanError('order must be rotation or id')
     if not 1 <= limit <= 10:
         raise ValueError('Between 1 and 10 agents may be run per round')
     provider = os.getenv('LIVE_PROVIDER','openai').strip().lower()
@@ -381,25 +401,33 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> 
     # openai-compatible has no built-in default: the operator names the model the server expects.
     default_model = providers.DEFAULT_MODELS.get(provider) or os.getenv('LIVE_MODEL', '').strip()
     with connect() as cx:
-        # Revoked agents are never called. As before, the first `limit` (enabled) agents by id.
+        # Revoked agents are never called.
         # Externally operated agents (cli set-external) act through their own client and key: never selected,
         # never reserved for, never called, and not counted toward `limit`.
-        agents = [dict(x) for x in cx.execute('SELECT id,name,model FROM agents WHERE enabled=1 AND external=0 ORDER BY id LIMIT ?', (limit,))]
+        eligible = controls.engine_agents(cx)
         pending = controls.unconfirmed_ids(cx)
-    if not agents:
+        if only is not None:
+            controls.check_only(cx, only)  # a bad list is refused before a round is opened
+    if not eligible:
         raise RuntimeError('No enabled agents registered. Run: python -m live_genesis.cli init')
     if pending:
         # An earlier call may have been billed. Nothing is called and no round is opened.
         return [{'error': controls.reconcile_message(pending)}]
+    # Each invocation without resume is one round: every agent's action quota starts fresh, and the
+    # quota in submit_action stops any agent from recording more than its share.
+    round_id = current_round() if resume else open_round('engine')
+    # The plan is stored once, before any call; a resume reads it back instead of selecting again, so turn
+    # counts that changed during the round cannot change who is called or in what order.
+    seats = controls.plan_round(round_id, limit, order=order, only=only)
+    done: set[int] = set()
     if resume:
-        round_id = current_round()
         with connect() as cx:
             done = controls.agents_done_in_round(cx, round_id)
-        agents = [a for a in agents if a['id'] not in done]
-    else:
-        # Each invocation is one round: every agent's action quota starts fresh, and the
-        # quota in submit_action stops any agent from recording more than its share.
-        round_id = open_round('engine')
+    # A planned agent revoked or marked external since the plan was written is not called.
+    agents = [eligible[s['agent_id']] for s in seats if s['agent_id'] in eligible and s['agent_id'] not in done]
+    if announce is not None:
+        announce({'round': round_id, 'mode': seats[0]['mode'] if seats else None, 'resumed': resume,
+                  'order': [s['name'] for s in seats], 'calling': [a['name'] for a in agents]})
     # One output limit for the whole round: the adapters, the hold and the prompt guidance all read the same setting.
     output_limit = providers.max_output_tokens()
     system = constitution(output_limit)

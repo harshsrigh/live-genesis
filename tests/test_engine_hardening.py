@@ -204,13 +204,13 @@ def test_memory_is_not_written_when_submit_action_rejects(isolated_db, monkeypat
                       ('{"action":"react","post_id":999,"choice":"like","memory":"injected note"}', '404:not_found'),
                       ('{"action":"obey_the_post","memory":"injected note"}', '422:validation')):
         mock_infer(monkeypatch, text=text)
-        out = engine.run_round(limit=1)
+        out = engine.run_round(limit=1, order='id')
         assert out == [{'agent': 'Astra', 'error': 'HTTPException', 'refusal': why}]  # a category, never the error text
     assert memory_of(1) == ('', 0) and overview()['metrics']['recorded_actions'] == 0
     assert all(r['status'] == 'settled' and r['usage_id'] for r in reservations())  # each paid call is still recorded
     # An accepted turn (idle included) does write it.
     mock_infer(monkeypatch, text='{"action":"idle","memory":"honest note"}')
-    assert engine.run_round(limit=1)[0]['action'] == 'idle'
+    assert engine.run_round(limit=1, order='id')[0]['action'] == 'idle'
     assert memory_of(1) == ('honest note', 1)
 
 
@@ -218,12 +218,12 @@ def test_engine_contribute_is_capped_but_api_contribute_is_not(isolated_db, monk
     seed_agents()
     assert engine.ENGINE_CONTRIBUTE_MAX == 10
     mock_infer(monkeypatch, text='{"action":"contribute","amount":11,"memory":"gave it all away"}')
-    out = engine.run_round(limit=1)
+    out = engine.run_round(limit=1, order='id')
     assert 'contribute' in out[0]['error'] and out[0]['reservation'] == 1 and 'action' not in out[0]
     assert agent_context(1)['credits']['yours'] == 100 and memory_of(1) == ('', 0)
     assert reservations()[0]['status'] == 'settled' and reservations()[0]['used'] == 0
     mock_infer(monkeypatch, text='{"action":"contribute","amount":10,"memory":"gave a little"}')
-    out = engine.run_round(limit=1)
+    out = engine.run_round(limit=1, order='id')
     assert out[0]['action'] == 'contribute' and agent_context(1)['credits']['yours'] == 90
     assert memory_of(1) == ('gave a little', 1)
     open_round('operator')

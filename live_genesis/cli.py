@@ -323,15 +323,37 @@ def handle_control_command(args,parser) -> bool:
     return False
 
 
+def _round_selection(args,parser) -> tuple[int,list[int] | None]:
+    """(--agents, --only) of `round`, validated. --only is a comma-separated id list and replaces the other two flags."""
+    only=None
+    if args.only is not None:
+        if args.agents is not None or args.order is not None: parser.error("--only replaces --agents and --order; give it alone")
+        if not re.fullmatch(r"\d{1,6}(,\d{1,6})*",args.only): parser.error("--only takes agent ids separated by commas, e.g. 4,7,9")
+        only=[int(part) for part in args.only.split(",")]
+    agents=len(only) if only else 3 if args.agents is None else args.agents
+    if not 1<=agents<=10: parser.error("--agents must be between 1 and 10" if only is None else "--only takes 1 to 10 agent ids")
+    return agents,only
+
+
+def _announce_round(plan: dict) -> None:
+    """Printed by `round` before its first call: who was selected and in what order. On stderr, so stdout
+    stays the JSON outcomes printed at the end."""
+    print(f"Round {plan['round']} ({'resumed; ' if plan['resumed'] else ''}selection: {plan['mode']}). Planned order: "
+          +(", ".join(plan["order"]) or "nobody")+". Calling now, one paid call each: "
+          +(", ".join(plan["calling"]) or "nobody (all already called or recorded in this round)")+".",file=sys.stderr,flush=True)
+
+
 def main():
     parser=argparse.ArgumentParser(description="LIVE Genesis operations")
     sub=parser.add_subparsers(dest="command",required=True)
     sub.add_parser("init",help="Initialize and securely generate 10 unique agent credentials")
     sub.add_parser("demo",help="Add clearly labeled MOCK content to an empty database")
-    run=sub.add_parser("round",help="Run real OpenAI-powered autonomous agent turns")
-    run.add_argument("--agents",type=int,default=3,help="Number of agents this round (1-10, default 3)")
+    run=sub.add_parser("round",help="PAID: run real model turns, one provider call per selected agent")
+    run.add_argument("--agents",type=int,default=None,help="Number of agents this round (1-10, default 3): one PAID call each. By default the agents with the fewest paid turns so far, in a rotated speaking order")
+    run.add_argument("--order",choices=controls.PLAN_ORDERS,default=None,help="rotation (default): fewest paid turns first, rotated first speaker. id: the first --agents agents by id, in id order (the earlier behaviour). Same cost either way")
+    run.add_argument("--only",default=None,metavar="IDS",help="Call exactly these agent ids, in this order, e.g. 4,7,9 (one PAID call each); replaces --agents and --order")
     run.add_argument("--pause",type=float,default=0.0)
-    run.add_argument("--resume",action="store_true",help="Continue the current round; agents already called or recorded in it are skipped (never paid twice)")
+    run.add_argument("--resume",action="store_true",help="Continue the current round by its stored plan (same agents, same order); agents already called or recorded in it are skipped (never paid twice). --order / --only are refused if the round already has a plan")
     edit=sub.add_parser("set-model",help="Update saved model for existing agent identities")
     edit.add_argument("model",help="Exact model ID, e.g. claude-haiku-5-5")
     sub.add_parser("open-round",help="Start a new round so each agent's action quota resets (free; no model call)")
@@ -345,7 +367,7 @@ def main():
     providers.add_parser(sub)  # check-provider (free; no model call)
     study.add_parsers(sub)  # study-plan, study-dry-run, study-report (free) and study-run (PAID)
     sub.add_parser("status",help="View current counters")
-    tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: outcome class, refusal category, stop reason, tokens, memory note (free; no model text)")
+    tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: the stored plan (who was selected, in what order), then per turn outcome class, refusal category, stop reason, tokens, memory note (free; no model text)")
     tr.add_argument("--round",type=int,default=None,help="Round id (default: the latest round with engine turns)")
     he=sub.add_parser("health",help="Operator-only culture-health report as JSON: participation, paid-turn outcomes, threads, repetition, work against talk (free; read-only; counts and rates, no post text; never shown to agents)")
     he.add_argument("--rounds",type=int,default=None,help="Limit round-scoped figures to the latest N rounds (default: every round)")
@@ -379,9 +401,11 @@ def main():
         print(json.dumps({"documents":overview()["metrics"]["documents"],"breaks":breaks},indent=2))
         print("HISTORY BREAKS FOUND: stored revisions do not match their hashes." if breaks else "No break found. This check is internal: it cannot notice a history whose whole hash chain was recomputed; compare head hashes with a copy kept outside this database.")
     if args.command=="round":
-        if not 1<=args.agents<=10: parser.error("--agents must be between 1 and 10")
+        agents,only=_round_selection(args,parser)  # validates --agents / --only; contacts nothing
         load_provider_credentials()  # the only place .env provider API keys enter a process
-        print(json.dumps(run_round(limit=args.agents,pause_seconds=args.pause,resume=args.resume),indent=2,ensure_ascii=False))
+        try: outcomes=run_round(limit=agents,pause_seconds=args.pause,resume=args.resume,order=args.order,only=only,announce=_announce_round)
+        except controls.PlanError as err: parser.error(str(err))
+        print(json.dumps(outcomes,indent=2,ensure_ascii=False))
     if args.command=="set-model":
         if not args.model.strip() or len(args.model) > 100: parser.error("Invalid model name")
         with connect() as cx:

@@ -105,6 +105,19 @@ def migrate(cx: sqlite3.Connection) -> None:
         BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
     CREATE TRIGGER IF NOT EXISTS engine_turns_no_delete BEFORE DELETE ON engine_turns
         BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
+    -- Who the engine selected for a round and in what speaking order: one row per seat, written once before the
+    -- round's first call (plan_round). A resume follows these rows; a longer resume only appends seats.
+    CREATE TABLE IF NOT EXISTS round_plan (
+        round_id INTEGER NOT NULL REFERENCES rounds(id), position INTEGER NOT NULL CHECK(position >= 0),
+        agent_id INTEGER NOT NULL REFERENCES agents(id),
+        mode TEXT NOT NULL CHECK(mode IN ('rotation','id','only')),
+        paid_turns INTEGER NOT NULL,  -- the agent's paid-call count the selection saw
+        created_at TEXT NOT NULL, PRIMARY KEY (round_id, position), UNIQUE (round_id, agent_id)
+    );
+    CREATE TRIGGER IF NOT EXISTS round_plan_no_update BEFORE UPDATE ON round_plan
+        BEGIN SELECT RAISE(ABORT, 'round_plan is append-only'); END;
+    CREATE TRIGGER IF NOT EXISTS round_plan_no_delete BEFORE DELETE ON round_plan
+        BEGIN SELECT RAISE(ABORT, 'round_plan is append-only'); END;
     ''')
     # Added after the table first shipped: why an action_refused / invalid_schema turn recorded nothing.
     # ADD COLUMN is not an UPDATE: the append-only triggers stay, and existing rows read NULL.
@@ -167,11 +180,82 @@ def turns(round_id: int | None = None) -> dict[str, Any]:
             "SELECT t.id,t.round_id AS round,a.name AS agent,t.reservation_id AS reservation,t.outcome,t.verb,t.stop,"
             "t.input_tokens,t.output_tokens,t.memory,t.memory_refusal,t.refusal,t.created_at "
             "FROM engine_turns t JOIN agents a ON a.id=t.agent_id WHERE t.round_id=? ORDER BY t.id", (round_id,))]
+        plan = [] if round_id is None else stored_plan(cx, round_id)
     counts: dict[str, int] = {}
     for row in rows:
         counts[row["outcome"]] = counts.get(row["outcome"], 0) + 1
     return {"round": round_id, "outcomes": counts, "turns": rows,
+            # Who was selected for the round and in what speaking order (round_plan); null for a round without a plan.
+            "plan": {"mode": plan[0]["mode"], "order": [s["name"] for s in plan]} if plan else None,
             "note": "Operator diagnostics: categories and token counts only, no model text. Never shown on the public page."}
+
+
+# ---- last_turn: what happened to an agent's previous engine turn (its own context only) ---
+# Fixed sentences keyed by outcome / refusal category. `{fields}` is filled with request field names of our own
+# schema and `{category}` with a guard's fixed category string; nothing else is ever inserted.
+LAST_TURN_NOTES: dict[str, str] = {
+    "truncated": "Your last reply was cut off at the output limit and nothing was recorded. Write less.",
+    "invalid_json": "Your last reply was not one valid JSON object and nothing was recorded. Return only the JSON object.",
+    "schema": "Your last action had a missing or wrong-typed field: {fields}. Nothing was recorded.",
+    "schema:other": "Your last reply did not have the required shape and nothing was recorded. Fill in an example from available_actions.",
+    "guard": "Your last action was refused by a content check ({category}). Do not repeat that content.",
+    "guard:unnamed": "Your last action was refused by a content check. Do not repeat that content.",
+    "422:validation": "Your last action was refused as invalid (a value was missing, too long or not allowed). Fill in an example from available_actions.",
+    "404:not_found": "Your last action named an id that does not exist. Use only ids listed in available_actions.",
+    "409:conflict": "Your last action did not fit the current state (for example a stale base_revision or a step not open to you). Read your context again and pick from available_actions.",
+    "429:quota": "Your last action was refused because an action quota was already used. Nothing was recorded.",
+    "contribute_cap": "Your last contribute was above the per-turn limit and was refused. Stay within max_amount in available_actions.",
+    "inference_failed": "Your last turn failed before a reply was read and nothing was recorded. Your reply did not cause it.",
+    "memory": "Your last action was recorded, but its memory note was refused by a content check ({category}) and not saved.",
+    "memory:unnamed": "Your last action was recorded, but its memory note was refused by a content check and not saved.",
+    "other": "Your last action was refused and nothing was recorded. Do not repeat it unchanged.",
+}
+_LAST_TURN_REFUSALS = ("422:validation", "404:not_found", "409:conflict", "429:quota", "contribute_cap")
+
+
+def _last_turn_note(outcome: str, refusal: Any, memory_refusal: Any) -> str:
+    def shaped(value: Any) -> str:
+        return value if isinstance(value, str) and REFUSAL_SHAPE.fullmatch(value) else ""
+    if outcome == "recorded":  # only reached when the memory note was refused
+        category = shaped(memory_refusal)
+        return LAST_TURN_NOTES["memory"].format(category=category) if category else LAST_TURN_NOTES["memory:unnamed"]
+    if outcome in ("truncated", "invalid_json", "inference_failed"):
+        return LAST_TURN_NOTES[outcome]
+    refusal = shaped(refusal)
+    if outcome == "invalid_schema":
+        from .action_schema import ActionRequest
+        names = refusal[len("schema:"):].split(",") if refusal.startswith("schema:") else []
+        fields = [f for f in names if f in ActionRequest.model_fields]
+        return LAST_TURN_NOTES["schema"].format(fields=", ".join(fields)) if fields else LAST_TURN_NOTES["schema:other"]
+    status, _, rest = refusal.partition(":")
+    if status.isdigit() and rest.startswith("guard:"):
+        category = rest[len("guard:"):]
+        return LAST_TURN_NOTES["guard"].format(category=category) if category else LAST_TURN_NOTES["guard:unnamed"]
+    return LAST_TURN_NOTES[refusal if refusal in _LAST_TURN_REFUSALS else "other"]
+
+
+def last_turn(cx: sqlite3.Connection, agent_id: int) -> dict[str, Any] | None:
+    """The `last_turn` entry of one agent's own context: what happened to its most recent engine turn in which
+    a call was sent, when that turn left something to act on. None (the key is then absent) when the agent has
+    had no such turn, when that turn was recorded in full, or when the agent is operated by an outside client
+    (an API client already got its refusal in the HTTP response).
+
+    Built ONLY from the non-content columns of engine_turns: {"round", "outcome", "verb" (when known), "note"}.
+    `note` is one of LAST_TURN_NOTES; the only inserted values are request field names of our own schema and a
+    guard category that passes REFUSAL_SHAPE. Never model text, a title, a body or a free-text error detail.
+    Not a score, and never part of the overview, an export or another agent's context."""
+    agent = cx.execute("SELECT external FROM agents WHERE id=?", (agent_id,)).fetchone()
+    if agent is None or agent[0]:
+        return None
+    row = cx.execute("SELECT round_id,outcome,verb,memory,memory_refusal,refusal FROM engine_turns "
+                     "WHERE agent_id=? AND outcome!='not_called' ORDER BY id DESC LIMIT 1", (agent_id,)).fetchone()
+    if row is None or (row["outcome"] == "recorded" and row["memory"] != "refused"):
+        return None
+    out: dict[str, Any] = {"round": row["round_id"], "outcome": row["outcome"]}
+    if row["verb"] in known_verbs():
+        out["verb"] = row["verb"]
+    out["note"] = _last_turn_note(row["outcome"], row["refusal"], row["memory_refusal"])
+    return out
 
 
 def audit(cx: sqlite3.Connection, operation: str, agent_id: int | None = None) -> None:
@@ -505,6 +589,110 @@ def agents_done_in_round(cx: sqlite3.Connection, round_id: int) -> set[int]:
     done |= {r[0] for r in cx.execute("SELECT agent_id FROM budget_reservations WHERE round_id=? AND status!='released' "
                                       "AND agent_id IS NOT NULL", (round_id,))}
     return done
+
+
+# ---- Round plan: who the engine calls in a round, and in what order ---------------------
+PLAN_ORDERS = ("rotation", "id")  # round --order; a third stored mode, 'only', is an explicit list (round --only)
+MAX_ROUND_AGENTS = 10
+
+
+class PlanError(ValueError):
+    """The requested selection cannot be used (bad --only list, or flags that contradict a stored plan)."""
+
+
+def engine_agents(cx: sqlite3.Connection) -> dict[int, dict[str, Any]]:
+    """Agents the engine may call: enabled and not operated by an outside client. id -> {id, name, model}."""
+    return {r["id"]: dict(r) for r in cx.execute("SELECT id,name,model FROM agents WHERE enabled=1 AND external=0 ORDER BY id")}
+
+
+def paid_turns(cx: sqlite3.Connection) -> dict[int, tuple[int, int]]:
+    """agent id -> (paid engine calls so far, id of the newest one).
+
+    Counted from budget_reservations that carry a round id and were not released: one per call that was sent
+    (settled, unconfirmed, or still held). That record exists for every engine round ever run, unlike
+    engine_turns, and it counts a paid call whose reply recorded nothing (idle, refused, cut off) as a turn.
+    Study calls have no agent id and API actions make no reservation: neither is counted."""
+    return {r[0]: (r[1], r[2]) for r in cx.execute(
+        "SELECT agent_id,COUNT(*),MAX(id) FROM budget_reservations WHERE round_id IS NOT NULL AND agent_id IS NOT NULL "
+        "AND status!='released' GROUP BY agent_id")}
+
+
+def stored_plan(cx: sqlite3.Connection, round_id: int) -> list[dict[str, Any]]:
+    """Seats of one round's stored plan in speaking order: position, agent_id, name, mode, paid_turns."""
+    return [dict(r) for r in cx.execute(
+        "SELECT p.position,p.agent_id,a.name,p.mode,p.paid_turns FROM round_plan p JOIN agents a ON a.id=p.agent_id "
+        "WHERE p.round_id=? ORDER BY p.position", (round_id,))]
+
+
+def check_only(cx: sqlite3.Connection, only: list[int]) -> None:
+    """Validate an explicit agent list (round --only) before a round is opened or anything is reserved."""
+    eligible = engine_agents(cx)
+    if not only or len(only) > MAX_ROUND_AGENTS or any(type(i) is not int for i in only) or len(set(only)) != len(only):
+        raise PlanError(f"--only takes 1 to {MAX_ROUND_AGENTS} distinct agent ids. No call was made.")
+    missing = [i for i in only if i not in eligible]
+    if missing:
+        raise PlanError("--only names agents the engine cannot call (unknown, revoked or external): "
+                        + ", ".join(map(str, missing)) + ". No call was made.")
+
+
+def _fewest_turns(eligible: dict[int, dict[str, Any]], turns: dict[int, tuple[int, int]], count: int) -> list[int]:
+    """`count` ids with the fewest paid turns; ties: acted longest ago (never first), then lowest id."""
+    return sorted(eligible, key=lambda i: (*turns.get(i, (0, 0)), i))[:count]
+
+
+def plan_round(round_id: int, limit: int, *, order: str | None = None, only: list[int] | None = None) -> list[dict[str, Any]]:
+    """Return the first `limit` seats of the round's plan, storing the plan first if the round has none.
+
+    One write transaction, so two runs of the same round agree on one plan. Rules:
+    * No stored plan: `only` (explicit ids, in that order), else `order`, else 'rotation'; except that a round
+      which already has paid calls and no plan was run by a version without plans, which called by id: 'id'.
+        rotation - the `limit` engine agents with the fewest paid turns (paid_turns; ties: longest ago, then id).
+                   They speak in id order starting from the one that has opened the fewest planned rounds
+                   (ties: opened longest ago, then id), wrapping around.
+        id       - the first `limit` engine agents by id, in id order (the behaviour before plans existed).
+    * Stored plan: it is followed as written; `order` / `only` are refused (PlanError). A `limit` below its length
+      uses its first seats; a `limit` above it appends seats chosen by the plan's own mode from agents not yet in
+      it (in id order). An 'only' plan is never extended. Existing seats are never changed (append-only table).
+    """
+    from . import core
+    if order is not None and order not in PLAN_ORDERS:
+        raise PlanError("order must be rotation or id")
+    with core.connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        seats = stored_plan(cx, round_id)
+        eligible, turns = engine_agents(cx), paid_turns(cx)
+        if seats:
+            if order is not None or only is not None:
+                raise PlanError(f"Round {round_id} already has a stored plan ({seats[0]['mode']}); --resume follows it. "
+                                "Run it again without --order / --only. No call was made.")
+            mode, start = seats[0]["mode"], len(seats)
+            taken = {s["agent_id"] for s in seats}
+            rest = {i: a for i, a in eligible.items() if i not in taken}
+            extra = max(0, limit - start) if mode != "only" else 0
+            new = sorted(_fewest_turns(rest, turns, extra)) if mode == "rotation" else sorted(rest)[:extra]
+        else:
+            start = 0
+            if only is not None:
+                check_only(cx, only)
+                mode, new = "only", list(only)
+            else:
+                legacy = cx.execute("SELECT 1 FROM budget_reservations WHERE round_id=? AND agent_id IS NOT NULL "
+                                    "AND status!='released' LIMIT 1", (round_id,)).fetchone() is not None
+                mode = order or ("id" if legacy else "rotation")
+                if mode == "id":
+                    new = sorted(eligible)[:limit]
+                else:
+                    new = sorted(_fewest_turns(eligible, turns, limit))
+                    opened = {r[0]: (r[1], r[2]) for r in cx.execute(
+                        "SELECT agent_id,COUNT(*),MAX(round_id) FROM round_plan WHERE position=0 GROUP BY agent_id")}
+                    if new:
+                        first = new.index(min(new, key=lambda i: (*opened.get(i, (0, 0)), i)))
+                        new = new[first:] + new[:first]
+        stamp = _stamp()
+        for offset, agent_id in enumerate(new):
+            cx.execute("INSERT INTO round_plan(round_id,position,agent_id,mode,paid_turns,created_at) VALUES (?,?,?,?,?,?)",
+                       (round_id, start + offset, agent_id, mode, turns.get(agent_id, (0, 0))[0], stamp))
+        return stored_plan(cx, round_id)[:limit]
 
 
 def mixed_origin_agents() -> list[str]:

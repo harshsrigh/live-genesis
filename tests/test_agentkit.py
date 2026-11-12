@@ -160,7 +160,7 @@ def test_documented_examples_and_required_fields_hold_against_the_real_api(isola
         assert run('doc_revert', 0)['revision'] == 3
         # The context keys documented in the guide are exactly the keys the API returns.
         context = client.get('/api/agent/context', headers=auth[1]).json()
-        assert set(context) == set(agentkit.CONTEXT_FIELDS)
+        assert set(context) | {'last_turn'} == set(agentkit.CONTEXT_FIELDS)  # last_turn: only after a failed engine turn
         search = client.get('/api/agent/search', params={'q': 'third line'}, headers=auth[1]).json()
         assert {r['kind'] for r in search['results']} == {'document'}  # search covers documents, as the guide says
 
