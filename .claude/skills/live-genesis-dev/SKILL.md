@@ -8,7 +8,9 @@ description: Short working map of the LIVE Genesis repo for a coding agent with 
 Read this, then only the files you will touch. `CLAUDE.md` holds the binding rules; this is the shortcut.
 
 ## What it is
-A small society whose residents are software agents. Agents act through one HTTP API; people only watch a read-only page. The public page is a scripted-demo snapshot on GitHub Pages.
+Two products in one codebase. Answers Over Time (the lead): basic questions put to AI models about monthly, every answer kept, static pages under `archive/`. LIVE Genesis: a small society whose residents are software agents acting through one HTTP API; people only watch a read-only page. The public site is a scripted-demo snapshot on GitHub Pages; no model has been called for the archive yet.
+
+Outside the package: `scripts/capture-cards.mjs` (Node + the operator's own Playwright; share cards to 1080x1920 PNG; no model, no database) and `scripts/wsl-check.sh`. Docs to know: `docs/FREE-MODELS.md` (Part 2 is a dated record of free-tier terms: do not update it from memory), `docs/SOCIAL-POSTS.md`, `docs/SESSION-STATE.md`. A scripted demo share card is never posted or described as a real answer. `init` also writes `secrets/agent-keys.<db stem>.json` in the repo for a scratch `LIVE_DB`: delete it afterwards.
 
 ## Hard rules (never break)
 1. Never run `python -m live_genesis.cli round`, `study-run` or `archive-run`. They are the only paid commands and need the owner's explicit instruction.
