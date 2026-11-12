@@ -59,7 +59,7 @@ TASK_SET_VERSION = "pilot-1"
 ARMS = ("solo", "group")
 DEFAULT_N = 3
 MIN_N, MAX_N = 2, 6
-DEFAULT_MAX_OUTPUT_TOKENS = 650  # same limit as a resident turn
+DEFAULT_MAX_OUTPUT_TOKENS = 650  # the study's own default (--max-output-tokens); independent of LIVE_MAX_OUTPUT_TOKENS
 MIN_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS = 100, 4000
 PEER_ANSWER_BYTES = 1200  # each earlier group answer is cut to its LAST this-many UTF-8 bytes
 # Input-token bound for a hold: one token is at least one byte for byte-level BPE tokenizers,
@@ -121,6 +121,14 @@ CREATE TRIGGER IF NOT EXISTS study_runs_close_only BEFORE UPDATE ON study_runs
       OR NEW.output_rate IS NOT OLD.output_rate OR NEW.mock IS NOT OLD.mock OR NEW.mock_kind IS NOT OLD.mock_kind
     BEGIN SELECT RAISE(ABORT, 'study_runs is append-only: a running run can only be closed, once'); END;
 '''
+
+
+def migrate(cx) -> None:
+    """Create the study tables; additive and repeatable. `study_calls.stop` (why the provider stopped: end /
+    length / other / unknown, as engine.Completion.stop) was added later, so older rows keep NULL."""
+    cx.executescript(SCHEMA)
+    if "stop" not in {r[1] for r in cx.execute("PRAGMA table_info(study_calls)")}:
+        cx.execute("ALTER TABLE study_calls ADD COLUMN stop TEXT")
 
 
 class StudyRefused(RuntimeError):
@@ -556,13 +564,13 @@ def _close_run(run_id: int, status: str, reason: str) -> None:
 
 def _record_call(run_id: int, item: dict[str, Any], prompt: str, *, answer: str | None, score: float | None,
                  input_tokens: int | None, output_tokens: int | None, usd: float | None, hold: float | None,
-                 reservation: int | None, error: str | None = None) -> None:
+                 reservation: int | None, error: str | None = None, stop: str | None = None) -> None:
     with core.connect() as cx:
         cx.execute("INSERT INTO study_calls(run_id,seq,task_id,arm,step,prompt_hash,answer_text,score,input_tokens,output_tokens,"
-                   "estimated_usd,hold_usd,reservation_id,error,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   "estimated_usd,hold_usd,reservation_id,error,created_at,stop) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                    (run_id, item["seq"], item["task_id"], item["arm"], item["step"], prompt_hash(prompt),
                     None if answer is None else answer[:ANSWER_TEXT_LIMIT], score, input_tokens, output_tokens, usd, hold,
-                    reservation, error, core.utcnow()))
+                    reservation, error, core.utcnow(), stop))
 
 
 def _summary(run_id: int) -> dict[str, Any]:
@@ -661,6 +669,8 @@ def run_study(*, max_usd: float, n: int = DEFAULT_N, seed: int | None = None, mo
                 text, tokens_in, tokens_out = result.text, result.input_tokens, result.output_tokens
                 if not isinstance(text, str):
                     raise TypeError("completion text missing")
+                stop = getattr(result, "stop", "unknown")  # 'length' = cut off at --max-output-tokens
+                stop = stop if stop in engine.STOP_VALUES else "unknown"
             except engine.ProviderNotReady:
                 core.close_reservation(reservation, "released")  # nothing was sent
                 reason = "provider not ready (local setup); nothing was sent for this call"
@@ -680,13 +690,13 @@ def run_study(*, max_usd: float, n: int = DEFAULT_N, seed: int | None = None, mo
             except Exception:
                 core.close_reservation(reservation, "unconfirmed")
                 _record_call(run_id, item, prompt, answer=text, score=task.score(text), input_tokens=None,
-                             output_tokens=None, usd=None, hold=hold, reservation=reservation, error="usage not recorded")
+                             output_tokens=None, usd=None, hold=hold, reservation=reservation, error="usage not recorded", stop=stop)
                 reason = (f"provider usage was missing or invalid; ${hold:.6f} kept as unconfirmed (reservation {reservation}). "
                           f"Check provider billing, then run: cli reconcile --receipt {reservation} --actual-usd <charged amount>")
                 break
             spent.append(usd)
             _record_call(run_id, item, prompt, answer=text, score=task.score(text), input_tokens=tokens_in,
-                         output_tokens=tokens_out, usd=usd, hold=hold, reservation=reservation)
+                         output_tokens=tokens_out, usd=usd, hold=hold, reservation=reservation, stop=stop)
             if item["arm"] == "group":
                 peers.append(text)
             if usd > hold:
@@ -984,6 +994,11 @@ def render_markdown(rep: dict[str, Any]) -> str:
               f"{len(rep['malformed'])} answered call(s) had no parseable answer.")
     else:
         out += ["No answered call was malformed.", ""]
+    cut = [c for c in rep["calls"] if c.get("stop") == "length"]
+    if cut:
+        out += [f"{len(cut)} answered call(s) were cut off at the output limit of {run['max_output_tokens']} tokens (call "
+                + ", ".join(str(c["seq"]) for c in cut) + "). A cut-off answer usually has no `ANSWER:` line and scores 0; "
+                "a repeat with a higher `--max-output-tokens` would be a different run.", ""]
     if rep["failed"]:
         table(["call", "task", "arm", "step", "error", "hold (estimated USD)", "reservation"],
               [[str(c["seq"]), c["task_id"], c["arm"], str(c["step"]), _cell(c["error"]), _f(c["hold_usd"], 6), str(c["reservation_id"])]

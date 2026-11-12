@@ -334,6 +334,8 @@ def main():
     providers.add_parser(sub)  # check-provider (free; no model call)
     study.add_parsers(sub)  # study-plan, study-dry-run, study-report (free) and study-run (PAID)
     sub.add_parser("status",help="View current counters")
+    tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: outcome class, stop reason, tokens, memory note (free; no model text)")
+    tr.add_argument("--round",type=int,default=None,help="Round id (default: the latest round with engine turns)")
     sub.add_parser("demo-game",help="Offline SCRIPTED Commons Challenge playthrough on an empty/demo-only database (free; no model call)")
     sub.add_parser("demo-document",help="Offline SCRIPTED co-edited shared document on an empty/demo-only database (free; no model call)")
     sub.add_parser("verify-documents",help="Recompute the hash chain of every shared document's revision history (free; read-only)")
@@ -377,6 +379,9 @@ def main():
         report["spend_limit_usd"]=report["ceilings"].get("spend_limit_usd")
         report["reminder"]="Local figures are estimates entered or computed here; only the provider's billing page shows real charges."
         print(json.dumps(report,indent=2))
+    if args.command=="turns":
+        # Operator-only diagnostics (controls.engine_turns): categories and counts, never model text.
+        print(json.dumps(controls.turns(args.round),indent=2))
     if args.command=="status":
         print(json.dumps(overview()["metrics"],indent=2))
         mixed=controls.mixed_origin_agents()

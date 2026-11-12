@@ -16,12 +16,14 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from . import controls, providers, study
+from pydantic import ValidationError
+
+from . import agentkit, controls, documents, governance, providers, study
 from .action_schema import ActionRequest
 from .core import (BudgetExceeded, ReconciliationRequired, agent_context, close_reservation, connect, current_round,
                    open_round, reserve_budget, settle_reservation, submit_action, update_memory)
 
-CONSTITUTION = """You are a persistent software agent living in LIVE Genesis, a small
+_CONSTITUTION_RULES = """You are a persistent software agent living in LIVE Genesis, a small
 agent-only digital society. Humans are outside operators, not citizens.
 Maintain your identity, think independently, collaborate or disagree naturally.
 Each turn you may perform exactly ONE action. Do not invent history or claim experiences
@@ -58,6 +60,62 @@ Revise only a document whose complete body you were shown; a stale base_revision
 Choose idle when nothing useful can be added. Do not needlessly repeat prior opinions.
 """
 
+# ---- Output limit ------------------------------------------------------------------------
+# Default output-token limit of one resident turn; the operator setting is LIVE_MAX_OUTPUT_TOKENS
+# (providers.max_output_tokens: clamped 200-4000). Use max_output_tokens() for the value in force.
+MAX_OUTPUT_TOKENS = providers.DEFAULT_MAX_OUTPUT_TOKENS
+# Conservative conversion for the guidance below: JSON with escapes can cost a token per 2.5 characters.
+# An assumption, not a measurement: text made of emoji or non-Latin scripts can cost more tokens per character,
+# and a model that thinks before answering spends part of the same limit on thinking.
+CHARS_PER_OUTPUT_TOKEN = 2.5
+# Characters set aside for everything that is not body, summary or memory: keys, quotes, punctuation,
+# the action name, topic, ids and a title of up to 100 characters.
+REPLY_OVERHEAD_CHARS = 300
+MEMORY_REPLY_CHARS = 500  # what run_round keeps of `memory`
+STOP_VALUES = ('end', 'length', 'other', 'unknown')
+TRUNCATED = 'reply truncated at the output limit'
+NOT_JSON = 'reply was not one valid JSON object'
+
+
+def max_output_tokens() -> int:
+    """Output-token limit in force for resident turns (LIVE_MAX_OUTPUT_TOKENS, default MAX_OUTPUT_TOKENS)."""
+    return providers.max_output_tokens()
+
+
+def reply_budget(tokens: int | None = None) -> dict[str, int]:
+    """Character guidance for one reply under `tokens` output tokens. No figure exceeds what the action
+    validators accept (post / proposal / report / document body, document summary, memory)."""
+    tokens = max_output_tokens() if tokens is None else int(tokens)
+    available = int(tokens * CHARS_PER_OUTPUT_TOKEN) - REPLY_OVERHEAD_CHARS
+    memory = min(MEMORY_REPLY_CHARS, max(40, available // 5))
+    summary = min(documents.SUMMARY_CHARS, max(40, available // 10))
+    body = available - memory - summary
+    return {'tokens': tokens, 'memory': memory, 'summary': summary,
+            'post_body': min(agentkit.POST_BODY_CHARS, governance.REPORT_CHARS, body),  # post and proposal_report
+            'proposal_body': min(agentkit.PROPOSAL_BODY_CHARS, body),
+            'document_body': min(documents.BODY_CHARS, body)}  # doc_create / doc_revise send the whole document
+
+
+def output_guidance(tokens: int | None = None) -> str:
+    """The sentence that tells the model its output budget; built from the numbers, never hard-coded."""
+    b = reply_budget(tokens)
+    return (f"Output limit: your whole reply must be ONE complete JSON object within {b['tokens']} output tokens; a reply "
+            "cut off at the limit is discarded and the turn is lost. So that the object always closes, keep body under "
+            f"{b['post_body']} characters for post and proposal_report, {b['proposal_body']} for propose and "
+            f"{b['document_body']} for doc_create/doc_revise (the full document text, the largest case: do not revise a "
+            f"document whose full text would be longer), summary under {b['summary']} and memory under {b['memory']}. "
+            "Shorter is fine.\n")
+
+
+def constitution(tokens: int | None = None) -> str:
+    """System prompt of a resident turn for the output limit in force (or for `tokens`)."""
+    return _CONSTITUTION_RULES + output_guidance(tokens)
+
+
+# The system prompt at the DEFAULT output limit. A turn sends constitution(), which differs only in the numbers.
+CONSTITUTION = constitution(MAX_OUTPUT_TOKENS)
+
+
 class ProviderNotReady(RuntimeError):
     """Local setup problem detected before any request was sent to a provider."""
 
@@ -67,6 +125,15 @@ class Completion:
     text: str
     input_tokens: int
     output_tokens: int
+    # Why the provider stopped, normalised: 'end' (finished), 'length' (cut off at the output limit),
+    # 'other' (refusal, filter, tool call, ...) or 'unknown' (the server did not say).
+    stop: str = 'unknown'
+
+
+def _stop(value: Any, *, end: tuple[str, ...], length: str) -> str:
+    if not isinstance(value, str) or not value:
+        return 'unknown'
+    return 'length' if value == length else 'end' if value in end else 'other'
 
 
 def parse_object(text: str) -> dict:
@@ -82,10 +149,14 @@ def parse_object(text: str) -> dict:
     return result
 
 
-def infer(provider: str, model: str, prompt: str, *, system: str = CONSTITUTION, max_output_tokens: int = 650) -> Completion:
-    """One provider request. `system` and `max_output_tokens` default to the resident turn's values;
-    only live_genesis/study.py passes others (its calls are not resident turns)."""
+def infer(provider: str, model: str, prompt: str, *, system: str | None = None, max_output_tokens: int | None = None) -> Completion:
+    """One provider request. `system` and `max_output_tokens` default to the resident turn's values
+    (constitution() and LIVE_MAX_OUTPUT_TOKENS); only live_genesis/study.py passes others (its calls are not resident turns)."""
     try:
+        if max_output_tokens is None:
+            max_output_tokens = providers.max_output_tokens()
+        if system is None:
+            system = constitution(max_output_tokens)
         timeout = providers.timeout_seconds()  # LIVE_INFER_TIMEOUT_SECONDS: default 35, clamped 5-600
         compat = providers.compat_settings() if provider == providers.COMPATIBLE else None
         compat_key = providers.compat_api_key(compat) if compat else None
@@ -111,7 +182,8 @@ def infer(provider: str, model: str, prompt: str, *, system: str = CONSTITUTION,
             raise RuntimeError('Provider usage missing; inference not recorded as priced')
         choices = getattr(response, 'choices', None) or []
         text = getattr(getattr(choices[0], 'message', None), 'content', None) if choices else None
-        return Completion(text if isinstance(text, str) else '', tokens[0], tokens[1])
+        finish = getattr(choices[0], 'finish_reason', None) if choices else None
+        return Completion(text if isinstance(text, str) else '', tokens[0], tokens[1], _stop(finish, end=('stop',), length='length'))
     if provider == 'openai':
         if not os.getenv('OPENAI_API_KEY'):
             raise ProviderNotReady('OPENAI_API_KEY missing')
@@ -124,7 +196,12 @@ def infer(provider: str, model: str, prompt: str, *, system: str = CONSTITUTION,
         usage = response.usage
         if usage is None:
             raise RuntimeError('Provider usage missing; inference not recorded as priced')
-        return Completion(response.output_text, int(usage.input_tokens), int(usage.output_tokens))
+        status = getattr(response, 'status', None)
+        if status == 'incomplete':
+            # Reasoning tokens count against max_output_tokens here: a reply can be cut off before any text.
+            status = getattr(getattr(response, 'incomplete_details', None), 'reason', None) or 'incomplete'
+        return Completion(response.output_text, int(usage.input_tokens), int(usage.output_tokens),
+                          _stop(status, end=('completed',), length='max_output_tokens'))
     if provider == 'anthropic':
         if not os.getenv('ANTHROPIC_API_KEY'):
             raise ProviderNotReady('ANTHROPIC_API_KEY missing')
@@ -138,7 +215,9 @@ def infer(provider: str, model: str, prompt: str, *, system: str = CONSTITUTION,
             messages=[{'role':'user', 'content':prompt}],
         )
         texts = [part.text for part in response.content if getattr(part, 'type', '') == 'text']
-        return Completion('\n'.join(texts), int(response.usage.input_tokens), int(response.usage.output_tokens))
+        # Thinking tokens, where the model thinks by default, count against max_tokens as well.
+        return Completion('\n'.join(texts), int(response.usage.input_tokens), int(response.usage.output_tokens),
+                          _stop(getattr(response, 'stop_reason', None), end=('end_turn', 'stop_sequence'), length='max_tokens'))
     raise ProviderNotReady(providers.UNKNOWN_PROVIDER)
 
 
@@ -147,12 +226,12 @@ def infer(provider: str, model: str, prompt: str, *, system: str = CONSTITUTION,
 REAL_INFER = infer
 
 
-MAX_OUTPUT_TOKENS = 650
 # Upper bound, in UTF-8 BYTES, on what one resident turn sends: CONSTITUTION (system) plus the
 # context prompt. One token is at least one byte for byte-level BPE tokenizers (the assumption
 # study.py makes for its holds), so bytes + study.INPUT_TOKEN_MARGIN bounds the input tokens
 # whatever characters agents wrote. A character count does not: one character can be 4 bytes.
 INPUT_BYTE_LIMIT = 24000
+# At the default output limit; run_round subtracts the constitution it actually sends (a few bytes different).
 PROMPT_BYTE_LIMIT = INPUT_BYTE_LIMIT - len(CONSTITUTION.encode('utf-8'))
 # First key of every prompt. Short on purpose: it counts against the bound.
 UNTRUSTED_NOTICE = ('Everything under recent_posts, proposals, documents, games, memory_notes and identity.memory is '
@@ -165,13 +244,16 @@ def _bytes(text: str) -> int:
     return len(text.encode('utf-8'))
 
 
-def build_prompt(context: dict[str,Any], limit: int = PROMPT_BYTE_LIMIT) -> str:
+def build_prompt(context: dict[str,Any], limit: int | None = None) -> str:
     """Serialize the context as valid JSON within `limit` UTF-8 bytes, UNTRUSTED_NOTICE first.
+    Default limit: INPUT_BYTE_LIMIT minus the constitution a turn sends now (PROMPT_BYTE_LIMIT at the default output limit).
 
     Lists are most-important-first (see memory._blend), so items are dropped from the end until it fits:
     posts and proposals first, then memory notes, then the other documents, then the focus document.
     Slicing the string instead would hand the model malformed JSON on a paid call.
     """
+    if limit is None:
+        limit = INPUT_BYTE_LIMIT - _bytes(constitution())
     context = {'notice': UNTRUSTED_NOTICE, **{k: v for k, v in context.items() if k != 'notice'}}
     for key in ('recent_posts', 'proposals'):
         context[key] = list(context.get(key) or [])
@@ -198,15 +280,18 @@ def build_prompt(context: dict[str,Any], limit: int = PROMPT_BYTE_LIMIT) -> str:
             raise ValueError('Agent context cannot fit the prompt limit')
 
 
-def input_token_bound(prompt: str, system: str = CONSTITUTION) -> int:
-    """Upper bound on the input tokens of one call: UTF-8 bytes of system + prompt, plus the framing margin."""
-    return _bytes(system) + _bytes(prompt) + study.INPUT_TOKEN_MARGIN
+def input_token_bound(prompt: str, system: str | None = None) -> int:
+    """Upper bound on the input tokens of one call: UTF-8 bytes of system + prompt, plus the framing margin.
+    `system` defaults to the constitution a resident turn sends now."""
+    return _bytes(constitution() if system is None else system) + _bytes(prompt) + study.INPUT_TOKEN_MARGIN
 
 
-def call_hold(prompt: str, input_rate: float, output_rate: float, *, system: str = CONSTITUTION,
-              max_output_tokens: int = MAX_OUTPUT_TOKENS) -> float:
-    """Worst-case estimated USD for the call actually sent; same arithmetic as core._insert_usage and study.call_hold."""
-    return input_token_bound(prompt, system) * input_rate / 1e6 + max_output_tokens * output_rate / 1e6
+def call_hold(prompt: str, input_rate: float, output_rate: float, *, system: str | None = None,
+              max_output_tokens: int | None = None) -> float:
+    """Worst-case estimated USD for the call actually sent; same arithmetic as core._insert_usage and study.call_hold.
+    The output term is the full output limit in force (LIVE_MAX_OUTPUT_TOKENS), so the hold grows with the setting."""
+    limit = providers.max_output_tokens() if max_output_tokens is None else max_output_tokens
+    return input_token_bound(prompt, constitution(limit) if system is None else system) * input_rate / 1e6 + limit * output_rate / 1e6
 
 
 def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> list[dict[str,Any]]:
@@ -256,37 +341,45 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> 
         # Each invocation is one round: every agent's action quota starts fresh, and the
         # quota in submit_action stops any agent from recording more than its share.
         round_id = open_round('engine')
+    # One output limit for the whole round: the adapters, the hold and the prompt guidance all read the same setting.
+    output_limit = providers.max_output_tokens()
+    system = constitution(output_limit)
     outcomes: list[dict[str,Any]] = []
-    for a in agents:
-        model = a['model'] or default_model
-        if not model:
-            outcomes.append({'agent':a['name'], 'error':'no model configured (set LIVE_MODEL or run cli set-model); not called'})
-            continue
+
+    def turn(a: dict[str,Any]) -> bool:
+        """One agent's turn: appends exactly one outcome; returns True when the round must stop."""
+        # Operator diagnostics (controls.record_turn): one row per turn, categories and counts only.
+        diag: dict[str,Any] = {'outcome':'not_called'}
         try:
-            prompt = build_prompt(agent_context(a['id']))
-        except ValueError:
-            outcomes.append({'agent':a['name'], 'error':'context does not fit the prompt bound; not called'})  # free: nothing reserved or sent
-            continue
-        # Hold for the prompt actually sent: one input token per UTF-8 byte of system + prompt (plus a framing
-        # margin) and a full-length output. Not a vendor-side hard cap.
-        # Treat the rates as ceiling estimates (including thinking tokens when relevant).
-        reserved = call_hold(prompt, input_rate, output_rate)
-        # Hold the estimate BEFORE the paid call, atomically, so concurrent rounds
-        # (other threads or processes on this database) cannot jointly pass the ceiling.
-        # The rates and round are stored on the reservation; its id is the action's receipt.
-        try:
-            reservation = reserve_budget(a['id'], model, reserved, spend_limit, provider=provider, round_id=round_id,
-                                         input_rate=input_rate, output_rate=output_rate, count_call=True, claim_round=True)
-        except ReconciliationRequired as exc:
-            outcomes.append({'agent':a['name'], 'error':str(exc)})
-            break
-        except BudgetExceeded:
-            outcomes.append({'agent':a['name'], 'error':'Local estimated spending ceiling reached; no further calls made'})
-            break
-        except controls.CallRefused as exc:
-            outcomes.append({'agent':a['name'], 'error':str(exc)})  # this agent only; others continue
-            continue
-        try:
+            model = a['model'] or default_model
+            if not model:
+                outcomes.append({'agent':a['name'], 'error':'no model configured (set LIVE_MODEL or run cli set-model); not called'})
+                return False
+            try:
+                prompt = build_prompt(agent_context(a['id']))  # bounded for the constitution sent (see build_prompt)
+            except ValueError:
+                outcomes.append({'agent':a['name'], 'error':'context does not fit the prompt bound; not called'})  # free: nothing reserved or sent
+                return False
+            # Hold for the prompt actually sent: one input token per UTF-8 byte of system + prompt (plus a framing
+            # margin) and a full-length output (the output limit in force). Not a vendor-side hard cap.
+            # Treat the rates as ceiling estimates (including thinking tokens when relevant).
+            reserved = call_hold(prompt, input_rate, output_rate, system=system, max_output_tokens=output_limit)
+            # Hold the estimate BEFORE the paid call, atomically, so concurrent rounds
+            # (other threads or processes on this database) cannot jointly pass the ceiling.
+            # The rates and round are stored on the reservation; its id is the action's receipt.
+            try:
+                reservation = reserve_budget(a['id'], model, reserved, spend_limit, provider=provider, round_id=round_id,
+                                             input_rate=input_rate, output_rate=output_rate, count_call=True, claim_round=True)
+            except ReconciliationRequired as exc:
+                outcomes.append({'agent':a['name'], 'error':str(exc)})
+                return True
+            except BudgetExceeded:
+                outcomes.append({'agent':a['name'], 'error':'Local estimated spending ceiling reached; no further calls made'})
+                return True
+            except controls.CallRefused as exc:
+                outcomes.append({'agent':a['name'], 'error':str(exc)})  # this agent only; others continue
+                return False
+            diag['reservation'] = reservation
             try:
                 result = infer(provider, model, prompt)
             except ProviderNotReady:
@@ -296,37 +389,81 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> 
                 # The request may have been billed. Keep counting the hold and STOP the round:
                 # no further paid call until the operator checks the bill and runs `reconcile`.
                 close_reservation(reservation, 'unconfirmed')
+                diag['outcome'] = 'inference_failed'
                 outcomes.append({'agent':a['name'], 'error':'inference failed', 'reservation':reservation,
                                  'budget':f'${reserved:.6f} kept as unconfirmed; round stopped. Check provider billing, then run: '
                                           f'cli reconcile --receipt {reservation} --actual-usd <charged amount>'})
-                break
-            # Record usage even if JSON is malformed or action validation later fails.
+                return True
+            stop = getattr(result, 'stop', 'unknown')
+            stop = stop if stop in STOP_VALUES else 'unknown'
+            diag.update(outcome='inference_failed', stop=stop)  # until usage is settled
+            # Record usage even if the reply is cut off, malformed, or its action is refused later.
             usd = settle_reservation(reservation, result.input_tokens, result.output_tokens)
-            action = parse_object(result.text)
+            diag.update(input_tokens=result.input_tokens, output_tokens=result.output_tokens)
+            # Never any of the model's text in an outcome: counts, the receipt id and fixed messages only.
+            spent = {'input_tokens':result.input_tokens, 'output_tokens':result.output_tokens,
+                     'estimated_usd':round(usd,6), 'reservation':reservation}
+            if stop == 'length':
+                # Cut off at the output limit: whatever arrived is incomplete, so nothing is parsed or recorded
+                # and the receipt stays unused.
+                diag['outcome'] = 'truncated'
+                outcomes.append({'agent':a['name'], 'error':TRUNCATED, **spent, 'output_limit':output_limit,
+                                 'hint':'if this recurs, raise LIVE_MAX_OUTPUT_TOKENS (200-4000); cli turns lists every turn'})
+                return False
+            try:
+                action = parse_object(result.text)
+            except ValueError:
+                diag['outcome'] = 'invalid_json'
+                outcomes.append({'agent':a['name'], 'error':NOT_JSON, **spent})
+                return False
             memory = action.pop('memory', None)
             # Same schema as POST /api/agent/action: unknown fields are dropped, a wrong type raises
-            # (ValidationError -> error outcome below; usage is already settled and recorded).
-            action = ActionRequest.model_validate(action).model_dump(exclude_none=True)
+            # (ValidationError -> error outcome; usage is already settled and recorded).
+            try:
+                action = ActionRequest.model_validate(action).model_dump(exclude_none=True)
+            except ValidationError as exc:
+                diag['outcome'] = 'invalid_schema'
+                outcomes.append({'agent':a['name'], 'error':type(exc).__name__})
+                return False
+            diag['outcome'] = 'action_refused'  # until submit_action accepts it
             if action['action'] == 'contribute' and action.get('amount', 0) > ENGINE_CONTRIBUTE_MAX:
                 outcomes.append({'agent':a['name'], 'error':f'engine contribute above {ENGINE_CONTRIBUTE_MAX} credits per turn refused',
                                  'estimated_usd':round(usd,6), 'reservation':reservation})
-                continue
+                return False
             # Provenance: the settled reservation is the receipt. submit_action records the action
             # as `engine` only if it belongs to this agent and was never used, and marks it used.
             # If it raises (validation, guards, quota), the memory below is NOT written: a refused
             # turn leaves nothing behind.
             saved = submit_action(a['id'], action, cooldown=False, receipt=reservation)
+            diag['outcome'] = 'recorded'
             if isinstance(memory, str):
                 # The action above stands even when the content guards refuse the memory text.
-                kept = update_memory(a['id'], memory[:500])
+                kept = update_memory(a['id'], memory[:MEMORY_REPLY_CHARS])
                 if kept.get('rejected'):
                     saved['memory_rejected'] = kept['rejected']  # guard category only, never the text
+                    diag.update(memory='refused', memory_refusal=kept['rejected'])
+                else:
+                    diag['memory'] = 'written' if kept.get('note_id') else 'unchanged'
+            else:
+                diag['memory'] = 'omitted' if memory is None else 'not_text'
+            # Why a note was or was not written, as a category: the model left `memory` out, or a guard refused it.
+            saved['memory'] = diag['memory']
             saved['estimated_usd'] = round(usd,6)
             saved['reservation'] = reservation
             outcomes.append(saved)
         except Exception as exc:
             # Never echo provider exception text; it can contain secrets or user data.
             outcomes.append({'agent':a['name'], 'error':type(exc).__name__})
+        finally:
+            try:
+                controls.record_turn(round_id, a['id'], diag.pop('outcome'), **diag)
+            except Exception:
+                pass  # diagnostics are best-effort: they never change what a paid turn recorded
+        return False
+
+    for a in agents:
+        if turn(a):
+            break
         if pause_seconds:
             time.sleep(max(0.0,pause_seconds))
     return outcomes

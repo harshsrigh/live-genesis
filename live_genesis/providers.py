@@ -37,6 +37,9 @@ UNKNOWN_PROVIDER = "LIVE_PROVIDER must be openai, anthropic or openai-compatible
 KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", COMPATIBLE: "OPENAI_COMPATIBLE_API_KEY"}
 DEFAULT_MODELS = {"openai": "gpt-5.6-luna", "anthropic": "claude-haiku-5-5"}  # openai-compatible has none: set LIVE_MODEL
 DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS = 35.0, 5.0, 600.0
+# Output-token limit of one resident turn (LIVE_MAX_OUTPUT_TOKENS). The engine's hold, its prompt guidance and
+# all three adapters use the same effective value.
+DEFAULT_MAX_OUTPUT_TOKENS, MIN_MAX_OUTPUT_TOKENS, MAX_MAX_OUTPUT_TOKENS = 1200, 200, 4000
 REASONING_EFFORTS = ("low", "medium", "high")
 LOCAL_PLACEHOLDER_KEY = "local-no-key"  # sent to a loopback server when no key is configured; not a credential
 _IPV4_LOOPBACK = ipaddress.ip_network("127.0.0.0/8")
@@ -67,6 +70,18 @@ def timeout_seconds() -> float:
     if not math.isfinite(value):
         raise ProviderConfigError("LIVE_INFER_TIMEOUT_SECONDS must be a number of seconds (5-600)")
     return min(max(value, MIN_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS)
+
+
+def max_output_tokens() -> int:
+    """LIVE_MAX_OUTPUT_TOKENS for a resident turn, every adapter: default 1200, clamped to 200-4000."""
+    raw = os.getenv("LIVE_MAX_OUTPUT_TOKENS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_OUTPUT_TOKENS
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ProviderConfigError("LIVE_MAX_OUTPUT_TOKENS must be a whole number of tokens (200-4000)") from None
+    return min(max(value, MIN_MAX_OUTPUT_TOKENS), MAX_MAX_OUTPUT_TOKENS)
 
 
 def is_loopback_host(host: str | None) -> bool:
@@ -155,6 +170,7 @@ def check_ready(provider: str | None = None) -> str:
     if provider not in NAMES:
         raise ProviderConfigError(UNKNOWN_PROVIDER)
     timeout_seconds()
+    max_output_tokens()
     if provider == COMPATIBLE:
         compat_api_key(compat_settings())
     elif not key_is_set(provider):
@@ -226,6 +242,11 @@ def describe() -> tuple[list[str], bool]:
             lines.append("Base URL host: (not usable)")
     try:
         lines.append(f"Timeout per call: {timeout_seconds():g} s")
+    except ProviderConfigError as err:
+        problems.append(str(err))
+    try:
+        lines.append(f"Output limit per reply (LIVE_MAX_OUTPUT_TOKENS): {max_output_tokens()} tokens. "
+                     "A reply cut off at it is discarded; `cli turns` shows it as truncated")
     except ProviderConfigError as err:
         problems.append(str(err))
     if provider:

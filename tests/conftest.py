@@ -26,7 +26,7 @@ def isolated_db(tmp_path,monkeypatch):
     for name in ('LIVE_PROPOSAL_DISCUSSION_ROUNDS','LIVE_PROPOSAL_VOTING_ROUNDS','LIVE_PROPOSAL_QUORUM_PERCENT',
                  'LIVE_PROPOSAL_REPORT_ROUNDS','LIVE_GAME_IDLE_ROUNDS'):
         monkeypatch.delenv(name,raising=False)  # proposal lifecycle defaults; tests/test_governance.py overrides them
-    for name in ('LIVE_AUTH_FAILURES_PER_MINUTE','LIVE_TRUSTED_PROXIES'):
+    for name in ('LIVE_AUTH_FAILURES_PER_MINUTE','LIVE_TRUSTED_PROXIES','LIVE_MAX_OUTPUT_TOKENS'):
         monkeypatch.delenv(name,raising=False)
     # The /api/overview cache is off so no test waits for it; tests/test_hardening.py turns it on.
     monkeypatch.setenv('LIVE_OVERVIEW_CACHE_SECONDS','0')

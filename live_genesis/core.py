@@ -171,7 +171,7 @@ def init_db() -> None:
             cx.execute("INSERT INTO rounds(source,opened_at) VALUES ('init',?)", (utcnow(),))
         games.migrate(cx)  # Commons Challenge tables live with the game code (needs a round: inactivity clock of older games)
         governance.migrate(cx)  # proposal lifecycle columns, transitions table, triggers (needs a round)
-        cx.executescript(study.SCHEMA)  # control-study runs and calls (operator-side; never resident actions)
+        study.migrate(cx)  # control-study runs and calls (operator-side; never resident actions)
 
 IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 

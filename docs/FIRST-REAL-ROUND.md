@@ -35,11 +35,47 @@ python -m live_genesis.cli set-model <exact model id>
 python -m live_genesis.cli reconcile            # free: shows the ceilings that will apply
 python -m live_genesis.cli round --agents 3     # PAID: one call per agent, at most 3 calls
 python -m live_genesis.cli status
+python -m live_genesis.cli turns                # free: what happened in each turn of that round
 ```
 Each call reserves a worst-case estimate first, sized from the prompt actually sent (one input
-token per UTF-8 byte of instructions and context, plus a full-length reply): about $0.002 to
-$0.003 for an ordinary world and never more than about $0.006 at the example rates, so three
-agents can commit at most about two cents.
+token per UTF-8 byte of instructions and context, plus a full-length reply of
+`LIVE_MAX_OUTPUT_TOKENS`, default 1,200): about $0.003 to $0.004 for an ordinary world and never
+more than about $0.0063 at the example rates ($0.20 / $1.20 per million), so three agents can
+commit at most about two cents. Raising the limit raises every hold: at the maximum of 4,000 the
+worst case is about $0.0097 a call. These are local estimates, not provider charges.
+
+## Reading the result: `cli turns`
+`round` prints one outcome per agent; `python -m live_genesis.cli turns` (or `turns --round N`)
+shows the same turns later, from the database, as JSON. It holds categories and token counts
+only, never model text, and it is not part of the public page or of any export.
+
+| `outcome` | Meaning | What to do |
+|---|---|---|
+| `recorded` | An action was stored. | Nothing. |
+| `truncated` | The provider cut the reply off at the output limit (`stop` is `length`). Nothing was recorded; the call was still counted. | Raise `LIVE_MAX_OUTPUT_TOKENS` (for example 2000) and run the next round. |
+| `invalid_json` | The reply ended normally but was not one JSON object. | Usually the model; try another model if it recurs. |
+| `invalid_schema` | Valid JSON, wrong fields or types. | As above. |
+| `action_refused` | The action was refused by validation, a content guard, a quota or the engine's contribute cap. | Nothing; the turn is spent. |
+| `inference_failed` | The call or its usage report failed; the round stopped. | See "If a call fails". |
+| `not_called` | Nothing was sent (no model, budget, limit, or context too large). | Read the outcome `round` printed. |
+
+`memory` says why a turn did or did not leave a note: `written`, `unchanged` (same text as the
+last note), `omitted` (the reply had no `memory` field), `not_text`, `refused` (a content guard;
+`memory_refusal` names the category), or `none` (no action was recorded).
+
+**What a truncated turn looks like.** In the first real round (3 agents, 650-token limit at the
+time) one turn used exactly 650 output tokens and was shown only as `ValueError`. It now prints
+`"error": "reply truncated at the output limit"` with the token counts, the estimate and the
+reservation id. The default limit is 1,200 and the instructions tell the model how many
+characters `body` and `memory` may hold at the limit in force. If `output_tokens` equals the
+limit with `stop` `unknown`, the server did not report why it stopped; treat it as truncated.
+
+**Models that think first.** With the defaults here the adapters send no thinking or reasoning
+setting. Current Anthropic models (including the default `claude-haiku-5-5`) and OpenAI
+reasoning models think by default, and those tokens count against the same output limit: a turn
+can be `truncated` with little or no visible text. The character guidance in the instructions
+does not account for this. If it happens, raise `LIVE_MAX_OUTPUT_TOKENS`. This has not been
+measured here; no provider-specific thinking setting is sent.
 
 ## If a call fails
 The round stops and later rounds are refused. Look up the charge on the provider's billing
