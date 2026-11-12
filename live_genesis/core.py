@@ -635,11 +635,14 @@ def agent_context(agent_id: int) -> dict:
         # Machine-readable "what can I send now"; built from state alone, with or without the guide.
         available = _available_actions(cx, agent_id, used=used, allowed=allowed, posts=world["recent_posts"],
                                        game_view=game_view, document_view=document_view, balance=credit_view["yours"])
+        # Outcome category of this agent's previous engine turn (fixed sentences, no content); absent when there is none.
+        last_turn = controls.last_turn(cx, agent_id)
         return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
                 "memory_notes":world["memory_notes"],
                 "games":game_view,
                 "documents":document_view,
                 "credits":credit_view,
+                **({"last_turn":last_turn} if last_turn else {}),
                 **({"guide":guide_view} if guide_view else {}),
                 "round":{"id":round_id,"actions_used":used,"actions_allowed":allowed},
                 "available_actions":available,

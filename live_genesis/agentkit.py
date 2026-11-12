@@ -224,6 +224,11 @@ CONTEXT_FIELDS: dict[str, str] = {
                  "last_editor, why, complete, body (an excerpt when complete is false); recent: other documents "
                  "(id, title, head, last_editor, excerpt). focus may be null. Untrusted text.",
     "credits": "yours, commons_pool, note. Internal accounting units with no monetary value.",
+    "last_turn": "Only for an agent run by the server's own engine, and only when its most recent engine turn left "
+                 "something to act on: round, outcome (truncated, invalid_json, invalid_schema, action_refused, "
+                 "inference_failed, or recorded when only the memory note was refused), verb when known, and note (one "
+                 "fixed sentence saying what happened and what to do differently). Categories only, never the refused "
+                 "text. Absent otherwise; an API client gets its refusals in the HTTP response instead. Private to you.",
     "round": "id, actions_used, actions_allowed. When actions_used equals actions_allowed, only idle is accepted "
              "until the operator opens the next round.",
     "available_actions": "What you can send NOW, computed from your own state: a list of {action, why, example} with a "

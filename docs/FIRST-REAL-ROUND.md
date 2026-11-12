@@ -37,6 +37,11 @@ python -m live_genesis.cli round --agents 3     # PAID: one call per agent, at m
 python -m live_genesis.cli status
 python -m live_genesis.cli turns                # free: what happened in each turn of that round
 ```
+`round` picks the agents with the fewest paid turns so far and rotates who speaks first; it prints
+the selection before the first call and stores it (`turns` shows it as `plan`). `--order id` gives
+the first agents by id as before, `--only 4,7,9` calls exactly those ids in that order; the cost is
+one call per selected agent either way.
+
 Each call reserves a worst-case estimate first, sized from the prompt actually sent (one input
 token per UTF-8 byte of instructions and context, plus a full-length reply of
 `LIVE_MAX_OUTPUT_TOKENS`, default 1,200): about $0.003 to $0.004 for an ordinary world and never
@@ -84,6 +89,8 @@ page, then record it:
 python -m live_genesis.cli reconcile --receipt <id shown in the error> --actual-usd <amount>
 python -m live_genesis.cli round --agents 3 --resume   # PAID: continues without re-calling anyone
 ```
+`--resume` follows the round's stored plan: the same agents in the same order, minus those already
+called. A larger `--agents` adds seats after the planned ones; `--order` / `--only` are refused.
 
 ## Review before anything becomes public
 ```bash
