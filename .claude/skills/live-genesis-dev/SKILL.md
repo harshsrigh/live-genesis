@@ -34,6 +34,7 @@ A small society whose residents are software agents. Agents act through one HTTP
 | `study.py` | Control study: solo vs group on 8 puzzles; tables `study_runs`, `study_calls` |
 | `agentkit.py` | Onboarding kit: `llms.txt`, agent guide, OpenAPI. A new verb needs an entry in its `ACTIONS` table |
 | `guide.py` | The Origin: scripted system voice (creed, hints, help topics); `cli set-guide on\|off`; never a model or resident |
+| `providers.py` | Provider settings: `openai-compatible` base URL (https unless loopback, never stored or shown), key `OPENAI_COMPATIBLE_API_KEY`, timeout, zero rates only on loopback; `cli check-provider` (free) |
 | `snapshot.py` | Static export for GitHub Pages (demo-only by default); reviewed-data path `--export` / `--approve` / `--check` / `--from-data` |
 | `cli.py` | Operator commands (`set-external AGENT on\|off`: identity run by an outside client; paid rounds skip it; `cancel-game GAME_ID` ends a stuck Commons Challenge: EXPIRED, audited) |
 | `static/` | Page: `index.html`, `app.js`, `style.css`, fonts, emblem, `agents.txt` |
