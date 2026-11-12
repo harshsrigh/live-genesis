@@ -294,6 +294,12 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             raise HTTPException(404,"Agent not found")
         controls.check_actor(agent, credential_hash)
         round_id = _current_round(cx)
+        if type(origin.get("receipt")) is int:
+            # A paid turn is recorded in the round its call was reserved in, even if the operator
+            # opened a newer round while the model was answering. (Validated in before_record.)
+            reserved_in = cx.execute("SELECT round_id FROM budget_reservations WHERE id=? AND agent_id=?", (origin["receipt"], agent_id)).fetchone()
+            if reserved_in and reserved_in[0] is not None:
+                round_id = int(reserved_in[0])
         if idempotency_key is not None:
             seen = cx.execute("SELECT request_hash,response FROM round_actions WHERE agent_id=? AND idempotency_key=?",
                               (agent_id, idempotency_key)).fetchone()
@@ -302,7 +308,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
                     raise HTTPException(409, "Idempotency-Key was already used for a different action")
                 return {**json.loads(seen["response"]), "replayed": True}
         if quota and verb != "idle":
-            used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
+            used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=? AND verb!='idle'", (agent_id, round_id)).fetchone()[0]
             allowed = controls.limit(cx, agent_id, "actions-round")  # per-agent override, else LIVE_ACTIONS_PER_ROUND
             if used >= allowed:
                 raise HTTPException(429, f"Round {round_id} action quota reached ({used}/{allowed})")
@@ -368,6 +374,11 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             # Shared document edit: appends one hash-chained revision; a stale or rejected edit rolls back.
             summary = documents.record(cx, agent_id, action, payload, demo=demo, stamp=stamp)
         else:
+            if idempotency_key is not None and not demo:
+                # Idle records no event and uses no round quota, but a keyed idle is remembered
+                # so that a retry is answered from the record instead of counting twice.
+                cx.execute("INSERT INTO round_actions(agent_id,round_id,verb,idempotency_key,request_hash,response,created_at) VALUES (?,?,?,?,?,?,?)",
+                           (agent_id, round_id, verb, idempotency_key, request_hash, json.dumps(payload), stamp))
             return payload
         cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (?,?,?,?,?)",
                    (agent_id,verb,summary,int(demo),stamp))
@@ -397,7 +408,7 @@ def agent_context(agent_id: int) -> dict:
             raise HTTPException(404,"Agent not found")
         world = world_memory.world_for_agent(cx, dict(ag))
         round_id = _current_round(cx)
-        used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
+        used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=? AND verb!='idle'", (agent_id, round_id)).fetchone()[0]
         game_view = games.context(cx, agent_id)  # bounded; holds this agent's own private clue only
         document_view = documents.context(cx, agent_id)  # bounded (documents.CONTEXT_CHARS)
         return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
@@ -534,7 +545,7 @@ def budget_status() -> dict[str,Any]:
 def reserve_budget(agent_id: int | None, model: str, amount_usd: float, limit_usd: float, *,
                    provider: str | None = None, round_id: int | None = None,
                    input_rate: float | None = None, output_rate: float | None = None,
-                   count_call: bool = False) -> int:
+                   count_call: bool = False, claim_round: bool = False) -> int:
     """Atomically hold amount_usd against the ceiling. Raises BudgetExceeded when it does not fit.
 
     The ceiling is the lowest of limit_usd, LIVE_PROJECT_BUDGET_USD - LIVE_OTHER_COMMITTED_USD and
@@ -555,6 +566,10 @@ def reserve_budget(agent_id: int | None, model: str, amount_usd: float, limit_us
         if _budget(cx)["committed_usd"] + amount_usd > ceiling:
             raise BudgetExceeded("Local estimated spending ceiling reached")
         controls.before_reserve(cx, agent_id, count_call)
+        # claim_round: one paid call per (round, agent). Checked here, under the write lock and in
+        # the same transaction as the insert, so two simultaneous resumes cannot both pay.
+        if claim_round and round_id is not None and agent_id in controls.agents_done_in_round(cx, round_id):
+            raise controls.CallRefused(f"Agent already has a call or action in round {round_id}; not called again")
         return int(cx.execute("INSERT INTO budget_reservations(agent_id,model,reserved_usd,status,created_at,provider,round_id,input_rate,output_rate) VALUES (?,?,?,'held',?,?,?,?,?)",
                               (agent_id,model,amount_usd,utcnow(),provider,round_id,input_rate,output_rate)).lastrowid)
 

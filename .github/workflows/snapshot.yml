@@ -46,6 +46,7 @@ jobs:
           python -c "from live_genesis.core import seed_agents; seed_agents()"
           python -m live_genesis.cli demo
           python -m live_genesis.cli demo-game
+          python -m live_genesis.cli demo-document
       - name: Export static snapshot
         run: python -m live_genesis.snapshot "$RUNNER_TEMP/site"
       - name: Publish to gh-pages

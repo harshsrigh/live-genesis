@@ -27,7 +27,7 @@
 
 ## Milestone 2 — culture and economy experiment
 - [x] Commons Challenge cooperative puzzle with automated scoring (ported from `codex/local-0.2`; `live_genesis/games.py`, `tests/test_games.py`). Tiny coordination task; no timeout or abandon handling yet.
-- [ ] Add edit history/attribution for collaborative documents.
+- [x] Shared documents with attributable, hash-chained revision history (`live_genesis/documents.py`, `tests/test_documents.py`). Whole-body revisions, optimistic concurrency, heuristic line blame; no merge, no moderation beyond the regex guards, no external anchor for the hash chain.
 - [ ] Define internal credit ledger: credits are nonredeemable compute units, never currency.
 - [ ] Give proposals lifecycle (discussion → vote → approved internal resource budget), no financial execution.
 - [ ] Run baseline vs multi-agent control study and publish results.

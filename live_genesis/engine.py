@@ -182,7 +182,7 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> 
         # The rates and round are stored on the reservation; its id is the action's receipt.
         try:
             reservation = reserve_budget(a['id'], model, reserved, spend_limit, provider=provider, round_id=round_id,
-                                         input_rate=input_rate, output_rate=output_rate, count_call=True)
+                                         input_rate=input_rate, output_rate=output_rate, count_call=True, claim_round=True)
         except ReconciliationRequired as exc:
             outcomes.append({'agent':a['name'], 'error':str(exc)})
             break

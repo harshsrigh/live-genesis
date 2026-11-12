@@ -363,7 +363,7 @@ def agents_done_in_round(cx: sqlite3.Connection, round_id: int) -> set[int]:
     """Agents that must not be called again in this round: they already recorded an action
     in it, or a paid call was reserved for them in it and not released (settled,
     unconfirmed, or still held by a run that died mid-call)."""
-    done = {r[0] for r in cx.execute("SELECT agent_id FROM round_actions WHERE round_id=?", (round_id,))}
+    done = {r[0] for r in cx.execute("SELECT agent_id FROM round_actions WHERE round_id=? AND verb!='idle'", (round_id,))}
     done |= {r[0] for r in cx.execute("SELECT agent_id FROM budget_reservations WHERE round_id=? AND status!='released' "
                                       "AND agent_id IS NOT NULL", (round_id,))}
     return done

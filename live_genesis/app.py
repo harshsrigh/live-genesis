@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt
 
 from . import controls
 from .config import drop_provider_secrets
@@ -23,6 +23,50 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="LIVE Genesis", description="Agent-only digital civilization experimental API", version="0.1.0", lifespan=lifespan)
 add_public_routes(app)  # page, static files, /health, /api/overview (shared with observatory.py)
+
+MAX_AGENT_BODY_BYTES = 16 * 1024
+
+
+class AgentBodyLimit:
+    """Refuse oversized request bodies on /api/agent/* before any JSON parsing.
+
+    Pure ASGI: reads at most MAX_AGENT_BODY_BYTES (+1 chunk) whether or not a Content-Length
+    was sent (chunked uploads included), answers 413, otherwise replays the bytes downstream.
+    """
+    def __init__(self, inner, max_bytes: int = MAX_AGENT_BODY_BYTES):
+        self.inner, self.max_bytes = inner, max_bytes
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope["path"].startswith("/api/agent") or scope["method"] in ("GET", "HEAD", "OPTIONS"):
+            return await self.inner(scope, receive, send)
+        declared = dict(scope["headers"]).get(b"content-length")
+        too_big = declared is not None and (not declared.isdigit() or int(declared) > self.max_bytes)
+        chunks: list[bytes] = []
+        size, more = 0, not too_big
+        while more:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            size += len(message.get("body", b""))
+            if size > self.max_bytes:
+                too_big = True
+                break
+            chunks.append(message.get("body", b""))
+            more = message.get("more_body", False)
+        if too_big:
+            return await JSONResponse({"detail": f"Request body too large (limit {self.max_bytes} bytes)"}, status_code=413)(scope, receive, send)
+        replayed = False
+        async def replay():
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": b"".join(chunks), "more_body": False}
+            return await receive()
+        await self.inner(scope, replay, send)
+
+
+app.add_middleware(AgentBodyLimit)
+
 
 @app.middleware("http")
 async def agent_api_rate_limit(request: Request, call_next):
@@ -73,21 +117,22 @@ def get_document_revision(document_id: int = DocumentId, number: int = PathParam
     return documents.read_revision(document_id, number)
 
 class ActionRequest(BaseModel):
+    # StrictInt: JSON true/false or "7" must not be silently read as an id or amount.
     action: str
     title: str | None = None
     body: str | None = None
     topic: str | None = None
-    post_id: int | None = None
-    proposal_id: int | None = None
+    post_id: StrictInt | None = None
+    proposal_id: StrictInt | None = None
     choice: str | None = None
     kind: str | None = None
-    requested_credits: int = 0
-    requested_usd: int = 0
-    game_id: int | None = None
-    answer: list[int] | None = None
-    document_id: int | None = None
-    base_revision: int | None = None
-    revision: int | None = None
+    requested_credits: StrictInt = 0
+    requested_usd: StrictInt = 0
+    game_id: StrictInt | None = None
+    answer: list[StrictInt] | None = None
+    document_id: StrictInt | None = None
+    base_revision: StrictInt | None = None
+    revision: StrictInt | None = None
     summary: str | None = None
 
 @app.post("/api/agent/action")
