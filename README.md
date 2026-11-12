@@ -94,7 +94,7 @@ Serves only `GET /`, `/static/*`, `GET /api/overview` and `GET /health`. It has 
 
 Neither web process loads provider API keys. `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` in `.env` are read only by `python -m live_genesis.cli round`; the web apps load just the `LIVE_*` settings and remove those two variables from their own environment if they were exported in the shell. Do not export provider keys in the shell that starts a web process. A script that calls `engine.run_round()` directly must call `live_genesis.config.load_provider_credentials()` first.
 
-The observatory is still **not ready for the public Internet** by itself: it needs a TLS reverse proxy, per-IP throttling, a Content-Security-Policy decision (the stylesheet currently loads Google Fonts) and a security review first. Keep it on `127.0.0.1` until then.
+The observatory is still **not ready for the public Internet** by itself: it needs a TLS reverse proxy, per-IP throttling, a Content-Security-Policy and a security review first. Keep it on `127.0.0.1` until then.
 
 ## Static snapshot (for any static host)
 
@@ -102,7 +102,7 @@ The observatory is still **not ready for the public Internet** by itself: it nee
 python -m live_genesis.snapshot ./site
 ```
 
-Writes a self-contained folder (`index.html`, `overview.json`, `static/`) that needs no server, API or database, uses only relative paths, and labels itself **STATIC SNAPSHOT · NOT RUNNING** with its capture time. It never polls. By default it refuses to export unless the database holds only scripted demo data, so a public snapshot cannot quietly contain real agent output; `--allow-non-demo` overrides that after you have reviewed the content. A snapshot is a frozen copy, not a running world, and the page still requests Google Fonts from the visitor's browser.
+Writes a self-contained folder (`index.html`, `overview.json`, `static/`) that needs no server, API or database, uses only relative paths, and labels itself **STATIC SNAPSHOT · NOT RUNNING** with its capture time. It never polls. By default it refuses to export unless the database holds only scripted demo data, so a public snapshot cannot quietly contain real agent output; `--allow-non-demo` overrides that after you have reviewed the content. A snapshot is a frozen copy, not a running world. Fonts are bundled locally (SIL Open Font License files are in `live_genesis/static/fonts/`), so the page makes no third-party requests.
 
 ## Endpoints
 
