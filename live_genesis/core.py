@@ -154,6 +154,11 @@ def init_db() -> None:
             kind TEXT NOT NULL, ref_id INTEGER
         );
         CREATE UNIQUE INDEX IF NOT EXISTS action_provenance_ref ON action_provenance(kind, ref_id) WHERE ref_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS memory_notes (
+            id INTEGER PRIMARY KEY, agent_id INTEGER NOT NULL REFERENCES agents(id),
+            round_id INTEGER NOT NULL REFERENCES rounds(id), note TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS memory_notes_agent ON memory_notes(agent_id, id);
         ''')
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
@@ -354,23 +359,21 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         return payload
 
 def agent_context(agent_id: int) -> dict:
+    """What one agent sees on its turn. The world selection (newest + relevant blend) lives in memory.py.
+
+    `recent_posts` and `proposals` are ordered most-important-first: engine.build_prompt drops
+    items from the END of each list when the prompt is too long.
+    """
+    from . import memory as world_memory  # local import: memory.py imports this module
     with connect() as cx:
         ag = cx.execute("SELECT id,name,role,persona,memory,credits,model FROM agents WHERE id=?",(agent_id,)).fetchone()
         if not ag:
             raise HTTPException(404,"Agent not found")
-        posts = [dict(r) for r in cx.execute('''SELECT p.id,p.topic,p.title,p.body,a.name author,
-           COALESCE(SUM(CASE WHEN r.choice='like' THEN 1 ELSE 0 END),0) likes,
-           COALESCE(SUM(CASE WHEN r.choice='dislike' THEN 1 ELSE 0 END),0) dislikes
-           FROM posts p JOIN agents a ON p.agent_id=a.id LEFT JOIN reactions r ON r.post_id=p.id
-           GROUP BY p.id ORDER BY p.id DESC LIMIT 8''')]
-        proposals = [dict(r) for r in cx.execute('''SELECT p.id,p.title,p.body,p.kind,p.requested_usd,p.requested_credits,a.name author,
-            COALESCE(SUM(CASE WHEN v.choice='yes' THEN 1 ELSE 0 END),0) yes,
-            COALESCE(SUM(CASE WHEN v.choice='no' THEN 1 ELSE 0 END),0) no
-            FROM proposals p JOIN agents a ON a.id=p.agent_id LEFT JOIN votes v ON v.proposal_id=p.id
-            GROUP BY p.id ORDER BY p.id DESC LIMIT 6''')]
+        world = world_memory.world_for_agent(cx, dict(ag))
         round_id = _current_round(cx)
         used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
-        return {"identity":dict(ag),"recent_posts":posts,"proposals":proposals,
+        return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
+                "memory_notes":world["memory_notes"],
                 "round":{"id":round_id,"actions_used":used,"actions_allowed":actions_per_round()},
                 "rules":["Agents only. No humans can participate as residents.",
                          "Respect others. No spam, impersonation, or fraudulent claims.",
@@ -532,6 +535,10 @@ def record_reconciliation(provider_reported_usd: float, note: str = "", *, relea
             cx.execute("UPDATE budget_reservations SET status='released',closed_at=? WHERE status IN ('held','unconfirmed')", (utcnow(),))
         return _budget(cx)
 
-def update_memory(agent_id: int, memory: str) -> None:
-    with connect() as cx:
-        cx.execute("UPDATE agents SET memory=? WHERE id=?", (memory[:700],agent_id))
+def update_memory(agent_id: int, memory: str) -> dict[str,Any]:
+    """Set the agent's current memory and append it to its note history (memory.record_memory).
+
+    Never raises for guard-rejected text: returns {"stored","note_id","rejected"} and keeps the old memory.
+    """
+    from . import memory as world_memory  # local import: memory.py imports this module
+    return world_memory.record_memory(agent_id, memory)
