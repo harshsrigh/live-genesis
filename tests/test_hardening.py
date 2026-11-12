@@ -81,10 +81,26 @@ def test_keyless_traffic_cannot_lock_agents_out(http, monkeypatch):
     blocked = client.get('/api/agent/context', headers=via('203.0.113.9'))
     assert blocked.headers['retry-after'] == '40' and 'failed authentications' in blocked.json()['detail']
     assert isinstance(blocked.json()['detail'], str) and 'Wait 40 second' in blocked.json()['detail']
-    # An agent at another address is not affected, and none of that used its own allowance.
-    assert [client.get('/api/agent/context', headers=via('198.51.100.7', auth[0])).status_code for _ in range(5)] == [200] * 5
+    # A valid key is served even from the address whose failure bucket is used up (no lockout behind
+    # a shared or unconfigured proxy address), and none of that used the agent's own allowance.
+    assert [client.get('/api/agent/context', headers=via('203.0.113.9', auth[0])).status_code for _ in range(3)] == [200] * 3
+    assert client.post('/api/agent/action', json=POST, headers=via('203.0.113.9', auth[1])).status_code == 200
+    assert [client.get('/api/agent/context', headers=via('198.51.100.7', auth[0])).status_code for _ in range(2)] == [200] * 2
+    assert client.get('/api/agent/context', headers=via('203.0.113.9')).status_code == 429   # still throttled for failures
     clock.t += 60
     assert client.get('/api/agent/context', headers=via('203.0.113.9')).status_code == 401
+
+
+def test_valid_key_never_touches_the_failure_bucket(http, monkeypatch):
+    client, auth, _ = http
+    touched = []
+    for name in ('allow', 'blocked'):
+        monkeypatch.setattr(controls.auth_failure_limiter, name, lambda *a, _n=name: touched.append(_n) or False)
+    monkeypatch.setattr(controls, 'client_address', lambda *a: touched.append('address') or 'x')
+    assert client.get('/api/agent/context', headers=auth[0]).status_code == 200
+    assert client.post('/api/agent/action', json=POST, headers=auth[0]).status_code == 200
+    assert touched == []
+    assert client.get('/api/agent/context').status_code == 429 and touched == ['address', 'allow']
 
 
 def test_successful_requests_never_consume_the_failure_bucket(http, monkeypatch):

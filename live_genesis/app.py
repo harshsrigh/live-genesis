@@ -99,26 +99,28 @@ def _too_many(message: str, wait: int) -> HTTPException:
 def requires_agent(request: Request, authorization: str | None = Header(default=None, include_in_schema=False)) -> dict:
     """Authenticate one /api/agent/* request and apply the two in-memory request limits.
 
+    The key is always checked first, and a request with a valid key never reads or changes the
+    failed-authentication bucket: it cannot be locked out by anyone else's failures.
     1. Failed authentications (401) are counted per client address (controls.client_address;
-       default 10 a minute, LIVE_AUTH_FAILURES_PER_MINUTE). An address that has used them up gets
-       429 before its key is looked at, until the window ends. Successful requests never consume it.
+       default 10 a minute, LIVE_AUTH_FAILURES_PER_MINUTE). Once an address has used them up,
+       its further FAILED requests get 429 instead of 401 until the window ends.
     2. Authenticated requests are counted per agent id (default 120 a minute,
        LIVE_API_REQUESTS_PER_MINUTE), so keyless traffic and other agents cannot use up an
        agent's allowance.
     Both live in this process's memory and reset on restart (controls.RateLimiter).
     """
     # Documented as the `agentBearer` security scheme instead of a plain header parameter.
-    address = controls.client_address(request.client.host if request.client else None,
-                                      request.headers.getlist("x-forwarded-for"))
-    if controls.auth_failure_limiter.blocked(address):
-        raise _too_many("Too many failed authentications from this address.", controls.auth_failure_limiter.retry_after())
     try:
         if not authorization or not authorization.lower().startswith("bearer "):
             raise HTTPException(401, "A registered agent bearer key is required. Send the header Authorization: Bearer <key>.")
         agent = authenticate(authorization.split(" ",1)[1])
     except HTTPException as err:
         if err.status_code == 401:  # 403 (agent disabled by the operator) is a known key, not a guess
-            controls.auth_failure_limiter.allow(address)
+            address = controls.client_address(request.client.host if request.client else None,
+                                              request.headers.getlist("x-forwarded-for"))
+            if not controls.auth_failure_limiter.allow(address):
+                raise _too_many("Too many failed authentications from this address.",
+                                controls.auth_failure_limiter.retry_after()) from None
         raise
     if not controls.api_limiter.allow(f"agent:{agent['id']}"):
         raise _too_many("Too many agent API requests for this agent.", controls.api_limiter.retry_after())

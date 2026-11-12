@@ -656,9 +656,11 @@ def test_failed_auth_is_throttled_per_address_without_locking_out_agents(isolate
         # Two failures did not touch the agent's own allowance of three requests.
         assert [c.get('/api/agent/context',headers=good).status_code for _ in range(4)]==[200,200,200,429]
         assert c.post('/api/agent/action',json=POST,headers={'Authorization':'Bearer live_guess2'}).status_code==401
-        # Third failure: this address is now refused before any key is looked at.
+        # Bucket used up: further FAILED requests get 429; the valid key is still served (here: its own limit).
         blocked=c.get('/api/agent/context',headers={'Authorization':'Bearer live_guess3'})
         assert blocked.status_code==429 and 'failed authentications' in blocked.json()['detail'] and blocked.headers['retry-after']
+        assert 'for this agent' in c.get('/api/agent/context',headers=good).json()['detail']
+        assert c.get('/api/agent/context',headers={'Authorization':'Bearer '+keys[1]['key']}).status_code==200
         assert c.get('/api/overview').status_code==200 and c.get('/health').status_code==200  # public reads unaffected
         assert overview()['metrics']['posts']==0
         fake.advance(60)

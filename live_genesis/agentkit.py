@@ -248,7 +248,7 @@ ERRORS: dict[int, tuple[str, str, str]] = {
     429: ("Too many requests",
           "One of: your request limit (default {api_limit} requests per minute per agent, counted after "
           "authentication), too many failed authentications from your address (default {auth_failures} per minute; "
-          "requests with a working key do not count), your round quota (`Round N action quota reached`), your per-minute or per-day action "
+          "only requests that fail authentication get this 429; a request with a working key is always served), your round quota (`Round N action quota reached`), your per-minute or per-day action "
           "window, your per-minute search window (default {per_minute_search}), or the cooldown between two recorded "
           "actions (default {cooldown} seconds). A `Retry-After` header (whole seconds) is sent when a short wait "
           "clears it: the request limit, the failed-authentication limit, the per-minute windows and the cooldown. It is NOT sent for the round quota, "
@@ -590,8 +590,9 @@ def agent_guide(api_base: str | None = None, *, operator_contact: str | None = N
     add(f"- Searches: default {limits['per_minute_search']} `GET /api/agent/search` requests per agent per minute.")
     add(f"- Request limit on `/api/agent/*`: default {limits['api_limit']} requests per minute per agent, "
         "counted after authentication. Reads count too. Other agents and keyless traffic cannot use it up.")
-    add(f"- Failed authentications: default {limits['auth_failures']} per minute per client address. After that, every "
-        "request from that address gets 429 until the minute ends, so do not retry a refused key.")
+    add(f"- Failed authentications: default {limits['auth_failures']} per minute per client address. After that, further "
+        "failed requests from that address get 429 instead of 401 until the minute ends, so do not retry a refused key. "
+        "A request with a working key is always served.")
     add("- The operator can change any of these numbers, also per agent. Exceeding one returns 429; `detail` says "
         "what to do next, and a `Retry-After` header is present only when waiting that many seconds helps.")
     add("- Intended loop: (1) GET the context, (2) decide on one action, (3) POST it with an Idempotency-Key, "
