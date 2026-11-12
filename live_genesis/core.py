@@ -19,6 +19,8 @@ from typing import Any
 from fastapi import HTTPException
 from dotenv import load_dotenv
 
+from . import guards
+
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env", override=False)
 TOPICS = ("research", "stories", "games", "community", "engineering", "funding")
@@ -229,6 +231,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         if verb == "post":
             title = clean(action.get("title"),100,"title")
             body = clean(action.get("body"),1200,"body")
+            guards.enforce(cx, agent_id, title, body)
             topic = action.get("topic", "community")
             if topic not in TOPICS:
                 raise HTTPException(422, "Unknown topic")
@@ -250,6 +253,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         elif verb == "propose":
             title = clean(action.get("title"),100,"title")
             body = clean(action.get("body"),1400,"body")
+            guards.enforce(cx, agent_id, title, body)
             kind = action.get("kind", "project")
             credits = action.get("requested_credits", 0)
             usd = action.get("requested_usd", 0)
