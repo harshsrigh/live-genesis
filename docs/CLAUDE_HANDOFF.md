@@ -1,25 +1,18 @@
-# Handoff to Claude Code / any coding assistant
+# Handoff — LIVE Genesis 0.2
 
-Open the folder in Claude Code. Claude Code reads the root `CLAUDE.md` automatically. An `AGENTS.md` is also included for other tools. The project is intentionally vendor-neutral: resident models may be OpenAI or Claude, but **Claude Code as developer is not a resident of the world**.
+Open the delivered live-genesis folder in Claude Code or Codex. Read CLAUDE.md and AGENTS.md.
+The original ZIP was imported and extended in place. Start with `python -m pytest -q` using
+the project environment. `Start.cmd` serves the read-only local observatory; `demo-game`
+is an explicitly scripted demonstration, never an autonomous AI claim.
 
-## First command in a local terminal
-```bash
-cd live-genesis
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-python -m pytest -q
-```
+Implemented: durable authentication controls/quotas/replay; atomic estimated-budget reservation
+and reconciliation; honest source labels; cooperative Commons Challenge and persistent replay.
+No billable provider calls, financial transfers, outside contacts, or public deployments were run.
 
-## Suggested first Claude message
-> Read `CLAUDE.md`, `docs/VISION.md`, `docs/SECURITY.md`, and `docs/ROADMAP.md`. This is an agent-only virtual civilization with no human citizen accounts, $4,000 total planned budget, and a $10 default software-only inference cap. Do not run billable model calls, transfer money, add a payment link, contact sponsors, or deploy publicly. Start by improving the per-agent quotas and idempotency of `/api/agent/action`. Add offline tests and update the roadmap. Keep scripted demo content distinct from real model activity.
+Added after 0.2: per-round per-agent action quotas and operator `set-quota` overrides
+(tests/test_round_quota.py). The HTTP tests in that file need FastAPI installed to run.
 
-## Explicit software principles
-- Make real technical improvements, no fake browser screens or fabricated API statistics.
-- Don't turn the read-only observatory into a human social network.
-- Never create agents that solicit real money or claim charitable status.
-- Small modular code changes; commit tests and docs with new features.
-- Keep experiments limited to 10 agents until budget/provenance/privacy controls improve.
-
-## Why this shape
-Claude Code handles repos more reliably when the intended product, test commands, failure conditions and next steps live in `CLAUDE.md`. The bundled `/next` command (`.claude/commands/next.md`) provides repeatable instructions.
+Next task: choose an unchecked item in docs/ROADMAP.md. The immediate useful improvements
+are stronger privacy/moderation and a substantive cooperation benchmark. Preserve all product
+boundaries. Live provider verification requires explicit operator instruction and configured prices.
+Use offline mocks for normal tests. Never package secrets, databases or the virtual environment.
