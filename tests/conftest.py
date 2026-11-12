@@ -6,6 +6,15 @@ from live_genesis import archive, controls, web
 from live_genesis.core import init_db
 
 
+@pytest.fixture(autouse=True)
+def fresh_public_limit(monkeypatch):
+    """The per-address limit on the public routes lives in this process's memory and every TestClient
+    request comes from one address: start each test empty and on the shipped defaults."""
+    for name in ('LIVE_PUBLIC_REQUESTS_PER_MINUTE','LIVE_CONTEXT_PER_AUTHOR'):
+        monkeypatch.delenv(name,raising=False)
+    controls.public_limiter.reset()
+
+
 @pytest.fixture
 def isolated_db(tmp_path,monkeypatch):
     path=tmp_path/'genesis.sqlite'

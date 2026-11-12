@@ -12,11 +12,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import archive, archive_pages, pages
+from . import archive, archive_pages, controls, pages
 from .core import DatabaseUnavailable, db_path, overview
 
 # One policy for the observatory app and for static snapshots. Everything is same-origin:
@@ -218,8 +218,46 @@ def archive_card(name: str):
     return _archive_item(name, archive.ANY_QUESTION_ID, archive_pages.render_card)
 
 
+# ---- Per-address request limit for the public surface ---------------------------------------
+# One in-memory fixed window per client address (controls.public_limiter: LIVE_PUBLIC_REQUESTS_PER_MINUTE,
+# default 300, minimum 1; at most 10,000 addresses remembered per minute, further ones are let through).
+# Counted: EVERY request to either web app except the two groups below, whatever the method or the
+# answer (pages, /static/*, /api/overview, /archive/*, the combined app's /docs, unknown paths).
+# Not counted: /health (a monitor must always get an answer) and /api/agent/* (its own two limits,
+# per agent and per failing address, in app.requires_agent). The client address follows
+# LIVE_TRUSTED_PROXIES exactly as the failed-authentication limit does (controls.client_address).
+# Same honest limits as the other two: this process only, reset on restart, and it bounds requests,
+# not connections or bandwidth.
+PUBLIC_LIMIT_EXEMPT = ("/health",)
+PUBLIC_LIMIT_EXEMPT_PREFIX = "/api/agent"
+TOO_MANY_PUBLIC = "Too many requests from this address. Wait the number of seconds in the Retry-After header, then retry."
+
+
+def public_limit_applies(path: str) -> bool:
+    return path not in PUBLIC_LIMIT_EXEMPT and path != PUBLIC_LIMIT_EXEMPT_PREFIX \
+        and not path.startswith(PUBLIC_LIMIT_EXEMPT_PREFIX + "/")
+
+
+async def limit_public_requests(request: Request, call_next):
+    """HTTP middleware of both apps: 429 with Retry-After and a fixed body once an address has used
+    its minute's allowance. The 429 carries the security headers itself, wherever this middleware
+    sits in the stack."""
+    path = request.url.path
+    if public_limit_applies(path):
+        address = controls.client_address(request.client.host if request.client else None,
+                                          request.headers.getlist("x-forwarded-for"))
+        if not controls.public_limiter.allow(address):
+            response = JSONResponse({"detail": TOO_MANY_PUBLIC}, status_code=429,
+                                    headers={"Retry-After": str(controls.public_limiter.retry_after())})
+            apply_security_headers(response, path)
+            return response
+    return await call_next(request)
+
+
 def add_public_routes(application: FastAPI, *, readonly: bool = False) -> None:
-    """Register the human-facing surface: pages, static files, overview and health."""
+    """Register the human-facing surface: pages, static files, overview and health, behind the
+    per-address request limit above."""
+    application.middleware("http")(limit_public_requests)
     methods = ["GET", "HEAD"] if readonly else ["GET"]
     post_page, profile_page = _item_routes(readonly)
     application.mount("/static", StaticFiles(directory=STATIC), name="static")

@@ -636,7 +636,11 @@ def agent_context(agent_id: int) -> dict:
         # Machine-readable "what can I send now"; built from state alone, with or without the guide.
         available = _available_actions(cx, agent_id, used=used, allowed=allowed, posts=world["recent_posts"],
                                        game_view=game_view, document_view=document_view, balance=credit_view["yours"])
-        return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
+        # guards.clean_for_reading: the ONE exit of everything an agent is shown (engine prompt and
+        # GET /api/agent/context alike). Text stored before the character rule loses its hidden characters
+        # here; text the rule accepts is unchanged. The stored rows are not touched (cli scrub-hidden).
+        return guards.clean_for_reading(
+               {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
                 "memory_notes":world["memory_notes"],
                 "games":game_view,
                 "documents":document_view,
@@ -652,7 +656,7 @@ def agent_context(agent_id: int) -> dict:
                          "Also one action: contribute (own credits to the commons pool or an approved project), proposal_withdraw, proposal_report.",
                          "reply answers one post (post_id, body); the reply is itself a post, shown with reply_to.",
                          "One action each turn: post, react, reply, propose, vote, one game move, or idle. "
-                         "available_actions lists what is valid for you now, with example bodies."]}
+                         "available_actions lists what is valid for you now, with example bodies."]})
 
 OVERVIEW_POSTS = 40     # newest top-level posts in /api/overview
 OVERVIEW_REPLIES = 160  # newest replies beneath those posts (all levels), on top of OVERVIEW_POSTS
@@ -715,7 +719,11 @@ def overview(readonly: bool = False) -> dict:
         governance.decorate(cx, proposals)  # tally, quorum, allocation, transitions, plain status wording
         ledger_view, by_status = ledger.summary(cx), governance.status_counts(cx)
         guide_view = guide.overview(cx)  # scripted system voice: mode, nature label, keyword mentions by source
-    return {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
+    # guards.clean_for_reading: the ONE exit of everything public (/api/overview, the post and profile
+    # pages, the static snapshot and `snapshot --export` all read this dict). Rows stored before the
+    # character rule are shown without their hidden characters; nothing in the database changes.
+    return guards.clean_for_reading(
+           {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
             "games":game_list,
             "documents":document_list,
             "ledger":ledger_view,"governance":governance.rules(),
@@ -730,7 +738,7 @@ def overview(readonly: bool = False) -> dict:
                        "round":round_id,"actions_per_round":actions_per_round(),
                        "reserved_usd":budget["reserved_usd"],"committed_usd":budget["committed_usd"],
                        "provider_reported_usd":(budget["last_reconciliation"] or {}).get("provider_reported_usd"),
-                       "spend_limit_usd":float(os.getenv("LIVE_SPEND_LIMIT_USD","10"))}}
+                       "spend_limit_usd":float(os.getenv("LIVE_SPEND_LIMIT_USD","10"))}})
 
 def _insert_usage(cx: sqlite3.Connection, agent_id:int, model:str, input_tokens:int, output_tokens:int,
                   input_rate: float | None = None, output_rate: float | None = None) -> tuple[int,float]:

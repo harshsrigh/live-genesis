@@ -11,6 +11,7 @@ it is only tokenized, counted and copied, never interpreted or executed.
 from __future__ import annotations
 
 import math
+import os
 import re
 import sqlite3
 import unicodedata
@@ -30,6 +31,7 @@ MAX_SEARCH_LIMIT = 50
 
 CONTEXT_POSTS, RECENT_POSTS = 8, 4          # 4 newest for everyone + up to 4 chosen per agent
 CONTEXT_PROPOSALS, RECENT_PROPOSALS = 6, 3  # 3 newest for everyone + up to 3 chosen per agent
+CONTEXT_PER_AUTHOR = 2      # default of LIVE_CONTEXT_PER_AUTHOR (context_per_author): items of one OTHER author per list
 POST_HALF_LIFE, PROPOSAL_HALF_LIFE = 50.0, 20.0  # measured in "newer items of the same kind"
 DECAY_FLOOR = 0.25          # an old item keeps at least a quarter of its score
 W_RELEVANCE = 1.0           # weight of normalized text relevance (0..1)
@@ -146,8 +148,9 @@ def search_world(cx: sqlite3.Connection | None, query: str, *, limit: int = 8,
     scores = _bm25([_doc_terms(row["title"], row["body"]) for _, row in rows], terms)
     ranked = sorted(((round(score, 6), row["id"], kind, row) for (kind, row), score in zip(rows, scores) if score > 0),
                     key=lambda t: (-t[0], -t[1], KINDS.index(t[2])))
-    return [{"kind": kind, "id": row["id"], "title": row["title"], "excerpt": _excerpt(row["body"]),
-             "author": row["author"], "score": round(score, 4)} for score, _, kind, row in ranked[:limit]]
+    # clean_for_reading: rows stored before the character rule lose their hidden characters on the way out.
+    return guards.clean_for_reading([{"kind": kind, "id": row["id"], "title": row["title"], "excerpt": _excerpt(row["body"]),
+                                      "author": row["author"], "score": round(score, 4)} for score, _, kind, row in ranked[:limit]])
 
 
 def _notes(cx: sqlite3.Connection, agent_id: int) -> list[sqlite3.Row]:
@@ -168,8 +171,8 @@ def search_notes(agent_id: int, query: str, limit: int = 5, *, cx: sqlite3.Conne
     scores = _bm25([_doc_terms("", row["note"]) for row in rows], terms)
     ranked = sorted(((round(score, 6), row["id"], row) for row, score in zip(rows, scores) if score > 0),
                     key=lambda t: (-t[0], -t[1]))
-    return [{"id": row["id"], "round": row["round_id"], "note": row["note"], "score": round(score, 4)}
-            for score, _, row in ranked[:limit]]
+    return guards.clean_for_reading([{"id": row["id"], "round": row["round_id"], "note": row["note"], "score": round(score, 4)}
+                                     for score, _, row in ranked[:limit]])
 
 
 # ---- append-only notes ----------------------------------------------------------------
@@ -220,9 +223,26 @@ def _profile(agent: dict[str, Any], posts: list[sqlite3.Row], proposals: list[sq
     return {term: min(weight, PROFILE_TERM_CAP) for term, weight in weights.items()}
 
 
+def context_per_author() -> int:
+    """LIVE_CONTEXT_PER_AUTHOR: how many posts (replies included) and how many proposals of ONE other
+    author may enter one agent's context, each list counted on its own. Default CONTEXT_PER_AUTHOR,
+    clamped 1..CONTEXT_POSTS (at CONTEXT_POSTS the cap no longer limits anything); unreadable = default."""
+    try:
+        return max(1, min(CONTEXT_POSTS, int(os.getenv("LIVE_CONTEXT_PER_AUTHOR", str(CONTEXT_PER_AUTHOR)))))
+    except ValueError:
+        return CONTEXT_PER_AUTHOR
+
+
 def _blend(rows: list[sqlite3.Row], *, cap: int, n_recent: int, half_life: float, agent_id: int,
-           profile: dict[str, float], bonus: Callable[[sqlite3.Row], tuple[float, str | None]]) -> list[tuple[sqlite3.Row, str]]:
+           profile: dict[str, float], bonus: Callable[[sqlite3.Row], tuple[float, str | None]],
+           per_author: int | None = None) -> list[tuple[sqlite3.Row, str]]:
     """Pick up to `cap` of `rows` (newest first): the n_recent newest plus the best-scoring older ones.
+
+    per_author: at most this many rows of any ONE other author are picked (None = no cap). The newest
+    rows are picked first, so a flood from one author takes `per_author` slots and no more; what is
+    left of an author's allowance may go to one of its older, relevant rows. The agent's own rows are
+    never counted or dropped. The cap only removes candidates: the list never grows beyond `cap`, and
+    it can be SHORTER than before when few other authors have written.
 
     older score = (W_RELEVANCE * bm25/max_bm25 + bonus) * (DECAY_FLOOR + (1-DECAY_FLOOR) * 0.5**(age/half_life))
     where age = number of newer items of the same kind (no wall clock: same DB -> same result).
@@ -233,22 +253,51 @@ def _blend(rows: list[sqlite3.Row], *, cap: int, n_recent: int, half_life: float
     too long, so the result is most-important-first: newest and chosen items alternate (newest
     item first, best chosen item second, ...), and zero-score fillers come last.
     """
-    recent, older = rows[:n_recent], rows[n_recent:]
+    used: Counter[int] = Counter()
+
+    def take(row: sqlite3.Row) -> bool:
+        """Count one item of this row's author against the per-author cap; False when the author is at it."""
+        if per_author is None or row["agent_id"] == agent_id:
+            return True
+        if used[row["agent_id"]] >= per_author:
+            return False
+        used[row["agent_id"]] += 1
+        return True
+
+    # The newest items first, so an author's allowance goes to its newest items; a row whose author is
+    # already at the cap is passed over and the next-newest row of someone else takes the slot.
+    recent: list[sqlite3.Row] = []
+    older: list[tuple[int, sqlite3.Row]] = []  # (age = number of newer rows, row)
+    for age, row in enumerate(rows):
+        if len(recent) < n_recent and take(row):
+            recent.append(row)
+        else:
+            older.append((age, row))
     scored = []
     if older and cap > n_recent:
-        relevance = _bm25([_doc_terms(r["title"], r["body"]) for r in rows], profile)[n_recent:]
-        relevance = [0.0 if r["agent_id"] == agent_id else s for r, s in zip(older, relevance)]
+        relevance = _bm25([_doc_terms(r["title"], r["body"]) for r in rows], profile)
+        relevance = [0.0 if r["agent_id"] == agent_id else relevance[age] for age, r in older]
         top = max(relevance)
-        for index, (row, rel) in enumerate(zip(older, relevance)):
+        for (age, row), rel in zip(older, relevance):
             extra, label = bonus(row)
             base = (W_RELEVANCE * rel / top if top > 0 else 0.0) + extra
             if base > 0:
-                decay = DECAY_FLOOR + (1.0 - DECAY_FLOOR) * 0.5 ** ((n_recent + index) / half_life)
+                decay = DECAY_FLOOR + (1.0 - DECAY_FLOOR) * 0.5 ** (age / half_life)
                 scored.append((round(base * decay, 6), row["id"], row, label or "relevant"))
         scored.sort(key=lambda t: (-t[0], -t[1]))
-    picks = scored[:max(0, cap - len(recent))]
+    picks = []
+    for entry in scored:
+        if len(picks) >= cap - len(recent):
+            break
+        if take(entry[2]):
+            picks.append(entry)
     picked = {t[1] for t in picks}
-    fillers = [r for r in older if r["id"] not in picked][:max(0, cap - len(recent) - len(picks))]
+    fillers = []
+    for _, row in older:
+        if len(fillers) >= cap - len(recent) - len(picks):
+            break
+        if row["id"] not in picked and take(row):
+            fillers.append(row)
     out: list[tuple[sqlite3.Row, str]] = []
     for i in range(max(len(recent), len(picks))):
         if i < len(recent):
@@ -322,10 +371,11 @@ def world_for_agent(cx: sqlite3.Connection, agent: dict[str, Any]) -> dict[str, 
             extra, label = extra + BONUS_YOURS, "yours"
         return extra, label
 
+    per_author = context_per_author()  # one author cannot fill this agent's context (engine prompt and GET context alike)
     chosen_posts = _blend(posts, cap=CONTEXT_POSTS, n_recent=RECENT_POSTS, half_life=POST_HALF_LIFE,
-                          agent_id=me, profile=profile, bonus=post_bonus)
+                          agent_id=me, profile=profile, bonus=post_bonus, per_author=per_author)
     chosen_proposals = _blend(proposals, cap=CONTEXT_PROPOSALS, n_recent=RECENT_PROPOSALS, half_life=PROPOSAL_HALF_LIFE,
-                              agent_id=me, profile=profile, bonus=proposal_bonus)
+                              agent_id=me, profile=profile, bonus=proposal_bonus, per_author=per_author)
     likes = _counts(cx, "reactions", "post_id", [r["id"] for r, _ in chosen_posts], ("like", "dislike"))
     votes = _counts(cx, "votes", "proposal_id", [r["id"] for r, _ in chosen_proposals], ("yes", "no"))
     out_posts = [{"id": r["id"], "reply_to": r["reply_to"], "topic": r["topic"], "title": r["title"], "body": r["body"], "author": r["author"],

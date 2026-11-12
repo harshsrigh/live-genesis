@@ -2,7 +2,9 @@
 
 Heuristic, offline, regex-based checks. They are a first safety net, not a moderation
 service: they do not understand meaning, are English/Latin-script centric, and can be
-evaded by a determined writer. See docs/SECURITY.md.
+evaded by a determined writer. See docs/SECURITY.md. Look-alike Cyrillic and Greek letters
+are folded to Latin before matching (_CONFUSABLES) and a word mixing those scripts is refused
+in one-line text (has_mixed_script_word): small explicit rules, not a confusables database.
 
 The text checks are pure: they take text and return a short *category* string (or None).
 A reason never contains the matched text, because the match may be a secret.
@@ -39,11 +41,36 @@ _DEFAULT_IGNORABLE = re.compile("[" + _DEFAULT_IGNORABLE_CLASS + "]")
 _INVISIBLE = re.compile("[" + _DEFAULT_IGNORABLE_CLASS + _OTHER_FORMAT_CLASS + "]")
 
 
+# Look-alike letters, folded to the Latin letter they imitate BEFORE the pattern guards match (never in
+# what is stored or shown). A small explicit table, not the Unicode confusables list: the Cyrillic and
+# Greek letters (and a few Cyrillic-extension ones) whose usual glyph is the same as, or very close to,
+# a basic Latin letter. Written with escapes only. NOT covered: other scripts (Armenian, Cherokee,
+# Latin-extension letters such as dotless i), digit look-alikes, multi-letter look-alikes ("rn" for "m").
+_CONFUSABLES = str.maketrans({
+    # Cyrillic lower case: a e o p c y x i j s h d q w l k m, en (small-capital H), te (T), ve (B)
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
+    "і": "i", "ј": "j", "ѕ": "s", "һ": "h", "ԁ": "d", "ԛ": "q", "ԝ": "w",
+    "ӏ": "l", "к": "k", "м": "m", "н": "h", "т": "t", "в": "b",
+    # Cyrillic upper case: A B E K M H O P C T Y X I J S, straight U (Y), Q W, palochka (I)
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O",
+    "Р": "P", "С": "C", "Т": "T", "У": "Y", "Х": "X", "І": "I", "Ј": "J",
+    "Ѕ": "S", "Ү": "Y", "Ԛ": "Q", "Ԝ": "W", "Ӏ": "I",
+    # Greek lower case: alpha omicron nu rho iota kappa upsilon chi gamma
+    "α": "a", "ο": "o", "ν": "v", "ρ": "p", "ι": "i", "κ": "k", "υ": "u",
+    "χ": "x", "γ": "y",
+    # Greek upper case: A B E Z H I K M N O P T Y X
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K",
+    "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+})
+
+
 def _fold(text: str) -> str:
     """Undo cheap obfuscation before matching: every default-ignorable code point and format
     character (zero-width joiner and non-joiner included, although the character rule allows
-    them) is removed, before and after NFKC folds full-width and other compatibility forms."""
-    return _INVISIBLE.sub("", unicodedata.normalize("NFKC", _INVISIBLE.sub("", text)))
+    them) is removed, before and after NFKC folds full-width and other compatibility forms; then
+    the look-alike Cyrillic and Greek letters of _CONFUSABLES become the Latin letter they imitate,
+    so a payment host, key or e-mail address spelled with them is matched like the plain one."""
+    return _INVISIBLE.sub("", unicodedata.normalize("NFKC", _INVISIBLE.sub("", text))).translate(_CONFUSABLES)
 
 
 # ---------------------------------------------------------------- characters
@@ -97,21 +124,75 @@ def has_forbidden_character(text: str, *, multiline: bool = False) -> bool:
     return any(_refused(text, index, multiline) for index in range(len(text)))
 
 
-def strip_forbidden_characters(text: str) -> str:
+def strip_forbidden_characters(text: str, *, multiline: bool = False) -> str:
     """`text` without the characters the rule above refuses; a control character becomes a space
     so words do not run together. For untrusted text that is only displayed to the operator
-    (a fetched feed); agent-written text is refused instead, never repaired."""
-    if text.isascii() and text.isprintable():
-        return text
-    return "".join((" " if text[index] < " " or text[index] == "\x7f" else "") if _refused(text, index, False) else text[index]
-                   for index in range(len(text)))
+    (a fetched feed) and for rows stored before the rule existed (clean_for_reading); NEW
+    agent-written text is refused instead, never repaired. Text the rule accepts comes back
+    unchanged (with `multiline`, the newline, tab and CR+LF it allows are kept)."""
+    while not (text.isascii() and text.isprintable()):
+        cleaned = "".join((" " if text[index] < " " or text[index] == "\x7f" else "") if _refused(text, index, multiline)
+                          else text[index] for index in range(len(text)))
+        if cleaned == text:
+            break
+        text = cleaned  # again: a removal can leave U+FE0F behind a letter, or a CR without its LF
+    return text
+
+
+def clean_for_reading(node):
+    """A copy of a JSON-like value (dicts, lists, strings, numbers) in which every string VALUE has
+    passed strip_forbidden_characters(multiline=True). The read-side counterpart of the write rule:
+    core.overview, core.agent_context and the search results go through it, so a row stored before
+    the rule (never rewritten when it is append-only or hashed) reaches a page, the export or a
+    prompt without hidden characters. Identity for everything the write rule accepts. Dict keys
+    are server-written names and are left alone."""
+    if isinstance(node, str):
+        return strip_forbidden_characters(node, multiline=True)
+    if isinstance(node, dict):
+        return {key: clean_for_reading(value) for key, value in node.items()}
+    if isinstance(node, (list, tuple)):
+        return [clean_for_reading(value) for value in node]
+    return node
+
+
+# ---------------------------------------------------------------- look-alike letters (mixed scripts)
+
+_LETTER_RUN = re.compile(r"[^\W\d_]+")
+_SCRIPTS = ("LATIN", "CYRILLIC", "GREEK")
+MIXED_SCRIPT_RULE = ("has a word that mixes Latin letters with Cyrillic or Greek letters (look-alike letters "
+                     "inside one word)")
+
+
+def _script(ch: str) -> str | None:
+    """LATIN, CYRILLIC or GREEK for a letter of those scripts (by its Unicode name), else None."""
+    if ch.isascii():
+        return "LATIN" if ch.isalpha() else None
+    name = unicodedata.name(ch, "")
+    return next((script for script in _SCRIPTS if name.startswith(script)), None)
+
+
+def has_mixed_script_word(text: str) -> bool:
+    """True when one WORD (an unbroken run of letters) of `text` holds letters of more than one of the
+    scripts Latin, Cyrillic and Greek. Whole words in any script, accented Latin, CJK, digits and
+    emoji never match; a space, hyphen, digit or any other non-letter ends a word. Known false
+    positives: a Greek symbol written directly against Latin letters (a real GREEK SMALL LETTER MU
+    in a unit, a delta before a variable name); the MICRO SIGN U+00B5 is not a Greek letter here."""
+    if text.isascii():
+        return False
+    for run in _LETTER_RUN.findall(unicodedata.normalize("NFC", text)):
+        if not run.isascii() and len({script for script in map(_script, run) if script}) > 1:
+            return True
+    return False
 
 
 def check_characters(text: str, label: str, *, multiline: bool = False) -> None:
-    """422 for a forbidden character. Never echoes the text or the character."""
+    """422 for a forbidden character and, in ONE-LINE text (titles, summaries, names), for a word
+    that mixes scripts (has_mixed_script_word). Never echoes the text or the character."""
     if has_forbidden_character(text, multiline=multiline):
         allowed = "Plain text, newlines and tabs only" if multiline else "Plain text on one line only"
         raise HTTPException(422, f"{label} {CHARACTER_RULE}. Remove it and resend. {allowed}.")
+    if not multiline and has_mixed_script_word(text):
+        raise HTTPException(422, f"{label} {MIXED_SCRIPT_RULE}. Write each word in one script and resend.")
 
 
 def non_ascii_categories(text: str) -> Counter:

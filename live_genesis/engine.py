@@ -231,21 +231,27 @@ def infer(provider: str, model: str, prompt: str, *, system: str | None = None, 
         # Any server speaking the OpenAI Chat Completions API (local or hosted). The base URL and key are
         # passed explicitly, never taken from OPENAI_* variables. Exceptions from here on are caught by the
         # callers, which never echo their text.
+        # No redirect is followed here either (the SDK's own HTTP client would follow one): the request
+        # goes to the configured host or fails. A 3xx answer is an error for the caller, like any other.
+        import httpx
         from openai import OpenAI
-        client = OpenAI(base_url=compat.base_url, api_key=compat_key, timeout=timeout, max_retries=0)
-        return _chat(client, model, system, prompt, max_output_tokens, json_mode=compat.json_mode,
-                     reasoning_effort=compat.reasoning_effort, sampling=sampling)
+        with httpx.Client(follow_redirects=False, timeout=timeout) as http:
+            client = OpenAI(base_url=compat.base_url, api_key=compat_key, timeout=timeout, max_retries=0, http_client=http)
+            return _chat(client, model, system, prompt, max_output_tokens, json_mode=compat.json_mode,
+                         reasoning_effort=compat.reasoning_effort, sampling=sampling)
     sent = {'temperature': sampling['temperature']} if sampling and 'temperature' in sampling else {}
     recorded = sent if sampling is not None else None
     if provider == 'openai':
         if not os.getenv('OPENAI_API_KEY'):
             raise ProviderNotReady('OPENAI_API_KEY missing')
+        import httpx
         from openai import OpenAI
-        client = OpenAI(timeout=timeout, max_retries=0)
-        response = client.responses.create(
-            model=model, instructions=system,
-            input=prompt, max_output_tokens=max_output_tokens, **sent,
-        )
+        with httpx.Client(follow_redirects=False, timeout=timeout) as http:  # as above: no redirect followed
+            client = OpenAI(timeout=timeout, max_retries=0, http_client=http)
+            response = client.responses.create(
+                model=model, instructions=system,
+                input=prompt, max_output_tokens=max_output_tokens, **sent,
+            )
         usage = response.usage
         if usage is None:
             raise UsageMissing('Provider usage missing; inference not recorded as priced')
@@ -264,11 +270,15 @@ def infer(provider: str, model: str, prompt: str, *, system: str | None = None, 
             from anthropic import Anthropic
         except ImportError as err:
             raise ProviderNotReady('Install optional Anthropic SDK: pip install -r requirements-anthropic.txt') from err
-        client = Anthropic(timeout=timeout, max_retries=0)
-        response = client.messages.create(
-            model=model, max_tokens=max_output_tokens, system=system,
-            messages=[{'role':'user', 'content':prompt}], **sent,
-        )
+        # The Anthropic SDK's own HTTP client follows redirects too, and its key travels in an `x-api-key`
+        # header that a redirect would carry along: same rule, no redirect followed.
+        import httpx
+        with httpx.Client(follow_redirects=False, timeout=timeout) as http:
+            client = Anthropic(timeout=timeout, max_retries=0, http_client=http)
+            response = client.messages.create(
+                model=model, max_tokens=max_output_tokens, system=system,
+                messages=[{'role':'user', 'content':prompt}], **sent,
+            )
         texts = [part.text for part in response.content if getattr(part, 'type', '') == 'text']
         # Thinking tokens, where the model thinks by default, count against max_tokens as well.
         return Completion('\n'.join(texts), int(response.usage.input_tokens), int(response.usage.output_tokens),

@@ -181,7 +181,7 @@ def test_export_is_ascii_and_the_page_data_is_unchanged(isolated_db, tmp_path, c
 
 
 @pytest.mark.parametrize('hidden', [TAGS, '​', '͏', '', '￹', '‮', 'ㅤ'])
-def test_old_rows_with_hidden_characters_cannot_be_exported_approved_or_checked(isolated_db, tmp_path, hidden):
+def test_old_rows_are_exported_without_hidden_characters_and_a_file_holding_them_is_refused(isolated_db, tmp_path, hidden):
     seed_agents()
     act(1, POST)
     out = tmp_path / 'published'
@@ -189,9 +189,13 @@ def test_old_rows_with_hidden_characters_cannot_be_exported_approved_or_checked(
     snapshot.approve_published(out, confirmed=True)
     good_data, good_manifest = (out / 'overview.json').read_bytes(), (out / 'MANIFEST.json').read_text(encoding='utf-8')
     old_row(f'Looks harmless.{hidden}')
-    with pytest.raises(RuntimeError, match=r'(?s)Export refused.*posts id 2, field body: contains an invisible') as err:
-        snapshot.export_published(tmp_path / 'second')
-    assert hidden not in str(err.value) and not (tmp_path / 'second').exists()
+    # Read-side stripping (guards.clean_for_reading in core.overview): the old row no longer blocks an export.
+    # It is exported WITHOUT the hidden characters, and the stored row is not rewritten.
+    snapshot.export_published(tmp_path / 'second')
+    exported = json.loads((tmp_path / 'second' / 'overview.json').read_bytes())
+    assert exported['posts'][0]['body'] == 'Looks harmless.' and hidden not in json.dumps(exported, ensure_ascii=False)
+    with connect() as cx:
+        assert cx.execute('SELECT body FROM posts WHERE id=2').fetchone()[0] == f'Looks harmless.{hidden}'
     # A hand-made export of the same row (ASCII-escaped, hash and counts adjusted) fails approve, check and render.
     data = json.loads(good_data)
     data['posts'][0]['body'] = f'Looks harmless.{hidden}'
