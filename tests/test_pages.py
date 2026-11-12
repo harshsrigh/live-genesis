@@ -376,7 +376,7 @@ def test_demo_export_writes_one_page_per_post_and_agent_with_links_that_resolve(
     html_files = sorted(name for name in files if name.endswith('.html'))
     assert html_files == sorted(['index.html', 'stats.html'] + [f'post/{p["id"]}.html' for p in data['posts']]
                                 + [f'profile/{a["id"]}.html' for a in data['agents']])
-    assert len(data['posts']) == 7 and len(data['agents']) == 10 and not (out / 'static' / 'stats.html').exists()
+    assert len(data['posts']) == 9 and len(data['agents']) == 10 and not (out / 'static' / 'stats.html').exists()
     seen_targets = set()
     for name in html_files:
         html = files[name].read_text(encoding='utf-8')
