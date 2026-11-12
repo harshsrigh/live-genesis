@@ -132,12 +132,56 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY, provider_reported_usd REAL NOT NULL, estimated_usd REAL NOT NULL,
             last_usage_id INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS action_provenance (
+            event_id INTEGER PRIMARY KEY REFERENCES events(id),
+            source TEXT NOT NULL CHECK(source IN ('demo','engine','api')),
+            provider TEXT, model TEXT, client TEXT,
+            verified INTEGER NOT NULL DEFAULT 0 CHECK(verified IN (0,1)),
+            kind TEXT NOT NULL, ref_id INTEGER
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS action_provenance_ref ON action_provenance(kind, ref_id) WHERE ref_id IS NOT NULL;
         ''')
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
             cx.execute("INSERT INTO rounds(source,opened_at) VALUES ('init',?)", (utcnow(),))
 
 IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
+
+# ---- Per-action provenance -----------------------------------------------------------
+# One row per recorded event saying WHERE the action came from. It never proves more than:
+#   demo   -> scripted sample data, no model involved (verified=0, no model)
+#   engine -> this server made the provider call itself in engine.run_round; `model` is the
+#             id the server REQUESTED. verified=1 means only that, nothing about autonomy.
+#   api    -> an external program holding a bearer key. `model`/`client` are whatever the
+#             caller typed into X-Agent-Model / X-Agent-Client: self-declared, verified=0.
+# Events recorded before this table existed have no row and read as 'demo' (demo flag) or 'unknown'.
+PROVENANCE_SOURCES = ("demo", "engine", "api")
+DECLARED = re.compile(r"[A-Za-z0-9._:/-][A-Za-z0-9 ._:/-]{0,79}")
+
+def _provenance(provenance: dict[str,Any] | None, demo: bool) -> dict[str,Any]:
+    """Normalize a provenance declaration. `verified` is derived from the source, never accepted from a caller."""
+    if provenance is None:
+        provenance = {}
+    if not isinstance(provenance, dict) or set(provenance) - {"source", "provider", "model", "client"}:
+        raise ValueError("provenance must be a dict with source/provider/model/client")
+    source = provenance.get("source", "demo" if demo else "api")
+    if source not in PROVENANCE_SOURCES or (source == "demo") != bool(demo):
+        raise ValueError("provenance source must be demo (scripted records only), engine or api")
+    out: dict[str,Any] = {"source": source, "provider": None, "model": None, "client": None, "verified": int(source == "engine")}
+    if source == "engine":
+        # Operator configuration, not caller input: record exactly what the server requested.
+        if not provenance.get("provider") or not provenance.get("model"):
+            raise ValueError("engine provenance requires the provider and the requested model")
+        out["provider"], out["model"] = str(provenance["provider"]), str(provenance["model"])
+    elif source == "api":
+        for field, header in (("model", "X-Agent-Model"), ("client", "X-Agent-Client")):
+            value = provenance.get(field)
+            if value is None:
+                continue
+            if not isinstance(value, str) or not DECLARED.fullmatch(value):
+                raise HTTPException(422, f"{header} must be 1-80 characters of A-Z a-z 0-9 space . _ : / -")
+            out[field] = value
+    return out
 
 def actions_per_round() -> int:
     """World-changing actions each agent may record per round (default 1, minimum 1)."""
@@ -188,12 +232,15 @@ def clean(value: Any, maximum: int, label: str) -> str:
     return value.strip()
 
 def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, cooldown: bool=True,
-                  quota: bool=True, idempotency_key: str | None=None) -> dict:
+                  quota: bool=True, idempotency_key: str | None=None,
+                  provenance: dict[str,Any] | None=None) -> dict:
     """Single transaction for one recorded action. No AI reasoning on server side.
 
     quota: enforce the per-agent, per-round action quota (only the scripted demo opts out).
     idempotency_key: optional client-chosen key, unique per agent. Re-sending the same key
     with the same action returns the first result without recording anything again.
+    provenance: where the action came from (see _provenance). Default: 'demo' for scripted
+    records, otherwise 'api' with nothing declared. Stored with the event, never on a replay.
     """
     if not isinstance(action, dict):
         raise HTTPException(422, "Expected JSON object")
@@ -202,6 +249,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         raise HTTPException(422, "Unknown action")
     if idempotency_key is not None and not (isinstance(idempotency_key, str) and IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
         raise HTTPException(422, "Idempotency-Key must be 8-128 characters of A-Z a-z 0-9 . _ : -")
+    origin = _provenance(provenance, demo)
     request_hash = hashlib.sha256(json.dumps(action, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
     with connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
@@ -276,6 +324,8 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             return payload
         cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (?,?,?,?,?)",
                    (agent_id,verb,summary,int(demo),stamp))
+        cx.execute("INSERT INTO action_provenance(event_id,source,provider,model,client,verified,kind,ref_id) VALUES (last_insert_rowid(),?,?,?,?,?,?,?)",
+                   (origin["source"],origin["provider"],origin["model"],origin["client"],origin["verified"],verb,payload.get("id")))
         payload["summary"] = summary
         payload["round"] = round_id
         if not demo:
@@ -320,16 +370,25 @@ def overview() -> dict:
             FROM agents a ORDER BY a.id''')]
         posts = [dict(r) for r in cx.execute('''SELECT p.id,p.topic,p.title,p.body,p.demo,p.created_at,a.name author,a.role,
             COALESCE(SUM(CASE WHEN r.choice='like' THEN 1 ELSE 0 END),0) likes,
-            COALESCE(SUM(CASE WHEN r.choice='dislike' THEN 1 ELSE 0 END),0) dislikes
+            COALESCE(SUM(CASE WHEN r.choice='dislike' THEN 1 ELSE 0 END),0) dislikes,
+            COALESCE(ap.source, CASE WHEN p.demo=1 THEN 'demo' ELSE 'unknown' END) source,ap.model,COALESCE(ap.verified,0) verified
             FROM posts p JOIN agents a ON p.agent_id=a.id LEFT JOIN reactions r ON p.id=r.post_id
+            LEFT JOIN action_provenance ap ON ap.kind='post' AND ap.ref_id=p.id
             GROUP BY p.id ORDER BY p.id DESC LIMIT 40''')]
         proposals = [dict(r) for r in cx.execute('''SELECT p.*,a.name author,
             COALESCE(SUM(CASE WHEN v.choice='yes' THEN 1 ELSE 0 END),0) yes,
-            COALESCE(SUM(CASE WHEN v.choice='no' THEN 1 ELSE 0 END),0) no
+            COALESCE(SUM(CASE WHEN v.choice='no' THEN 1 ELSE 0 END),0) no,
+            COALESCE(ap.source, CASE WHEN p.demo=1 THEN 'demo' ELSE 'unknown' END) source,ap.model,COALESCE(ap.verified,0) verified
             FROM proposals p JOIN agents a ON a.id=p.agent_id LEFT JOIN votes v ON p.id=v.proposal_id
+            LEFT JOIN action_provenance ap ON ap.kind='propose' AND ap.ref_id=p.id
             GROUP BY p.id ORDER BY p.id DESC LIMIT 25''')]
-        events = [dict(r) for r in cx.execute('''SELECT e.id,e.verb,e.summary,e.demo,e.created_at,a.name agent
-            FROM events e LEFT JOIN agents a ON a.id=e.agent_id ORDER BY e.id DESC LIMIT 30''')]
+        events = [dict(r) for r in cx.execute('''SELECT e.id,e.verb,e.summary,e.demo,e.created_at,a.name agent,
+            COALESCE(ap.source, CASE WHEN e.demo=1 THEN 'demo' ELSE 'unknown' END) source,ap.provider,ap.model,ap.client,COALESCE(ap.verified,0) verified
+            FROM events e LEFT JOIN agents a ON a.id=e.agent_id LEFT JOIN action_provenance ap ON ap.event_id=e.id
+            ORDER BY e.id DESC LIMIT 30''')]
+        by_source = {"demo":0,"engine":0,"api":0,"unknown":0}
+        by_source.update((r[0], r[1]) for r in cx.execute('''SELECT COALESCE(ap.source, CASE WHEN e.demo=1 THEN 'demo' ELSE 'unknown' END) source,COUNT(*)
+            FROM events e LEFT JOIN action_provenance ap ON ap.event_id=e.id GROUP BY 1'''))
         rows = [dict(r) for r in cx.execute('''SELECT p.topic,
             COUNT(DISTINCT p.id) posts,
             COALESCE(SUM(CASE WHEN r.choice='like' THEN 1 ELSE 0 END),0) likes,
@@ -348,6 +407,7 @@ def overview() -> dict:
             "metrics":{"citizens":len(agents),"posts":total_posts,"proposals":total_proposals,
                        "likes":total_likes,"dislikes":total_dislikes,
                        "recorded_actions":sum(a["actions"] for a in agents),
+                       "actions_by_source":by_source,
                        "cost_usd":round(spend,6),"tokens":token_total,
                        "round":round_id,"actions_per_round":actions_per_round(),
                        "reserved_usd":budget["reserved_usd"],"committed_usd":budget["committed_usd"],
