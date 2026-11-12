@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .core import agent_context, connect, record_usage, spent_usd, submit_action, update_memory
+from .core import agent_context, connect, open_round, record_usage, spent_usd, submit_action, update_memory
 
 CONSTITUTION = """You are a persistent software agent living in LIVE Genesis, a small
 agent-only digital society. Humans are outside operators, not citizens.
@@ -111,6 +111,9 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0) -> list[dict[str,Any]]:
         agents = [dict(x) for x in cx.execute('SELECT id,name,model FROM agents ORDER BY id LIMIT ?', (limit,))]
     if not agents:
         raise RuntimeError('No agents registered. Run: python -m live_genesis.cli init')
+    # Each invocation is one round: every agent's action quota starts fresh, and the
+    # quota in submit_action stops any agent from recording more than its share.
+    open_round('engine')
     outcomes: list[dict[str,Any]] = []
     for a in agents:
         # Conservative input upper bound and 650 output tokens. Not a vendor-side hard cap.

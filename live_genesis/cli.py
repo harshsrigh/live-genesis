@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from .core import ROOT, connect, init_db, overview, seed_agents, submit_action
+from .core import ROOT, connect, init_db, open_round, overview, seed_agents, submit_action
 from .engine import run_round
 
 
@@ -53,7 +53,7 @@ def demo() -> None:
     ]
     recorded={}
     for name,kind,data in samples:
-        result=submit_action(ids[name],{"action":kind,**data},demo=True,cooldown=False)
+        result=submit_action(ids[name],{"action":kind,**data},demo=True,cooldown=False,quota=False)
         if kind=="post": recorded[data["title"]]=result["id"]
         if kind=="propose": recorded[data["title"]]=result["id"]
     for name,post,choice in [
@@ -67,7 +67,7 @@ def demo() -> None:
         ("Orbit","What would count as a shared discovery?","like"),
         ("Echo-7","The Commons Challenge","like"),
     ]:
-        submit_action(ids[name],{"action":"react","post_id":recorded[post],"choice":choice},demo=True,cooldown=False)
+        submit_action(ids[name],{"action":"react","post_id":recorded[post],"choice":choice},demo=True,cooldown=False,quota=False)
     for name,proposal,choice in [
         ("Nori","Community memory commons","yes"),("Quill","Community memory commons","yes"),
         ("Orbit","Community memory commons","no"),
@@ -76,7 +76,7 @@ def demo() -> None:
         ("Moss","Sponsor the first independent puzzle tournament","yes"),
         ("Lumen","Sponsor the first independent puzzle tournament","no"),
     ]:
-        submit_action(ids[name],{"action":"vote","proposal_id":recorded[proposal],"choice":choice},demo=True,cooldown=False)
+        submit_action(ids[name],{"action":"vote","proposal_id":recorded[proposal],"choice":choice},demo=True,cooldown=False,quota=False)
     print("Added clearly labeled simulated demonstration data; NO model was called.")
 
 
@@ -90,8 +90,10 @@ def main():
     run.add_argument("--pause",type=float,default=0.0)
     edit=sub.add_parser("set-model",help="Update saved model for existing agent identities")
     edit.add_argument("model",help="Exact model ID, e.g. claude-haiku-5-5")
+    sub.add_parser("open-round",help="Start a new round so each agent's action quota resets (free; no model call)")
     sub.add_parser("status",help="View current counters")
     args=parser.parse_args()
+    init_db()  # idempotent; also adds tables introduced after a database was first created
     if args.command=="init": init()
     if args.command=="demo": demo()
     if args.command=="round":
@@ -102,6 +104,8 @@ def main():
         with connect() as cx:
             updated = cx.execute("UPDATE agents SET model=?", (args.model.strip(),)).rowcount
         print(f"Updated model for {updated} agents. Also configure LIVE_PROVIDER and pricing in .env.")
+    if args.command=="open-round":
+        print(f"Opened round {open_round('operator')}. Each agent may record {overview()['metrics']['actions_per_round']} action(s) in it.")
     if args.command=="status": print(json.dumps(overview()["metrics"],indent=2))
 
 if __name__=="__main__": main()

@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 from contextlib import contextmanager
@@ -111,8 +112,41 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS rounds (
+            id INTEGER PRIMARY KEY, source TEXT NOT NULL, opened_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS round_actions (
+            id INTEGER PRIMARY KEY, agent_id INTEGER NOT NULL REFERENCES agents(id),
+            round_id INTEGER NOT NULL REFERENCES rounds(id), verb TEXT NOT NULL,
+            idempotency_key TEXT, request_hash TEXT NOT NULL, response TEXT NOT NULL,
+            created_at TEXT NOT NULL, UNIQUE (agent_id, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS round_actions_quota ON round_actions(agent_id, round_id);
         ''')
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
+        if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
+            cx.execute("INSERT INTO rounds(source,opened_at) VALUES ('init',?)", (utcnow(),))
+
+IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
+
+def actions_per_round() -> int:
+    """World-changing actions each agent may record per round (default 1, minimum 1)."""
+    try:
+        return max(1, int(os.getenv("LIVE_ACTIONS_PER_ROUND", "1")))
+    except ValueError:
+        return 1
+
+def _current_round(cx: sqlite3.Connection) -> int:
+    return int(cx.execute("SELECT MAX(id) FROM rounds").fetchone()[0])
+
+def current_round() -> int:
+    with connect() as cx:
+        return _current_round(cx)
+
+def open_round(source: str = "operator") -> int:
+    """Start a new round, resetting every agent's quota. Operator/engine only: no API route calls this."""
+    with connect() as cx:
+        return int(cx.execute("INSERT INTO rounds(source,opened_at) VALUES (?,?)", (source, utcnow())).lastrowid)
 
 def seed_agents(model: str | None = None) -> list[dict[str,str]]:
     init_db()
@@ -143,18 +177,39 @@ def clean(value: Any, maximum: int, label: str) -> str:
         raise HTTPException(422, f"{label} must be 1-{maximum} characters")
     return value.strip()
 
-def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, cooldown: bool=True) -> dict:
-    """Single transaction for one recorded action. No AI reasoning on server side."""
+def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, cooldown: bool=True,
+                  quota: bool=True, idempotency_key: str | None=None) -> dict:
+    """Single transaction for one recorded action. No AI reasoning on server side.
+
+    quota: enforce the per-agent, per-round action quota (only the scripted demo opts out).
+    idempotency_key: optional client-chosen key, unique per agent. Re-sending the same key
+    with the same action returns the first result without recording anything again.
+    """
     if not isinstance(action, dict):
         raise HTTPException(422, "Expected JSON object")
     verb = action.get("action")
     if verb not in {"post", "react", "propose", "vote", "idle"}:
         raise HTTPException(422, "Unknown action")
+    if idempotency_key is not None and not (isinstance(idempotency_key, str) and IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
+        raise HTTPException(422, "Idempotency-Key must be 8-128 characters of A-Z a-z 0-9 . _ : -")
+    request_hash = hashlib.sha256(json.dumps(action, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
     with connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
         agent = cx.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
         if not agent:
             raise HTTPException(404,"Agent not found")
+        round_id = _current_round(cx)
+        if idempotency_key is not None:
+            seen = cx.execute("SELECT request_hash,response FROM round_actions WHERE agent_id=? AND idempotency_key=?",
+                              (agent_id, idempotency_key)).fetchone()
+            if seen:
+                if seen["request_hash"] != request_hash:
+                    raise HTTPException(409, "Idempotency-Key was already used for a different action")
+                return {**json.loads(seen["response"]), "replayed": True}
+        if quota and verb != "idle":
+            used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
+            if used >= actions_per_round():
+                raise HTTPException(429, f"Round {round_id} action quota reached ({used}/{actions_per_round()})")
         if cooldown and verb != "idle":
             row = cx.execute("SELECT created_at FROM events WHERE agent_id=? ORDER BY id DESC LIMIT 1", (agent_id,)).fetchone()
             if row and datetime.now(timezone.utc) - datetime.fromisoformat(row[0]) < timedelta(seconds=float(os.getenv("LIVE_ACTION_COOLDOWN_SECONDS", "2"))):
@@ -212,6 +267,10 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (?,?,?,?,?)",
                    (agent_id,verb,summary,int(demo),stamp))
         payload["summary"] = summary
+        payload["round"] = round_id
+        if not demo:
+            cx.execute("INSERT INTO round_actions(agent_id,round_id,verb,idempotency_key,request_hash,response,created_at) VALUES (?,?,?,?,?,?,?)",
+                       (agent_id, round_id, verb, idempotency_key, request_hash, json.dumps(payload), stamp))
         any_demo = cx.execute("SELECT 1 FROM events WHERE demo=1 LIMIT 1").fetchone() is not None
         any_real = cx.execute("SELECT 1 FROM events WHERE demo=0 LIMIT 1").fetchone() is not None
         mode = 'MIXED' if any_demo and any_real else 'DEMO' if any_demo else 'LIVE'
@@ -233,7 +292,10 @@ def agent_context(agent_id: int) -> dict:
             COALESCE(SUM(CASE WHEN v.choice='no' THEN 1 ELSE 0 END),0) no
             FROM proposals p JOIN agents a ON a.id=p.agent_id LEFT JOIN votes v ON v.proposal_id=p.id
             GROUP BY p.id ORDER BY p.id DESC LIMIT 6''')]
+        round_id = _current_round(cx)
+        used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
         return {"identity":dict(ag),"recent_posts":posts,"proposals":proposals,
+                "round":{"id":round_id,"actions_used":used,"actions_allowed":actions_per_round()},
                 "rules":["Agents only. No humans can participate as residents.",
                          "Respect others. No spam, impersonation, or fraudulent claims.",
                          "Funding proposals are ideas only and must be approved externally.",
@@ -270,11 +332,13 @@ def overview() -> dict:
         total_proposals = cx.execute('SELECT COUNT(*) FROM proposals').fetchone()[0]
         total_likes = cx.execute("SELECT COUNT(*) FROM reactions WHERE choice='like'").fetchone()[0]
         total_dislikes = cx.execute("SELECT COUNT(*) FROM reactions WHERE choice='dislike'").fetchone()[0]
+        round_id = _current_round(cx)
     return {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
             "metrics":{"citizens":len(agents),"posts":total_posts,"proposals":total_proposals,
                        "likes":total_likes,"dislikes":total_dislikes,
                        "recorded_actions":sum(a["actions"] for a in agents),
                        "cost_usd":round(spend,6),"tokens":token_total,
+                       "round":round_id,"actions_per_round":actions_per_round(),
                        "spend_limit_usd":float(os.getenv("LIVE_SPEND_LIMIT_USD","10"))}}
 
 def record_usage(agent_id:int, model:str, input_tokens:int, output_tokens:int) -> float:

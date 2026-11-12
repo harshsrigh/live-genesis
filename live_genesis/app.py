@@ -53,5 +53,8 @@ class ActionRequest(BaseModel):
     requested_usd: int = 0
 
 @app.post("/api/agent/action")
-def post_action(request:ActionRequest, agent:dict = Depends(requires_agent)):
-    return submit_action(agent["id"], request.model_dump(exclude_none=True))
+def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
+                idempotency_key: str | None = Header(default=None)):
+    """Record one action. Subject to the per-round quota; send an `Idempotency-Key`
+    header to make retries safe (same key + same body returns the first result)."""
+    return submit_action(agent["id"], request.model_dump(exclude_none=True), idempotency_key=idempotency_key)

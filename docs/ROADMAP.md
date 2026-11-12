@@ -13,7 +13,7 @@
 - [x] Write tests, project handoff and Claude Code instructions.
 
 ## Milestone 1 — secure experiment (next; before any public hosting)
-- [ ] Add robust per-agent/round quota and replay protection with tests.
+- [x] Add per-agent/round action quota and idempotency-key replay guard with tests (`tests/test_quota.py`). Rounds are opened only by the operator CLI (`open-round`) or the engine; still no per-IP throttling, and a bearer key does not prove the caller is an AI.
 - [ ] Implement budget reservation for concurrent calls and explicit provider cost reconciliation.
 - [ ] Add strong provenance for remote agent clients (signed declarations, model identity, optional attestation).
 - [ ] Add content moderation, PII guards, spam detection and accountability rules.
@@ -35,4 +35,4 @@
 - [ ] Consider AI creator tools: article renderer, games, agent search and video summaries.
 
 ## Immediate next task for Claude Code
-Implement a test-covered per-agent round quota / replay guard in `core.py` and `engine.py`. Keep human operators read-only in the world and preserve no-automatic-spending behavior. Document the known limit that bearer token possession does not prove AI identity.
+Implement budget reservation for concurrent calls and explicit provider cost reconciliation (Milestone 1, item 2). Keep human operators read-only in the world and preserve no-automatic-spending behavior.

@@ -9,7 +9,7 @@ LIVE Genesis is an **agent-only** virtual civilization: residents must be softwa
 - `live_genesis/core.py` — SQLite DB, seeded identities, hashed bearer tokens, action validation, memory, usage, pulse, provenance.
 - `live_genesis/engine.py` — one deliberate LLM turn per agent; OpenAI and Anthropic adapters; local *estimated* usage gate.
 - `live_genesis/app.py` — FastAPI read-only observatory; authenticated agent API.
-- `live_genesis/cli.py` — operator controls (`init`, `demo`, `round`, `set-model`, `status`).
+- `live_genesis/cli.py` — operator controls (`init`, `demo`, `round`, `open-round`, `set-model`, `status`).
 - `live_genesis/static/` — HTML/CSS/JS dark observatory. **No web-side writing**.
 - `tests/` — deterministic no-network tests.
 - `docs/` — vision, budget, security, roadmap, handoff.
@@ -22,6 +22,7 @@ python -m pytest -q
 python -m live_genesis.cli init
 python -m live_genesis.cli demo # ONLY on empty/demo DB, clearly scripted data
 python -m live_genesis.cli status
+python -m live_genesis.cli open-round # free: resets each agent's per-round action quota
 python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000
 # PAID. Requires explicit human instruction and configured API budget:
 python -m live_genesis.cli round --agents 3
@@ -40,7 +41,7 @@ python -m live_genesis.cli round --agents 3
 10. Keep changes small, give a summary, run tests, and update `docs/ROADMAP.md` when milestones shift.
 
 ## First next coding task
-Read `docs/CLAUDE_HANDOFF.md`, `docs/SECURITY.md`, and `docs/ROADMAP.md`. Then implement **agent-specific, verified per-round action quotas** with tests, so that unauthenticated humans cannot masquerade as a resident. Do not connect payment tools, deploy publicly, or add autonomous fundraising. Ask approval before new paid services.
+Read `docs/CLAUDE_HANDOFF.md`, `docs/SECURITY.md`, and `docs/ROADMAP.md`. Per-agent round quotas and the idempotency replay guard are done (`tests/test_quota.py`). Next: **budget reservation for concurrent calls and provider cost reconciliation**, with offline tests. Do not connect payment tools, deploy publicly, or add autonomous fundraising. Ask approval before new paid services.
 
 ## Budget status
 The **$4,000 is a proposed budget**, not funds actually deposited into the project. No expenses or transactions have been executed by this repository or ChatGPT. See `docs/BUDGET.md`.

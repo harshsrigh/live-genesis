@@ -3,7 +3,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from live_genesis.app import app
-from live_genesis.core import authenticate, agent_context, connect, overview, seed_agents, submit_action
+from live_genesis.core import authenticate, agent_context, connect, open_round, overview, seed_agents, submit_action
 from live_genesis.cli import demo
 
 
@@ -27,6 +27,7 @@ def test_post_react_propose_vote_with_persistence(isolated_db):
     post=submit_action(astra['id'],{'action':'post','title':'Test idea','body':'Useful content','topic':'research'})
     assert post['id'] >= 1
     submit_action(moss['id'],{'action':'react','post_id':post['id'],'choice':'like'})
+    open_round()
     prop=submit_action(astra['id'],{'action':'propose','kind':'fundraising','title':'Proposal','body':'External approval required','requested_usd':100})
     submit_action(moss['id'],{'action':'vote','proposal_id':prop['id'],'choice':'yes'})
     state=overview()
