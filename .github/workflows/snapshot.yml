@@ -1,0 +1,59 @@
+# Tests the project, then rebuilds the public SCRIPTED-DEMO snapshot on the gh-pages branch.
+# No model is called and no secret is used: the snapshot contains only scripted demo data,
+# and the exporter refuses anything else.
+name: Tests and demo snapshot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snapshot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  snapshot:
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # only to update the gh-pages branch
+    env:
+      LIVE_DB: ${{ runner.temp }}/demo.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements.txt
+      - name: Build scripted demo world (no model calls)
+        run: |
+          python -c "from live_genesis.core import seed_agents; seed_agents()"
+          python -m live_genesis.cli demo
+          python -m live_genesis.cli demo-game
+      - name: Export static snapshot
+        run: python -m live_genesis.snapshot "$RUNNER_TEMP/site"
+      - name: Publish to gh-pages
+        run: |
+          cd "$RUNNER_TEMP/site"
+          git init -q -b gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Static observatory snapshot (scripted demo data only) from ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
