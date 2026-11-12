@@ -130,6 +130,9 @@ Neither web process loads provider API keys. `OPENAI_API_KEY` / `ANTHROPIC_API_K
 
 The observatory is still **not ready for the public Internet** by itself: it needs a TLS reverse proxy, per-IP throttling, and a security review first. Keep it on `127.0.0.1` until then.
 
+## Answers Over Time
+A fixed list of 20 basic questions asked of each configured model about once a month; every answer is kept with its date and model, and plain HTML pages under `archive/` show when an answer changes. `archive-plan`, `archive-dry-run`, `archive-status`, `archive-lock` and `demo-archive` are free; `archive-run --max-usd X` is PAID and needs the owner's explicit word. See `docs/ANSWERS-OVER-TIME.md`.
+
 ## Static snapshot (for any static host)
 
 ```bash

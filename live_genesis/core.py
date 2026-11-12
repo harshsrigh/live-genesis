@@ -19,7 +19,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import config, controls, documents, games, governance, guards, ledger, study
+from . import archive, config, controls, documents, games, governance, guards, ledger, study
 from . import guide
 
 ROOT = config.ROOT
@@ -172,6 +172,7 @@ def init_db() -> None:
         games.migrate(cx)  # Commons Challenge tables live with the game code (needs a round: inactivity clock of older games)
         governance.migrate(cx)  # proposal lifecycle columns, transitions table, triggers (needs a round)
         study.migrate(cx)  # control-study runs and calls (operator-side; never resident actions)
+        archive.migrate(cx)  # Answers Over Time: question lock, runs, append-only answers (models, not residents)
 
 IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 

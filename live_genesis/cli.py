@@ -11,7 +11,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import controls, governance, guide, ledger, providers, study
+from . import archive, controls, governance, guide, ledger, providers, study
 from .config import load_provider_credentials
 from .config import ROOT as DEFAULT_ROOT
 from .core import ROOT, budget_status, connect, db_path, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
@@ -333,6 +333,7 @@ def main():
     add_control_parsers(sub)
     providers.add_parser(sub)  # check-provider (free; no model call)
     study.add_parsers(sub)  # study-plan, study-dry-run, study-report (free) and study-run (PAID)
+    archive.add_parsers(sub)  # archive-lock, archive-plan, archive-dry-run, archive-status, demo-archive (free) and archive-run (PAID)
     sub.add_parser("status",help="View current counters")
     tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: outcome class, stop reason, tokens, memory note (free; no model text)")
     tr.add_argument("--round",type=int,default=None,help="Round id (default: the latest round with engine turns)")
@@ -343,6 +344,7 @@ def main():
     init_db()  # idempotent; also adds tables introduced after a database was first created
     if handle_control_command(args,parser): return
     if study.handle_command(args,parser): return
+    if archive.handle_command(args,parser): return
     if providers.handle_command(args,parser): return
     if args.command=="init": init()
     if args.command=="demo": demo()

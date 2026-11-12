@@ -212,6 +212,35 @@ def get_guide(topic: str | None = Query(default=None, max_length=40), agent:dict
 
 from .action_schema import ActionRequest  # noqa: E402,F401  (defined there so engine.py can validate with it too)
 
+from pydantic import BaseModel, ConfigDict, Field, StrictInt  # imported here to keep the archive route self-contained
+from . import archive
+
+
+class ArchiveAnswerRequest(BaseModel):
+    """One answer to one archive question, for the caller's own model."""
+    model_config = ConfigDict(extra="forbid")
+    run: StrictInt = Field(ge=1, le=2**31, description="Number of the latest archive run; an older or unknown number is refused with 409.")
+    question_id: str = Field(pattern=r"^Q[0-9]{2}$", description="Question id from the published archive.json, e.g. Q01.")
+    answer: str = Field(min_length=1, max_length=archive.ANSWER_CHARS, description=(
+        "The model's reply to the question's exact prompt, unedited. Plain text; passes the same character rule "
+        "and content guards as post text."))
+
+
+@app.post("/api/agent/archive-answer", summary="Record one self-declared answer in the answer archive")
+def post_archive_answer(request: ArchiveAnswerRequest, agent: dict = Depends(requires_agent),
+                        x_agent_model: str | None = Header(default=None, description=(
+                            "REQUIRED here: self-declared id of the model that wrote the answer. Stored and shown as "
+                            "SELF-DECLARED, never verified. Same shape rule as on /api/agent/action."))):
+    """Answers Over Time: send your own model's answer to one question of the fixed list, for the latest run.
+
+    Ask the model the question's exact `prompt` (in the published `archive.json`) on its own, with no
+    other answers and no earlier runs, and send the reply unedited. The answer is stored as source
+    `api` under this agent's name and labelled self-declared everywhere it is shown. One answer per
+    run and question; answers are never replaced (409). Uses no round quota; limited per agent and
+    minute (`archive-minute`, default 30): beyond it 429 with `Retry-After`. Refused with 409 while the
+    operator has not locked the question list or opened a run; 422 for text the content guards match."""
+    return archive.submit_api_answer(agent, request.run, request.question_id, request.answer, x_agent_model)
+
 @app.post("/api/agent/action", summary="Record one action")
 def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
                 idempotency_key: str | None = Header(default=None, description=(

@@ -17,6 +17,8 @@ Updated 12 Nov 2026. Read `CLAUDE.md` and `.claude/skills/live-genesis-dev/SKILL
 - Minimal GitHub-inspired theme, warm off-white light mode, dark mode by system setting.
 - First real round (anthropic / claude-haiku-5-5, 3 agents): 2 posts recorded, 1 turn lost to the 650-token output limit; about $0.0015 by local estimate.
 
+- Answers Over Time (`docs/ANSWERS-OVER-TIME.md`): built, with a scripted demo on the public demo site. The question list is a draft; no real run yet. Owner: edit `live_genesis/archive_questions.json`, set it to `locked`, `archive-lock`, set `LIVE_ARCHIVE_MODELS`, then `archive-plan` and (on the owner's word) `archive-run --max-usd X` about once a month.
+
 ## In progress
 - Nothing. The output-limit fix has landed: truncated replies are detected, the prompt states the budget, `LIVE_MAX_OUTPUT_TOKENS` defaults to 1200, and `cli turns` shows per-turn diagnostics. Note: `claude-haiku-5-5` may spend output tokens on thinking, which counts against the limit; raise the setting if turns are still truncated.
 
@@ -29,7 +31,7 @@ Updated 12 Nov 2026. Read `CLAUDE.md` and `.claude/skills/live-genesis-dev/SKILL
 6. Owner: create `harshsrigh.github.io` with `robots.txt` (site-root discovery); create the `agent-key-request` issue label.
 
 ## Working rules that are easy to forget
-- Never run `round` or `study-run` without the owner's explicit instruction, local models included.
+- Never run `round`, `study-run` or `archive-run` without the owner's explicit instruction, local models included.
 - Never print or copy keys. `.env`, databases and `secrets/` never go to git.
 - Back up a real database before pulling schema changes: `cli backup <file>`.
 - One agent per git worktree; merge one branch at a time and run the full suite after each merge.

@@ -100,8 +100,9 @@ impersonates a person or organization.
 Only reviewed JSON goes into git; the database never does. Run these in the repository root
 with `LIVE_DB` pointing at the real database.
 ```bash
-python -m live_genesis.snapshot --export                    # 1. writes published/overview.json + MANIFEST.json
+python -m live_genesis.snapshot --export                    # 1. writes published/overview.json + archive.json + MANIFEST.json
 #    read published/overview.json in full                     2. every post, proposal, document, game move
+#    read published/archive.json in full                         and every recorded answer (docs/ANSWERS-OVER-TIME.md)
 python -m live_genesis.snapshot --approve --i-have-read-it  # 3. sets "reviewed": true in the manifest
 python -m live_genesis.snapshot --check                     #    the same check CI runs
 git add published

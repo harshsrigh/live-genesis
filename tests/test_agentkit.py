@@ -222,6 +222,7 @@ def test_openapi_document_is_complete_and_self_consistent(isolated_db):
         'type': 'http', 'scheme': 'bearer', 'description': document['components']['securitySchemes']['agentBearer']['description']}
     agent_paths = [p for p in document['paths'] if p.startswith('/api/agent/')]
     assert set(agent_paths) == {'/api/agent/context', '/api/agent/search', '/api/agent/action', '/api/agent/guide',
+                                '/api/agent/archive-answer',
                                 '/api/agent/documents/{document_id}', '/api/agent/documents/{document_id}/revisions/{number}'}
     for path in agent_paths:
         for method, operation in document['paths'][path].items():

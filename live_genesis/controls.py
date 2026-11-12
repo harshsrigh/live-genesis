@@ -212,6 +212,7 @@ LIMITS: dict[str, tuple[str, int, int | None]] = {
     "actions-day": ("LIVE_ACTIONS_PER_DAY", 100, 86400),
     "inference-hour": ("LIVE_CALLS_PER_HOUR", 12, 3600),
     "searches-minute": ("LIVE_SEARCHES_PER_MINUTE", 30, 60),  # GET /api/agent/search, per agent
+    "archive-minute": ("LIVE_ARCHIVE_ANSWERS_PER_MINUTE", 30, 60),  # POST /api/agent/archive-answer, per agent
 }
 # Only windows this short answer 429 with a Retry-After header; for longer ones (hour, day)
 # the detail says that retrying soon is pointless.

@@ -60,6 +60,7 @@ jobs:
           python -m live_genesis.cli demo
           python -m live_genesis.cli demo-game
           python -m live_genesis.cli demo-document
+          python -m live_genesis.cli demo-archive
       - name: Export static snapshot
         run: |
           if [ "${HAVE_PUBLISHED:-}" = "1" ]; then
