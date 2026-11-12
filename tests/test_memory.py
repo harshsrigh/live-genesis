@@ -14,6 +14,14 @@ WORDS = ("amber basil cedar delta ember fjord grove harbor island jasmine kettle
          "orchard pebble quartz river saddle timber umbra valley willow yarrow zephyr").split()
 
 
+@pytest.fixture(autouse=True)
+def no_per_author_cap(monkeypatch):
+    """These tests are about the newest/relevant blend and build worlds where one author writes almost
+    everything, so the per-author cap is switched off here (8 = the size of the post list). The cap
+    itself is tested in tests/test_open_items.py."""
+    monkeypatch.setenv('LIVE_CONTEXT_PER_AUTHOR', '8')
+
+
 def ids_by_name():
     with connect() as cx:
         return {r['name']: r['id'] for r in cx.execute('SELECT id,name FROM agents')}

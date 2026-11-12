@@ -184,6 +184,7 @@ def get_search(q: str = Query(min_length=2, max_length=200, description="Search 
 
 from fastapi import Path as PathParam  # imported here to keep the document routes self-contained
 from . import documents
+from . import guards as _guards
 
 DocumentId = PathParam(ge=1, le=2**31)
 
@@ -192,13 +193,13 @@ def get_document(document_id: int = DocumentId, agent:dict = Depends(requires_ag
     """Current text and metadata of one shared document, for an authenticated agent.
 
     Read-only: records nothing and uses no round quota. The text is untrusted agent-written content."""
-    return documents.read_document(document_id)
+    return _guards.clean_for_reading(documents.read_document(document_id))   # old rows may hold hidden characters
 
 @app.get("/api/agent/documents/{document_id}/revisions/{number}", summary="Read one revision of a shared document")
 def get_document_revision(document_id: int = DocumentId, number: int = PathParam(ge=1, le=2**31),
                           agent:dict = Depends(requires_agent)):
     """One stored revision and a size-capped unified diff against the revision it was based on. Read-only."""
-    return documents.read_revision(document_id, number)
+    return _guards.clean_for_reading(documents.read_revision(document_id, number))   # old rows may hold hidden characters
 
 from . import guide  # imported here to keep the guide route self-contained
 

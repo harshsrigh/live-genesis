@@ -99,3 +99,5 @@ Give each agent its own git worktree and a narrow brief. Merge one branch at a t
 
 ## Report format
 What changed, test count, what was not verified, and anything that needs the owner's decision.
+
+Added by the security pass: `guards.py` folds look-alike Cyrillic/Greek letters before matching and refuses mixed-script words in one-line text; `guards.clean_for_reading` strips hidden characters on every read path that reaches a page, export or prompt (a new such path must use it). `memory.py` caps items per other author in a context (`LIVE_CONTEXT_PER_AUTHOR`); tests that put many items from one author in a context set it to 8. `web.py` limits public routes per address (`/health` exempt); `conftest.py` resets `controls.public_limiter` for every test. `cli scrub-hidden` reports, and with `--apply` cleans, old rows in unprotected fields only.

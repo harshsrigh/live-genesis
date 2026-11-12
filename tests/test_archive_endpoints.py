@@ -160,9 +160,9 @@ def test_old_single_endpoint_form_still_runs_with_the_same_client(ready, monkeyp
     assert planned['worst_case_usd'] == 0 and planned['endpoints'][0]['basis'] == 'local' and planned['input_rate'] == 0
     done = archive.run_archive(max_usd=0.01)
     assert done['status'] == 'complete' and done['answers']['answered'] == 20 and not done['mock']
-    # The client is built exactly as before named endpoints (no http_client argument); only the request gained the sampling.
+    # Same base URL, key and retries as before named endpoints; since the redirect fix it follows no redirect either.
     assert {(c['base_url'], c['api_key'], c['max_retries'], c['follow_redirects']) for c in seen} == {
-        ('http://localhost:18999/private-legacy/v1', providers.LOCAL_PLACEHOLDER_KEY, 0, None)}
+        ('http://localhost:18999/private-legacy/v1', providers.LOCAL_PLACEHOLDER_KEY, 0, False)}
     assert seen[0]['request']['temperature'] == 0 and seen[0]['request']['seed'] == archive.ARCHIVE_SEED
     stored = rows('SELECT endpoint,provider,model,pricing_basis,local,sampling FROM archive_answers WHERE id=1')[0]
     assert stored == {'endpoint': 'openai-compatible', 'provider': 'openai-compatible', 'model': 'qwen3:8b', 'pricing_basis': 'local',

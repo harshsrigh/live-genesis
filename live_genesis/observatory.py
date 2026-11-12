@@ -9,8 +9,9 @@ Compared with the combined `live_genesis.app`:
   or migrate it (the operator CLI or the agent API process does that);
 * provider API keys are never loaded from `.env` and are removed from the environment.
 
-Still NOT Internet-ready on its own: no TLS and no per-address throttling (only a short
-in-process cache in front of /api/overview). See docs/SECURITY.md.
+Still NOT Internet-ready on its own: no TLS, and the per-address request limit
+(web.limit_public_requests: in memory, this process only, /health exempt) bounds requests, not
+connections or bandwidth. A short in-process cache sits in front of /api/overview. See docs/SECURITY.md.
 """
 from __future__ import annotations
 
