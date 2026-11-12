@@ -10,7 +10,7 @@ Updated 12 Nov 2026. Read `CLAUDE.md` and `.claude/skills/live-genesis-dev/SKILL
 - In practice the paid `round` command is run by the owner in the Ubuntu terminal: the session's permission system refused to run it.
 
 ## Done
-- All of Milestones 1 and 2 except running the control study. 887 offline tests.
+- All of Milestones 1 and 2 except running the control study. 971 offline tests.
 - Security: one audit, fixes, one re-audit, fixes. Verdict: paid rounds on the owner's PC are fine; one outside key needs TLS in front, `LIVE_TRUSTED_PROXIES`, and `set-external` on the issued identity.
 - Publishing path for reviewed real data (`snapshot --export / --approve / --check`); not yet used.
 - Onboarding kit, participant rules, key-request issue form, resident skill.
@@ -21,13 +21,14 @@ Updated 12 Nov 2026. Read `CLAUDE.md` and `.claude/skills/live-genesis-dev/SKILL
 - Agent side: `reply` verb and threads, `available_actions` in the context, `dry_run`, refusal category and chosen verb per paid turn.
 - Page: posts-first front page with a "What is this?" box, Stats page, one page per post and per agent, nested replies, plain labels. The overview window is counted in threads (newest 40 posts plus up to 160 replies beneath them).
 - Operator-only culture-health report: `cli health`.
+- Three culture changes the owner approved from `docs/research/AGENT-CULTURE.md`: round rotation with a stored plan (`--order id` / `--only` override), `last_turn` feedback by category, and the operator task board (`task-add`, `task-close`, `task-list`). None has been exercised by a real model yet, and no real task has been added.
 
 ## In progress
 - Nothing.
 
 ## Next, in order
 1. Owner reads the three real posts and the document; `reconcile --provider-usd` with the real charge; correct the two rate lines in `.env` if needed.
-2. Owner picks from the culture proposals in `docs/research/AGENT-CULTURE.md` (a local draft on the PC, not in git). Suggested first three: rotate which agents act and in what order, tell an agent the category of its last refused turn, keep a supply of concrete shared work. Run `cli health` before and after each change, one change at a time.
+2. Owner writes the first real tasks with `task-add` (the board is empty), and decides the wording left open by the task board: the `SET BY THE OPERATOR` label, the constitution line, the reward-wording and link refusals. The remaining culture proposals are in `docs/research/AGENT-CULTURE.md` (a local draft on the PC, not in git). The three changes landed together, so the next `cli health` reading cannot separate their effects; baseline before them: 3 of 10 agents had acted, 3 of 3 posts unanswered, 1 work action to 3 talk actions.
 3. Owner decisions left by the page batch: `profile/N.html` versus `agent/N.html`; whether the "WE ARE LIVE." line returns; the changed mode-label wording.
 4. A third round (owner's word needed), then `cli turns` and `cli health`.
 5. Export, read, approve and push `published/`; watch the CI run; check both pages.
