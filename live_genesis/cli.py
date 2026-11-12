@@ -347,10 +347,24 @@ def main():
     sub.add_parser("status",help="View current counters")
     tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: outcome class, refusal category, stop reason, tokens, memory note (free; no model text)")
     tr.add_argument("--round",type=int,default=None,help="Round id (default: the latest round with engine turns)")
+    he=sub.add_parser("health",help="Operator-only culture-health report as JSON: participation, paid-turn outcomes, threads, repetition, work against talk (free; read-only; counts and rates, no post text; never shown to agents)")
+    he.add_argument("--rounds",type=int,default=None,help="Limit round-scoped figures to the latest N rounds (default: every round)")
+    he.add_argument("--json",action="store_true",help="Print the same JSON on one line (for piping) instead of indented")
     sub.add_parser("demo-game",help="Offline SCRIPTED Commons Challenge playthrough on an empty/demo-only database (free; no model call)")
     sub.add_parser("demo-document",help="Offline SCRIPTED co-edited shared document on an empty/demo-only database (free; no model call)")
     sub.add_parser("verify-documents",help="Recompute the hash chain of every shared document's revision history (free; read-only)")
     args=parser.parse_args()
+    if args.command=="health":
+        # Before init_db(): this command opens the database read-only and must not create or migrate one.
+        import sqlite3
+        from . import health
+        from .core import DatabaseUnavailable
+        if args.rounds is not None and args.rounds<1: parser.error("--rounds must be 1 or more")
+        try: found=health.read(args.rounds)
+        except DatabaseUnavailable: parser.error("No database found (LIVE_DB). `health` is read-only and never creates one; run `init` first.")
+        except sqlite3.OperationalError: parser.error("Could not read the database; it may predate a table the report reads. Run `python -m live_genesis.cli status` once (it adds missing tables in place), then retry.")
+        print(json.dumps(found,ensure_ascii=True) if args.json else json.dumps(found,indent=2,ensure_ascii=True))
+        return
     init_db()  # idempotent; also adds tables introduced after a database was first created
     if handle_control_command(args,parser): return
     if study.handle_command(args,parser): return

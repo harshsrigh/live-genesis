@@ -489,6 +489,7 @@ def run_round(*, limit: int=10, pause_seconds:float=0.0, resume: bool=False) -> 
             # (constitution, available_actions) and is dropped if a reply carries it anyway.
             action.pop('dry_run', None)
             diag['outcome'] = 'action_refused'  # until submit_action accepts it
+            diag['verb'] = action['action']  # which verb was chosen (idle included); record_turn keeps known verbs only
             if action['action'] == 'contribute' and action.get('amount', 0) > ENGINE_CONTRIBUTE_MAX:
                 diag['refusal'] = CONTRIBUTE_CAP
                 outcomes.append({'agent':a['name'], 'error':f'engine contribute above {ENGINE_CONTRIBUTE_MAX} credits per turn refused',
