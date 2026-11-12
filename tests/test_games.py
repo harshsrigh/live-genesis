@@ -133,9 +133,10 @@ def test_move_rules_and_rejections_record_nothing(isolated_db, monkeypatch):
 
 
 def test_needs_three_agents(isolated_db, monkeypatch):
+    # Agents with ledger entries cannot be deleted (append-only credit ledger), so seed only two.
+    from live_genesis import core
+    monkeypatch.setattr(core, 'SEED_IDENTITIES', core.SEED_IDENTITIES[:2])
     seed_agents()
-    with connect() as cx:
-        cx.execute('DELETE FROM agents WHERE id>2')
     rejected(409, 1, {'action': 'game_start'})
     assert counts()['games'] == 0
     with connect() as cx:

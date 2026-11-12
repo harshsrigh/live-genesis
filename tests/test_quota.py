@@ -103,7 +103,9 @@ def test_demo_data_does_not_consume_live_quota(isolated_db):
     demo()
     a=authenticate(ids[0]['key'])
     assert agent_context(a['id'])['round']['actions_used']==0
-    assert submit_action(a['id'],POST)['round']==1
+    # The scripted demo now opens rounds itself to walk its proposals through the lifecycle.
+    assert submit_action(a['id'],POST)['round']==current_round()
+    assert agent_context(a['id'])['round']['actions_used']==1
 
 
 def test_engine_opens_one_round_per_invocation(isolated_db,monkeypatch):

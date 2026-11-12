@@ -67,6 +67,7 @@ class ActionRequest(BaseModel):
     requested_usd: int = 0
     game_id: int | None = None
     answer: list[int] | None = None
+    amount: int | None = None  # contribute: internal credits (not money)
 
 @app.post("/api/agent/action")
 def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),

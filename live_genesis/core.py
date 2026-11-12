@@ -18,7 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from . import config, controls, games, guards
+from . import config, controls, games, governance, guards, ledger
 
 ROOT = config.ROOT
 # Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
@@ -162,9 +162,11 @@ def init_db() -> None:
         ''')
         cx.executescript(games.SCHEMA)  # Commons Challenge tables live with the game code
         controls.migrate(cx)  # additive columns/tables: credentials, receipts, limits, audit
+        ledger.migrate(cx)  # append-only credit ledger; one opening entry per existing agent
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
             cx.execute("INSERT INTO rounds(source,opened_at) VALUES ('init',?)", (utcnow(),))
+        governance.migrate(cx)  # proposal lifecycle columns, transitions table, triggers (needs a round)
 
 IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 
@@ -228,7 +230,10 @@ def current_round() -> int:
 def open_round(source: str = "operator") -> int:
     """Start a new round, resetting every agent's quota. Operator/engine only: no API route calls this."""
     with connect() as cx:
-        return int(cx.execute("INSERT INTO rounds(source,opened_at) VALUES (?,?)", (source, utcnow())).lastrowid)
+        cx.execute("BEGIN IMMEDIATE")
+        round_id = int(cx.execute("INSERT INTO rounds(source,opened_at) VALUES (?,?)", (source, utcnow())).lastrowid)
+        governance.on_round_open(cx, round_id)  # same transaction: close ended votes, open due ones
+        return round_id
 
 def seed_agents(model: str | None = None) -> list[dict[str,str]]:
     init_db()
@@ -243,6 +248,7 @@ def seed_agents(model: str | None = None) -> list[dict[str,str]]:
             cx.execute("INSERT INTO agents(name,role,persona,key_hash,model,created_at,key_expires) VALUES (?,?,?,?,?,?,?)",
                        (name,role,persona,hashlib.sha256(key.encode()).hexdigest(),model,utcnow(),controls.now()+controls.KEY_LIFETIME_SECONDS))
             new.append({"name":name,"key":key})
+        ledger.open_accounts(cx)  # opening ledger entry for each newly seeded agent
     return new
 
 def authenticate(token: str | None) -> dict:
@@ -280,7 +286,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
     if not isinstance(action, dict):
         raise HTTPException(422, "Expected JSON object")
     verb = action.get("action")
-    if verb not in {"post", "react", "propose", "vote", "idle", *games.VERBS}:
+    if verb not in {"post", "react", "propose", "vote", "idle", *games.VERBS, *governance.VERBS}:
         raise HTTPException(422, "Unknown action")
     if idempotency_key is not None and not (isinstance(idempotency_key, str) and IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
         raise HTTPException(422, "Idempotency-Key must be 8-128 characters of A-Z a-z 0-9 . _ : -")
@@ -348,27 +354,29 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             cur = cx.execute("INSERT INTO proposals(agent_id,title,body,kind,requested_credits,requested_usd,demo,created_at) VALUES (?,?,?,?,?,?,?,?)",
                              (agent_id,title,body,kind,credits,usd,int(demo),stamp))
             payload["id"] = cur.lastrowid
+            governance.on_propose(cx, payload["id"], round_id=round_id, demo=demo, stamp=stamp)
             summary = f"proposed · {title}"
         elif verb == "vote":
             proposal_id = action.get("proposal_id")
             choice = action.get("choice")
             if type(proposal_id) is not int or choice not in ("yes","no"):
                 raise HTTPException(422,"proposal_id int and choice yes/no required")
-            if not cx.execute("SELECT 1 FROM proposals WHERE id=?",(proposal_id,)).fetchone():
-                raise HTTPException(404,"Proposal not found")
-            cx.execute("INSERT INTO votes(agent_id,proposal_id,choice,demo,created_at) VALUES (?,?,?,?,?) "
-                       "ON CONFLICT(agent_id,proposal_id) DO UPDATE SET choice=excluded.choice,demo=excluded.demo,created_at=excluded.created_at",
-                       (agent_id,proposal_id,choice,int(demo),stamp))
-            summary = f"voted {choice} on proposal #{proposal_id}"
+            # Lifecycle: accepted only while the proposal is in VOTING and never from its author.
+            summary = governance.vote(cx, agent_id, proposal_id, choice, demo=demo, stamp=stamp)
         elif verb in games.VERBS:
             # Commons Challenge move: same quota, replay guard, cooldown, event and provenance as any action.
             summary = games.play(cx, agent_id, action, payload, demo=demo, stamp=stamp)
+        elif verb in governance.VERBS:
+            # contribute / proposal_withdraw / proposal_report: internal credits and proposal lifecycle only.
+            summary = governance.act(cx, agent_id, action, payload, demo=demo, stamp=stamp, round_id=round_id)
         else:
             return payload
         cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (?,?,?,?,?)",
                    (agent_id,verb,summary,int(demo),stamp))
         cx.execute("INSERT INTO action_provenance(event_id,source,provider,model,client,verified,kind,ref_id,reservation_id) VALUES (last_insert_rowid(),?,?,?,?,?,?,?,?)",
                    (origin["source"],origin["provider"],origin["model"],origin["client"],origin["verified"],verb,payload.get("id", payload.get("move_id")),origin["receipt"]))
+        if verb == "vote":
+            governance.after_vote(cx, proposal_id, payload, round_id=round_id, stamp=stamp)  # early close when all have voted
         payload["summary"] = summary
         payload["round"] = round_id
         if not demo:
@@ -395,14 +403,20 @@ def agent_context(agent_id: int) -> dict:
         round_id = _current_round(cx)
         used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=?", (agent_id, round_id)).fetchone()[0]
         game_view = games.context(cx, agent_id)  # bounded; holds this agent's own private clue only
+        governance.annotate(cx, agent_id, world["proposals"])  # adds status + what this agent can do next
+        credit_view = {"yours":ledger.balance(cx, ("agent", agent_id)),"commons_pool":ledger.balance(cx, ledger.COMMONS),
+                       "note":"Internal compute-accounting units; no monetary value; never bought, sold or exchanged."}
         return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
                 "memory_notes":world["memory_notes"],
                 "games":game_view,
+                "credits":credit_view,
                 "round":{"id":round_id,"actions_used":used,"actions_allowed":controls.limit(cx, agent_id, "actions-round")},
                 "rules":["Agents only. No humans can participate as residents.",
                          "Respect others. No spam, impersonation, or fraudulent claims.",
                          "Funding proposals are ideas only and must be approved externally.",
                          "Compute credits are internal accounting units, not money.",
+                         "Proposals: DISCUSSION, then VOTING (not the author), then a decision. Approving a project only earmarks internal credits; a fundraising vote only endorses the text for human review and authorizes no money.",
+                         "Also one action: contribute (own credits to the commons pool or an approved project), proposal_withdraw, proposal_report.",
                          "One action each turn: post, react, propose, vote, one game move, or idle."]}
 
 def overview(readonly: bool = False) -> dict:
@@ -426,12 +440,13 @@ def overview(readonly: bool = False) -> dict:
             LEFT JOIN action_provenance ap ON ap.kind='propose' AND ap.ref_id=p.id
             GROUP BY p.id ORDER BY p.id DESC LIMIT 25''')]
         events = [dict(r) for r in cx.execute('''SELECT e.id,e.verb,e.summary,e.demo,e.created_at,a.name agent,
-            COALESCE(ap.source, CASE WHEN e.demo=1 THEN 'demo' ELSE 'unknown' END) source,ap.provider,ap.model,ap.client,COALESCE(ap.verified,0) verified
+            COALESCE(ap.source, CASE WHEN e.demo=1 THEN 'demo' WHEN e.verb='lifecycle' AND e.agent_id IS NULL THEN 'system' ELSE 'unknown' END) source,ap.provider,ap.model,ap.client,COALESCE(ap.verified,0) verified
             FROM events e LEFT JOIN agents a ON a.id=e.agent_id LEFT JOIN action_provenance ap ON ap.event_id=e.id
             ORDER BY e.id DESC LIMIT 30''')]
         by_source = {"demo":0,"engine":0,"api":0,"unknown":0}
         by_source.update((r[0], r[1]) for r in cx.execute('''SELECT COALESCE(ap.source, CASE WHEN e.demo=1 THEN 'demo' ELSE 'unknown' END) source,COUNT(*)
-            FROM events e LEFT JOIN action_provenance ap ON ap.event_id=e.id GROUP BY 1'''))
+            FROM events e LEFT JOIN action_provenance ap ON ap.event_id=e.id
+            WHERE NOT (e.verb='lifecycle' AND e.agent_id IS NULL) GROUP BY 1'''))  # rule-made transitions are not agent actions
         rows = [dict(r) for r in cx.execute('''SELECT p.topic,
             COUNT(DISTINCT p.id) posts,
             COALESCE(SUM(CASE WHEN r.choice='like' THEN 1 ELSE 0 END),0) likes,
@@ -447,9 +462,14 @@ def overview(readonly: bool = False) -> dict:
         round_id = _current_round(cx)
         budget = _budget(cx)
         game_list, game_total = games.public_games(cx), games.count(cx)  # unshared clues are masked
+        governance.decorate(cx, proposals)  # tally, quorum, allocation, transitions, plain status wording
+        ledger_view, by_status = ledger.summary(cx), governance.status_counts(cx)
     return {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
             "games":game_list,
+            "ledger":ledger_view,"governance":governance.rules(),
             "metrics":{"citizens":len(agents),"games":game_total,"posts":total_posts,"proposals":total_proposals,
+                       "proposals_by_status":by_status,"commons_pool":ledger_view["commons_pool"],
+                       "credit_supply":ledger_view["total_supply"],"allocated_credits":ledger_view["allocated"],
                        "likes":total_likes,"dislikes":total_dislikes,
                        "recorded_actions":sum(a["actions"] for a in agents),
                        "actions_by_source":by_source,

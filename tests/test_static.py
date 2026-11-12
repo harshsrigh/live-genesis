@@ -25,8 +25,13 @@ def test_page_has_new_sections(isolated_db):
         html = client.get('/').text
     for element_id in ('chronicle', 'chronicle-list', 'chronicle-count', 'round-value', 'round-sub',
                        'round-top', 'api-spend', 'budget-sub',
-                       'games', 'games-list', 'games-count'):
+                       'games', 'games-list', 'games-count',
+                       'ledger', 'ledger-summary', 'ledger-list', 'ledger-count', 'governance-rules'):
         assert f'id="{element_id}"' in html, element_id
+    assert 'href="#ledger"' in html
+    # Permanent, static caption: present even before any data loads.
+    assert 'Credits are internal compute-accounting units with no monetary value' in html
+    assert 'cannot be bought, sold or redeemed' in html
     assert 'aria-live="polite"' in html
     assert 'href="#games"' in html
     assert 'genesis-sigil.png' in html

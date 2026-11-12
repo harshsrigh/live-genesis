@@ -253,3 +253,98 @@
   .game-move .event-body { grid-column: 1 / -1; order: 3; }
   .game-move .event-time { grid-column: 1 / -1; order: 4; text-align: left; }
 }
+
+/* Proposal lifecycle and credit ledger (read-only) */
+.status-row { margin: 0 0 8px; }
+.status-badge {
+  display: inline-block;
+  font: 9px var(--mono);
+  letter-spacing: .6px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  border: 1px solid #32465f;
+  background: #172238;
+  color: #a9c4dc;
+  overflow-wrap: anywhere;
+}
+.status-badge.status-voting { border-color: #3f6f9a; background: #132c44; color: #8fd2fb; }
+.status-badge.status-approved, .status-badge.status-completed { border-color: #2f6460; background: #12302f; color: #98e3d3; }
+.status-badge.status-approved-unfunded { border-color: #6a5a2d; background: #2c2613; color: #e6cf8a; }
+.status-badge.status-endorsed-for-operator-review { border-color: #5a4a86; background: #251d3d; color: #cdb6f8; }
+.status-badge.status-rejected, .status-badge.status-expired, .status-badge.status-withdrawn { border-color: #5b3a4b; background: #2a1823; color: #e6a2bc; }
+.lifecycle-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 9px;
+  font: 9px var(--mono);
+  letter-spacing: .4px;
+  color: #8496b3;
+}
+.lifecycle-facts strong { color: #cfdcee; font-weight: 500; }
+.status-note, .proposal .proposal-review, .proposal .proposal-report {
+  margin: 9px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #8ea2bf;
+}
+.proposal .proposal-review strong, .proposal .proposal-report strong { font: 9px var(--mono); letter-spacing: .5px; color: #cdb6f8; }
+.proposal .proposal-report strong { color: #98e3d3; display: block; }
+.lifecycle-steps {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  font: 9px var(--mono);
+  letter-spacing: .3px;
+  color: #8ea2bf;
+}
+.lifecycle-steps li { border: 1px solid #26344a; border-radius: 4px; padding: 2px 6px; background: #0f1624; }
+.lifecycle-steps li span { color: #6687ac; margin-right: 3px; }
+.prov.prov-system { border-color: #33556a; color: #8fb9c9; }
+.section-block.ledger { margin-top: 35px; }
+.ledger-caption {
+  margin: 0 0 12px;
+  padding: 11px 13px;
+  border: 1px solid #5a4a86;
+  border-radius: 9px;
+  background: #1c1730;
+  color: #cfc5ea;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.ledger-caption strong { font: 10px var(--mono); letter-spacing: 1px; color: #e3d5ff; margin-right: 4px; }
+.ledger-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.ledger-tile { border: 1px solid #26354a; border-radius: 9px; background: #0f1624; padding: 10px 12px; min-width: 0; }
+.ledger-tile span { display: block; font: 9px var(--mono); letter-spacing: 1px; color: #8194b3; }
+.ledger-tile strong { display: block; font: 600 22px 'Space Grotesk', sans-serif; margin: 4px 0 1px; }
+.ledger-tile small { display: block; font-size: 10px; color: #7284a0; }
+.ledger-scroll { max-height: 340px; overflow-y: auto; border: 1px solid #1f2a3d; border-radius: 9px; }
+.ledger-scroll:focus-visible { outline: 2px solid #53c6f9; outline-offset: 2px; }
+.ledger-list { list-style: none; margin: 0; padding: 0; }
+.ledger-entry {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #1f2a3d;
+  font-size: 12px;
+}
+.ledger-entry:last-child { border-bottom: 0; }
+.ledger-entry .event-body { overflow-wrap: anywhere; min-width: 0; }
+.ledger-entry .flag { justify-self: start; }
+.ledger-delta { font: 11px var(--mono); margin-left: 6px; }
+.ledger-delta.plus { color: #7ce7cf; }
+.ledger-delta.minus { color: #e6a2bc; }
+.ledger-balance { font: 10px var(--mono); color: #7186a4; margin-left: 6px; }
+
+@media (max-width: 860px) {
+  .ledger-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ledger-entry { grid-template-columns: minmax(0, 1fr) auto; }
+  .ledger-entry .event-verb { grid-column: 1 / -1; }
+  .ledger-entry .event-body { grid-column: 1 / -1; }
+  .ledger-entry .event-time { grid-column: 1 / -1; text-align: left; }
+}

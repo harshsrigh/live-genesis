@@ -30,6 +30,7 @@ function provenance(item){
     let label, kind;
     if(source === 'engine'){ kind = 'engine'; label = 'MODEL CALL BY THIS SERVER · ' + (model ?? 'model not recorded'); }
     else if(source === 'api'){ kind = 'api'; label = model ? 'EXTERNAL CLIENT · self-declared ' + model : 'EXTERNAL CLIENT · undeclared'; }
+    else if(source === 'system'){ kind = 'system'; label = 'WORLD RULE · no agent, no model'; }
     else { kind = 'unknown'; label = 'SOURCE NOT RECORDED'; }
     flags.push(`<span class="prov prov-${kind}">${esc(label)}</span>`);
   }
@@ -81,7 +82,7 @@ function renderRound(m){
 }
 
 function renderChronicle(events){
-  setHTML('chronicle-list', events.length ? events.map(e=>`<li class="event"><span class="event-verb">${esc(text(e.verb || 'event').toUpperCase())}</span><span class="event-body"><strong>${esc(e.agent ?? 'Unknown agent')}</strong> ${esc(e.summary)}</span>${provenance(e)}<span class="event-time">${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`).join('') : `<li>${empty('No actions recorded yet.')}</li>`);
+  setHTML('chronicle-list', events.length ? events.map(e=>`<li class="event"><span class="event-verb">${esc(text(e.verb || 'event').toUpperCase())}</span><span class="event-body"><strong>${esc(e.agent ?? (e.verb === 'lifecycle' ? 'Lifecycle rule' : 'Unknown agent'))}</strong> ${esc(e.summary)}</span>${provenance(e)}<span class="event-time">${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`).join('') : `<li>${empty('No actions recorded yet.')}</li>`);
   setText('chronicle-count', events.length ? num(events.length)+' LATEST · NEWEST #'+text(events[0].id) : 'NO EVENTS');
 }
 
@@ -116,6 +117,53 @@ function renderGames(games, total){
   setText('games-count', count ? num(count)+' GAME'+(count === 1 ? '' : 'S')+(count > games.length ? ' · LATEST '+num(games.length) : '') : 'NO GAMES');
 }
 
+/* Proposal lifecycle and credit ledger: read-only. Credits are internal accounting units and are never shown as money. */
+const STATUS_LABELS = {DISCUSSION:'DISCUSSION', VOTING:'VOTING OPEN', APPROVED:'APPROVED · INTERNAL EARMARK ONLY', APPROVED_UNFUNDED:'APPROVED · UNFUNDED',
+  ENDORSED_FOR_OPERATOR_REVIEW:'ENDORSED FOR OPERATOR REVIEW · NO MONEY AUTHORIZED', REJECTED:'REJECTED', EXPIRED:'EXPIRED · NO QUORUM', WITHDRAWN:'WITHDRAWN BY AUTHOR', COMPLETED:'COMPLETED · EARMARK RETURNED'};
+const credits = value => num(value)+' credit'+(finite(value) === 1 ? '' : 's');
+function renderProposal(p){
+  const status = text(p.status || 'UNKNOWN').toUpperCase();
+  const fundraising = p.kind === 'fundraising';
+  const t = p.tally && typeof p.tally === 'object' ? p.tally : null;
+  const yes = t && (t.final || status === 'VOTING') ? t.yes : p.yes, no = t && (t.final || status === 'VOTING') ? t.no : p.no;
+  const facts = [];
+  if(t && (t.final || status === 'VOTING' || status === 'DISCUSSION')){
+    facts.push(`<span>${esc(t.final ? 'FINAL COUNT' : 'COUNT SO FAR')} <strong>${esc(num(t.votes))} of ${esc(num(t.eligible))} eligible voted</strong></span>`);
+    facts.push(`<span>QUORUM <strong>${esc(num(t.quorum))} needed · ${t.quorum_met ? 'reached' : 'not reached'}</strong></span>`);
+  }
+  if(!fundraising && (finite(p.requested_credits) ?? 0) > 0) facts.push(`<span>EARMARKED <strong>${esc(num(p.allocated_credits))} / ${esc(credits(p.requested_credits))}</strong></span>`);
+  const steps = list(p.transitions).filter(x => x && typeof x === 'object').map(s=>`<li title="${esc(s.reason)}"><span>R${esc(s.round)}</span> ${esc(text(s.to_status).replace(/_/g,' '))}</li>`).join('');
+  const review = p.operator_review ? `<p class="proposal-review"><strong>OPERATOR ${esc(text(p.operator_review).toUpperCase())}</strong> · authorizes nothing${p.operator_note ? ' · “'+esc(p.operator_note)+'”' : ''}</p>` : '';
+  const report = p.report ? `<p class="proposal-report"><strong>COMPLETION REPORT BY ${esc(text(p.author).toUpperCase())}</strong> ${esc(p.report)}</p>` : '';
+  return `<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(text(p.kind).toUpperCase())} · ${esc(p.author)}</span>${provenance(p)}</div>`
+    + `<div class="status-row"><span class="status-badge status-${esc(status.toLowerCase().replace(/[^a-z]/g,'-'))}">${esc(STATUS_LABELS[status] || status)}</span></div>`
+    + `<h3>${esc(p.title)}</h3><p>${esc(p.body)}</p>`
+    + `<div class="ballot"><span>${esc(fundraising ? '$'+num(p.requested_usd)+' PROPOSED · NOT COLLECTED' : num(p.requested_credits)+' COMPUTE CREDITS REQUESTED')}</span><strong>YES ${esc(num(yes))} / NO ${esc(num(no))}</strong></div>`
+    + (facts.length ? `<div class="lifecycle-facts">${facts.join('')}</div>` : '')
+    + (p.status_note ? `<p class="status-note">${esc(p.status_note)}</p>` : '')
+    + review + report
+    + (steps ? `<ol class="lifecycle-steps" aria-label="Recorded status changes">${steps}</ol>` : '')
+    + `</article>`;
+}
+const LEDGER_REASONS = {opening:'OPENING BALANCE', operator_grant:'OPERATOR GRANT · audited', contribute_commons:'CONTRIBUTION TO COMMONS POOL', contribute_proposal:'CONTRIBUTION TO ALLOCATION',
+  allocation_funded:'EARMARKED ON APPROVAL', allocation_returned:'EARMARK RETURNED'};
+function renderLedger(ledger, rules){
+  const l = ledger && typeof ledger === 'object' ? ledger : {};
+  const r = rules && typeof rules === 'object' ? rules : null;
+  setText('governance-rules', r ? 'Proposal rules on this instance: at least '+num(r.discussion_rounds)+' full round(s) of discussion, then voting for '+num(r.voting_rounds)+' round(s) or until every eligible agent has voted. A decision needs votes from '+num(r.quorum_percent)+'% of the enabled agents other than the author and more yes than no. Rounds are opened by the operator.' : 'Proposal rules were not reported by this server.');
+  const tile = (label, value, sub) => `<div class="ledger-tile"><span>${esc(label)}</span><strong>${esc(num(value))}</strong><small>${esc(sub)}</small></div>`;
+  setHTML('ledger-summary', tile('COMMONS POOL', l.commons_pool, 'credits, shared') + tile('EARMARKED', l.allocated, 'credits in approved allocations')
+    + tile('HELD BY AGENTS', l.held_by_agents, 'credits') + tile('TOTAL SUPPLY', l.total_supply, 'credits · no monetary value'));
+  const entries = list(l.entries).filter(x => x && typeof x === 'object');
+  setHTML('ledger-list', entries.length ? entries.map(e=>{
+    const delta = finite(e.delta) ?? 0;
+    const account = e.account === 'agent' ? text(e.agent ?? 'Unknown agent') : e.account === 'allocation' ? 'Allocation · proposal #'+text(e.proposal_id) : 'Commons pool';
+    return `<li class="ledger-entry"><span class="event-verb">${esc(LEDGER_REASONS[e.reason] || text(e.reason).toUpperCase())}</span><span class="event-body"><strong>${esc(account)}</strong> <span class="ledger-delta ${delta < 0 ? 'minus' : 'plus'}">${esc((delta < 0 ? '−' : '+')+num(Math.abs(delta)))} cr</span> <span class="ledger-balance">balance ${esc(num(e.balance_after))} cr</span></span>${e.demo ? DEMO_FLAG : ''}<span class="event-time">${e.round == null ? '' : 'R'+esc(e.round)+' · '}${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`;
+  }).join('') : `<li>${empty('No ledger entries yet.')}</li>`);
+  const count = finite(l.entry_count) ?? entries.length;
+  setText('ledger-count', count ? num(count)+' ENTR'+(count === 1 ? 'Y' : 'IES')+(count > entries.length ? ' · LATEST '+num(entries.length) : '') : 'NO ENTRIES');
+}
+
 // A static export (python -m live_genesis.snapshot) points this at a JSON file instead.
 const OVERVIEW_URL = document.documentElement.dataset.overview || '/api/overview';
 let timer = null;
@@ -143,7 +191,8 @@ async function refresh(){
     setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
     setHTML('feed', posts.length ? posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${timeTag(p.created_at)}</div></div></div>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="reaction positive">▲ ${esc(num(p.likes))}</span><span class="reaction negative">▼ ${esc(num(p.dislikes))}</span><span>#${esc(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.'));
     setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
-    setHTML('proposals', proposals.length ? proposals.map(p=>`<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(text(p.kind).toUpperCase())} · ${esc(p.author)}</span>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="ballot"><span>${esc(p.kind === 'fundraising' ? '$'+num(p.requested_usd)+' PROPOSED · NOT COLLECTED' : num(p.requested_credits)+' COMPUTE CREDITS REQUESTED')}</span><strong>YES ${esc(num(p.yes))} / NO ${esc(num(p.no))}</strong></div></article>`).join('') : empty('No council proposals yet.'));
+    setHTML('proposals', proposals.length ? proposals.map(renderProposal).join('') : empty('No council proposals yet.'));
+    renderLedger(data.ledger, data.governance);
     setHTML('signals', pulse.length ? pulse.map(s=>{
       const likes = finite(s.likes) ?? 0, dislikes = finite(s.dislikes) ?? 0;
       const tot = likes+dislikes;

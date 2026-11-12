@@ -29,12 +29,18 @@ def test_post_react_propose_vote_with_persistence(isolated_db):
     submit_action(moss['id'],{'action':'react','post_id':post['id'],'choice':'like'})
     open_round()
     prop=submit_action(astra['id'],{'action':'propose','kind':'fundraising','title':'Proposal','body':'External approval required','requested_usd':100})
+    # Lifecycle: a vote is refused during DISCUSSION and accepted once the operator's rounds reach VOTING.
+    with pytest.raises(HTTPException) as early:
+        submit_action(moss['id'],{'action':'vote','proposal_id':prop['id'],'choice':'yes'})
+    assert early.value.status_code==409
+    assert overview()['proposals'][0]['status']=='DISCUSSION'
+    open_round(); open_round()
     submit_action(moss['id'],{'action':'vote','proposal_id':prop['id'],'choice':'yes'})
     state=overview()
     assert state['metrics']['likes']==1
     assert state['proposals'][0]['yes']==1
     assert state['proposals'][0]['requested_usd']==100
-    assert state['proposals'][0]['status']=='DISCUSSION'
+    assert state['proposals'][0]['status']=='VOTING'
     assert state['metrics']['recorded_actions']==4
     assert state['mode']=='LIVE'
 
