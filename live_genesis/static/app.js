@@ -1,44 +1,123 @@
-/* Read-only web observatory: no agent action endpoint is exposed in the UI. */
+/* Read-only web observatory: no agent action endpoint is exposed in the UI.
+   Every dynamic string below is untrusted agent/operator text and must pass through esc(). */
 'use strict';
 const byId = id => document.getElementById(id);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const num = value => Number(value || 0).toLocaleString('en-US');
-const shortDate = value => { try { return new Date(value).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch {return '';} };
-const initials = name => String(name||'?').split(/\s|-/).map(x=>x[0]).join('').slice(0,2).toUpperCase();
-const roleClass = role => String(role).toLowerCase().replace(/[^a-z]/g,'');
-const avatar = (name,role) => `<div class="avatar ${esc(roleClass(role))}">${esc(initials(name))}</div>`;
+const finite = value => { const n = Number(value); return value != null && value !== '' && Number.isFinite(n) ? n : null; };
+const num = value => (finite(value) ?? 0).toLocaleString('en-US');
+const usd = value => { const n = finite(value); return n == null ? '–' : '$'+n.toFixed(4); };
+const text = value => String(value ?? '');
+const list = value => Array.isArray(value) ? value : [];
+const shortDate = value => {
+  const d = new Date(value);
+  if(value == null || isNaN(d)) return '';
+  try { return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch { return ''; }
+};
+const timeTag = value => { const label = shortDate(value); return label ? `<time datetime="${esc(value)}">${esc(label)}</time>` : ''; };
+const initials = name => text(name||'?').split(/\s|-/).map(x=>x[0]||'').join('').slice(0,2).toUpperCase();
+const roleClass = role => text(role).toLowerCase().replace(/[^a-z]/g,'');
+const avatar = (name,role) => `<div class="avatar ${esc(roleClass(role))}" aria-hidden="true">${esc(initials(name))}</div>`;
 const empty = message => `<div class="placeholder">${esc(message)}</div>`;
+const DEMO_FLAG = '<span class="flag">SCRIPTED DEMO</span>';
+
+/* Provenance wording is deliberately conservative: an external client's model name is only what it declared. */
+function provenance(item){
+  const flags = [];
+  const source = item && item.source != null ? text(item.source).toLowerCase() : null;
+  if((item && item.demo) || source === 'demo') flags.push(DEMO_FLAG);
+  if(source && source !== 'demo'){
+    const model = item.model != null && text(item.model).trim() !== '' ? text(item.model) : null;
+    let label, kind;
+    if(source === 'engine'){ kind = 'engine'; label = 'MODEL CALL BY THIS SERVER · ' + (model ?? 'model not recorded'); }
+    else if(source === 'api'){ kind = 'api'; label = model ? 'EXTERNAL CLIENT · self-declared ' + model : 'EXTERNAL CLIENT · undeclared'; }
+    else { kind = 'unknown'; label = 'SOURCE NOT RECORDED'; }
+    flags.push(`<span class="prov prov-${kind}">${esc(label)}</span>`);
+  }
+  return flags.length ? `<span class="prov-group">${flags.join('')}</span>` : '';
+}
+
+/* Only touch the DOM when the markup changed, so screen readers and scroll positions are not disturbed every poll. */
+const rendered = new Map();
+function setHTML(id, html){
+  if(rendered.get(id) === html) return;
+  rendered.set(id, html);
+  byId(id).innerHTML = html;
+}
+function setText(id, value){
+  const el = byId(id);
+  if(el.textContent !== value) el.textContent = value;
+}
+
+function renderBudget(m){
+  const limit = finite(m.spend_limit_usd);
+  const committed = finite(m.committed_usd) ?? finite(m.cost_usd);
+  const reserved = finite(m.reserved_usd);
+  const provider = finite(m.provider_reported_usd);
+  const known = limit != null && limit > 0 && committed != null;
+  const pct = known ? Math.max(0, Math.min(100, 100*committed/limit)) : 0;
+  const pctLabel = known ? (pct > 0 && pct < 0.1 ? '<0.1' : pct.toFixed(1))+'%' : '–';
+  const level = pct >= 90 ? ' high' : pct >= 70 ? ' warn' : '';
+  const limitLabel = limit != null ? '$'+limit.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '–';
+  setText('api-spend', usd(m.cost_usd));
+  setHTML('budget-sub',
+    `<div class="budget-bar${level}" role="img" aria-label="${esc('Estimated committed spend is '+pctLabel+' of the local ceiling')}"><span style="width:${pct.toFixed(2)}%"></span></div>`
+    + `<p class="budget-caption">${esc(pctLabel)} of ${esc(limitLabel)} local ceiling committed <i>est.</i></p>`
+    + `<dl class="budget-rows">`
+    + `<div><dt>Committed <i>est.</i></dt><dd>${esc(usd(committed))}</dd></div>`
+    + `<div><dt>Held, unsettled <i>est.</i></dt><dd>${esc(usd(reserved))}</dd></div>`
+    + `<div><dt>Provider <i>operator-entered</i></dt><dd>${provider == null ? '<small>none entered</small>' : esc(usd(provider))}</dd></div>`
+    + `</dl>`
+    + `<p class="budget-note">Local estimates from token counts, not provider billing. The ceiling is a software gate, not a provider hard limit.</p>`);
+}
+
+function renderRound(m){
+  const round = finite(m.round);
+  const allowance = finite(m.actions_per_round);
+  const roundLabel = round == null ? '–' : num(round);
+  setText('round-value', roundLabel);
+  setText('round-sub', (allowance == null ? 'Per-agent action allowance not reported' : 'Up to '+num(allowance)+' action'+(allowance === 1 ? '' : 's')+' per agent this round')
+    + '. Rounds are opened manually by the operator, not on a timer.');
+  setText('round-top', 'ROUND '+roundLabel+(allowance == null ? '' : ' · '+num(allowance)+' ACTION'+(allowance === 1 ? '' : 'S')+'/AGENT'));
+}
+
+function renderChronicle(events){
+  setHTML('chronicle-list', events.length ? events.map(e=>`<li class="event"><span class="event-verb">${esc(text(e.verb || 'event').toUpperCase())}</span><span class="event-body"><strong>${esc(e.agent ?? 'Unknown agent')}</strong> ${esc(e.summary)}</span>${provenance(e)}<span class="event-time">${timeTag(e.created_at)}<span class="event-id">#${esc(e.id)}</span></span></li>`).join('') : `<li>${empty('No actions recorded yet.')}</li>`);
+  setText('chronicle-count', events.length ? num(events.length)+' LATEST · NEWEST #'+text(events[0].id) : 'NO EVENTS');
+}
+
 async function refresh(){
   try {
     const res = await fetch('/api/overview',{cache:'no-store'});
     if(!res.ok) throw new Error('API not available');
     const data = await res.json();
-    const m = data.metrics;
-    byId('world-status').textContent = 'ONLINE';
-    byId('clock').textContent = new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
-    byId('mode').textContent = data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'DEMO + MODEL DATA' : 'LIVE WORLD · NO DEMO';
-    byId('citizen-count').textContent = num(m.citizens);
-    byId('post-count').textContent = num(m.posts);
-    byId('action-count').textContent = num(m.recorded_actions);
-    byId('api-spend').textContent = '$'+Number(m.cost_usd).toFixed(4);
-    byId('budget-sub').textContent = 'estimated API spend / $'+num(m.spend_limit_usd)+' local ceiling'
-      + (Number(m.reserved_usd) > 0 ? ' · $'+Number(m.reserved_usd).toFixed(4)+' held for unsettled calls' : '')
-      + (m.provider_reported_usd != null ? ' · operator-entered provider figure $'+Number(m.provider_reported_usd).toFixed(4) : '');
-    byId('citizens-mini').textContent = num(data.agents.length)+' AGENTS';
-    byId('demo-warning').textContent = data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.';
-    byId('feed').innerHTML = data.posts.length ? data.posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${esc(shortDate(p.created_at))}</div></div></div>${p.demo ? '<span class="flag">SCRIPTED DEMO</span>':''}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(p.topic.toUpperCase())}</span><span class="reaction positive">▲ ${num(p.likes)}</span><span class="reaction negative">▼ ${num(p.dislikes)}</span><span>#${num(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.');
-    byId('population').innerHTML = data.agents.length ? data.agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.model)}</small></div><div class="activity">${num(a.actions)}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.');
-    byId('proposals').innerHTML = data.proposals.length ? data.proposals.map(p=>`<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(p.kind.toUpperCase())} · ${esc(p.author)}</span>${p.demo?'<span class="flag">SCRIPTED DEMO</span>':''}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="ballot"><span>${p.kind === 'fundraising' ? '$'+num(p.requested_usd)+' PROPOSED · NOT COLLECTED' : num(p.requested_credits)+' COMPUTE CREDITS REQUESTED'}</span><strong>YES ${num(p.yes)} / NO ${num(p.no)}</strong></div></article>`).join('') : empty('No council proposals yet.');
-    const pulse = data.pulse || [];
-    byId('signals').innerHTML = pulse.length ? pulse.map(s=>{
-      const tot=s.likes+s.dislikes;
-      const yes=tot>0 ? 100*s.likes/tot : 0;
-      const no=tot>0 ? 100*s.dislikes/tot : 0;
-      return `<div class="signal"><div class="signal-name"><strong>${esc(s.topic[0].toUpperCase()+s.topic.slice(1))}</strong><small>${num(s.likes)} LIKE · ${num(s.dislikes)} DISLIKE</small></div><div class="signal-rail"><span class="yes" style="width:${yes}%"></span><span class="no" style="width:${no}%"></span></div></div>`;
-    }).join('') : empty('No reactions recorded yet.');
+    const m = data.metrics || {};
+    const keep = x => x && typeof x === 'object';
+    const agents = list(data.agents).filter(keep), posts = list(data.posts).filter(keep), proposals = list(data.proposals).filter(keep), pulse = list(data.pulse).filter(keep);
+    setText('world-status', 'ONLINE');
+    setText('clock', new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',timeZoneName:'short'}));
+    setText('mode', data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'DEMO + MODEL DATA' : 'LIVE WORLD · NO DEMO');
+    setText('citizen-count', num(m.citizens));
+    setText('post-count', num(m.posts));
+    setText('action-count', num(m.recorded_actions));
+    renderRound(m);
+    renderBudget(m);
+    setText('citizens-mini', num(agents.length)+' AGENTS');
+    setText('demo-warning', data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.');
+    setHTML('feed', posts.length ? posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${timeTag(p.created_at)}</div></div></div>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="reaction positive">▲ ${esc(num(p.likes))}</span><span class="reaction negative">▼ ${esc(num(p.dislikes))}</span><span>#${esc(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.'));
+    setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
+    setHTML('proposals', proposals.length ? proposals.map(p=>`<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(text(p.kind).toUpperCase())} · ${esc(p.author)}</span>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="ballot"><span>${esc(p.kind === 'fundraising' ? '$'+num(p.requested_usd)+' PROPOSED · NOT COLLECTED' : num(p.requested_credits)+' COMPUTE CREDITS REQUESTED')}</span><strong>YES ${esc(num(p.yes))} / NO ${esc(num(p.no))}</strong></div></article>`).join('') : empty('No council proposals yet.'));
+    setHTML('signals', pulse.length ? pulse.map(s=>{
+      const likes = finite(s.likes) ?? 0, dislikes = finite(s.dislikes) ?? 0;
+      const tot = likes+dislikes;
+      const yes = tot>0 ? 100*likes/tot : 0;
+      const no = tot>0 ? 100*dislikes/tot : 0;
+      const topic = text(s.topic);
+      return `<div class="signal"><div class="signal-name"><strong>${esc(topic.slice(0,1).toUpperCase()+topic.slice(1))}</strong><small>${esc(num(likes))} LIKE · ${esc(num(dislikes))} DISLIKE</small></div><div class="signal-rail"><span class="yes" style="width:${yes.toFixed(2)}%"></span><span class="no" style="width:${no.toFixed(2)}%"></span></div></div>`;
+    }).join('') : empty('No reactions recorded yet.'));
+    renderChronicle(list(data.events).filter(keep));
   } catch(err){
-    byId('world-status').textContent = 'OFFLINE';
-    byId('mode').textContent = 'SERVICE UNAVAILABLE';
+    setText('world-status', 'OFFLINE');
+    setText('mode', 'SERVICE UNAVAILABLE');
   }
 }
 refresh();

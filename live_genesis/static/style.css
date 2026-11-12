@@ -4,3 +4,152 @@
 @media(max-width:1120px){.layout{grid-template-columns:195px 1fr}.sidebar{padding:24px 13px}main{padding:0 24px}.hero-art{right:-12%;opacity:.5}.hero-copy{max-width:90%}.columns{gap:16px}.metric-grid{gap:10px}.metric{padding:13px}.metric-label{font-size:9px}}
 @media(max-width:860px){.layout{display:block}.sidebar{position:relative;height:auto;min-height:0;padding:13px 16px;border-right:0;border-bottom:1px solid #263146}.brand{margin:0}.brand img{height:38px;width:38px}.brand strong{font-size:25px}.brand small{font-size:8px}.sidebar nav,.sidebar .side-label,.sidebar-bottom{display:none}main{padding:0 18px}.topbar{height:47px}.right-top{display:none}.hero{min-height:245px}.hero-copy{padding:37px 0}.hero h1{font-size:48px}.hero-art{right:-100px;top:-70px;opacity:.32}.metric-grid{grid-template-columns:repeat(2,1fr);margin:18px 0 30px}.columns{grid-template-columns:1fr;gap:35px}.footer-note{grid-template-columns:1fr;gap:9px}.section-head h2{font-size:20px}.section-head{align-items:center}}
 @media(max-width:430px){.hero h1{font-size:42px;letter-spacing:-2px}.hero p{font-size:12px}.eyebrow{font-size:8px}.metric-value{font-size:27px}.metric-label{letter-spacing:0}.read-only{font-size:8px}}
+
+
+/* ---------------------------------------------------------------------------
+   Observatory additions (readable, appended): round indicator, spend tile,
+   provenance labels, Chronicle. Read-only presentation only.
+   --------------------------------------------------------------------------- */
+
+/* Round indicator in the top bar */
+.round-top {
+  margin-right: auto;
+  padding: 5px 9px;
+  border: 1px solid #33556a;
+  border-radius: 5px;
+  background: #102b3b66;
+  color: #8ee8e7;
+  white-space: nowrap;
+}
+.round-by { color: #8fa3bf; }
+
+/* Metric grid now holds five tiles */
+.metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.05fr) minmax(0, 1.75fr); }
+.metric-sub { color: #8496b3; }
+.metric-spend .metric-value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.est-tag {
+  font: 9px var(--mono);
+  letter-spacing: 1px;
+  color: #c9aef5;
+  background: #2e2442;
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+
+/* Spend tile: committed / ceiling bar plus labelled figures */
+.budget-bar {
+  height: 5px;
+  margin: 8px 0 10px;
+  border-radius: 3px;
+  background: #2b3852;
+  overflow: hidden;
+}
+.budget-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #5dcbf9, #ad83f6);
+  transition: width .4s ease;
+}
+.budget-bar.warn span { background: linear-gradient(90deg, #ad83f6, #fc87ba); }
+.budget-bar.high span { background: #fc87ba; }
+.budget-rows { margin: 0; display: grid; gap: 3px; }
+.budget-rows > div { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.budget-rows > div { flex-wrap: wrap; }
+.budget-rows dt { color: #93a4bf; white-space: nowrap; }
+.budget-rows dd { margin-left: auto; }
+.budget-caption { margin: -4px 0 8px; font: 10px var(--mono); color: #a9b8d3; }
+.budget-caption i { font-style: normal; color: #b9a3e6; }
+.budget-rows dt i { font: normal 9px var(--mono); color: #b9a3e6; letter-spacing: .3px; margin-left: 3px; }
+.budget-rows dd { margin: 0; font: 11px var(--mono); color: #dbe7fa; text-align: right; white-space: nowrap; }
+.budget-rows dd small { color: #8fa3bf; font-size: 10px; }
+.budget-note { margin: 8px 0 0; font-size: 10px; line-height: 1.5; color: #8496b3; }
+
+/* Provenance labels (posts, proposals, chronicle) */
+.prov-group { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; min-width: 0; }
+.prov {
+  font: 9px var(--mono);
+  letter-spacing: .3px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid #32465f;
+  background: #172238;
+  color: #a9c6dc;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.prov-engine { border-color: #2f6460; background: #12302f; color: #98e3d3; }
+.prov-api { border-color: #5b4a86; background: #221c38; color: #cdb6f7; }
+.prov-unknown { border-style: dashed; color: #9fb0c9; }
+.post-top, .proposal-top { flex-wrap: wrap; }
+.post h3, .proposal h3 { overflow-wrap: anywhere; }
+
+/* Chronicle */
+.section-head > * { min-width: 0; }
+.count-mini { overflow: hidden; text-overflow: ellipsis; }
+.chronicle { margin-top: 35px; }
+.chronicle-scroll {
+  max-height: 460px;
+  overflow-y: auto;
+  border: 1px solid #273448;
+  border-radius: 10px;
+  background: linear-gradient(130deg, #111b2a, #0f1421);
+}
+.chronicle-scroll:focus-visible, .nav-link:focus-visible { outline: 2px solid #5dcbf9; outline-offset: 2px; }
+.event-list { list-style: none; margin: 0; padding: 0; }
+.event-list > li:not(.event) { padding: 12px; }
+.event {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px 14px;
+  padding: 9px 15px;
+  border-bottom: 1px solid #1f2a3d;
+  font-size: 12px;
+}
+.event:last-child { border-bottom: 0; }
+.event-verb {
+  justify-self: start;
+  font: 9px var(--mono);
+  letter-spacing: .6px;
+  color: #94bcd4;
+  border: 1px solid #32465f;
+  background: #172238;
+  border-radius: 4px;
+  padding: 3px 7px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.event-body { color: #a9b8d3; overflow-wrap: anywhere; min-width: 0; }
+.event-body strong { color: #ecf1ff; font-weight: 700; margin-right: 3px; }
+.event-time { font: 9px var(--mono); color: #8496b3; white-space: nowrap; text-align: right; }
+.event-id { color: #8496b3; margin-left: 8px; }
+
+@media (max-width: 1120px) {
+  .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .metric-spend { grid-column: span 2; }
+}
+
+@media (max-width: 860px) {
+  .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-spend { grid-column: 1 / -1; }
+  .topbar { height: auto; min-height: 47px; padding: 8px 0; flex-wrap: wrap; row-gap: 6px; }
+  .round-top { margin-right: 0; }
+  .event { grid-template-columns: auto minmax(0, 1fr); padding: 10px 12px; }
+  .event .prov-group { order: 2; }
+  .event-body { grid-column: 1 / -1; order: 3; }
+  .event-time { grid-column: 1 / -1; order: 4; text-align: left; }
+  .chronicle-scroll { max-height: 520px; }
+}
+
+@media (max-width: 430px) {
+  .round-by { display: none; }
+  .budget-rows > div { flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .budget-bar span { transition: none; }
+}
