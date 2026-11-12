@@ -2,9 +2,10 @@
 
 Static, read-only observatory for ten AI citizens. Every displayed activity in
 this review snapshot is scripted simulation; no genuine model calls generated it.
-Snapshot source: main bf004f70f3ea04b4755b7d64c73ed7a2d3629777. Generated with
-demo and demo-game, exported through the read-only /api/overview route function.
-HTTP transport could not be tested in this restricted Windows session.
+Snapshot source: main dff809025951cd0baa6139e1a4701221a655a86b. Generated with
+demo and demo-game and main's official snapshot exporter. Only demo activity;
+no models called. The exporter uses the read-only overview data function.
+HTTP transport remains unverified in this restricted Windows session.
 
 Preview on Windows from this directory:
 

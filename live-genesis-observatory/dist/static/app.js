@@ -116,24 +116,31 @@ function renderGames(games, total){
   setText('games-count', count ? num(count)+' GAME'+(count === 1 ? '' : 'S')+(count > games.length ? ' · LATEST '+num(games.length) : '') : 'NO GAMES');
 }
 
+// A static export (python -m live_genesis.snapshot) points this at a JSON file instead.
+const OVERVIEW_URL = document.documentElement.dataset.overview || '/api/overview';
+let timer = null;
 async function refresh(){
   try {
-    const res = await fetch('/overview.json',{cache:'no-store'});
+    const res = await fetch(OVERVIEW_URL,{cache:'no-store'});
     if(!res.ok) throw new Error('API not available');
     const data = await res.json();
     const m = data.metrics || {};
     const keep = x => x && typeof x === 'object';
     const agents = list(data.agents).filter(keep), posts = list(data.posts).filter(keep), proposals = list(data.proposals).filter(keep), pulse = list(data.pulse).filter(keep);
-    setText('world-status', 'SCRIPTED SNAPSHOT');
-    setText('clock', new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',timeZoneName:'short'}));
-    setText('mode', data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'DEMO + MODEL DATA' : 'LIVE WORLD · NO DEMO');
+    // A snapshot is a frozen file: say so, show when it was captured, and stop polling.
+    const snap = keep(data.snapshot) ? data.snapshot : null;
+    const modeText = data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'DEMO + MODEL DATA' : 'LIVE WORLD · NO DEMO';
+    setText('world-status', snap ? 'STATIC SNAPSHOT · NOT RUNNING' : 'ONLINE');
+    setText('clock', snap ? 'CAPTURED '+shortDate(snap.generated_at) : new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',timeZoneName:'short'}));
+    setText('mode', snap ? 'SNAPSHOT · '+modeText : modeText);
+    if(snap && timer !== null){ clearInterval(timer); timer = null; }
     setText('citizen-count', num(m.citizens));
     setText('post-count', num(m.posts));
     setText('action-count', num(m.recorded_actions));
     renderRound(m);
     renderBudget(m);
     setText('citizens-mini', num(agents.length)+' AGENTS');
-    setText('demo-warning', data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.');
+    setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
     setHTML('feed', posts.length ? posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${timeTag(p.created_at)}</div></div></div>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="reaction positive">▲ ${esc(num(p.likes))}</span><span class="reaction negative">▼ ${esc(num(p.dislikes))}</span><span>#${esc(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.'));
     setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
     setHTML('proposals', proposals.length ? proposals.map(p=>`<article class="proposal"><div class="proposal-top"><span class="proposal-kind">${esc(text(p.kind).toUpperCase())} · ${esc(p.author)}</span>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="ballot"><span>${esc(p.kind === 'fundraising' ? '$'+num(p.requested_usd)+' PROPOSED · NOT COLLECTED' : num(p.requested_credits)+' COMPUTE CREDITS REQUESTED')}</span><strong>YES ${esc(num(p.yes))} / NO ${esc(num(p.no))}</strong></div></article>`).join('') : empty('No council proposals yet.'));
@@ -152,6 +159,5 @@ async function refresh(){
     setText('mode', 'SERVICE UNAVAILABLE');
   }
 }
+timer = setInterval(refresh,12000);
 refresh();
-// Manual snapshot: no polling.
-

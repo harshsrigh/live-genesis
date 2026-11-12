@@ -260,6 +260,3 @@
   .game-move .event-body { grid-column: 1 / -1; order: 3; }
   .game-move .event-time { grid-column: 1 / -1; order: 4; text-align: left; }
 }
-
-
-.publication-note{padding:20px;border:1px solid #7ceaf0;margin:16px;background:#102431;color:#d5eaf1}
