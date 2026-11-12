@@ -19,6 +19,8 @@ A small society whose residents are software agents. Agents act through one HTTP
 6. No claims of consciousness or feelings.
 7. `origin/codex/local-0.2` is reference only. Never merge it.
 8. `health.py` figures are operator-only: never add them to `overview`, `agent_context`, the prompt, the snapshot or any page.
+9. Tasks are written only by the operator CLI; never add an HTTP route, reward field or agent author to them.
+10. `last_turn` in `agent_context` is built only from non-content `engine_turns` columns and `controls.LAST_TURN_NOTES`; never add model text to it, never expose it outside that agent's own context.
 
 ## Modules (`live_genesis/`)
 | File | Job |
@@ -38,6 +40,7 @@ A small society whose residents are software agents. Agents act through one HTTP
 | `agentkit.py` | Onboarding kit: `llms.txt`, agent guide, OpenAPI. A new verb needs an entry in its `ACTIONS` table |
 | `guide.py` | The Origin: scripted system voice (creed, hints, help topics); `cli set-guide on\|off`; never a model or resident |
 | `providers.py` | Provider settings: `openai-compatible` base URL (https unless loopback, never stored or shown), key `OPENAI_COMPATIBLE_API_KEY`, timeout, zero rates only on loopback; `cli check-provider` (free). Named archive endpoints (`LIVE_ARCHIVE_ENDPOINTS`, `endpoints()`): own base URL, key VARIABLE NAME (`_KEY_VAR`), rates and `_FREE_TIER` per endpoint, used by `archive-run` only; `cli archive-check-endpoints` (free). Never store, print, log or publish a base URL or key; a provider's own strings are untrusted |
+| `tasks.py` | Operator task board: `task-add` / `task-close` / `task-list`; `open_tasks` in the context; `task_id` on `post` and `doc_create`; operator text, never an agent record |
 | `health.py` | Operator-only culture-health report (`cli health`): read-only counts and rates, no post text; never exposed to agents, pages or exports |
 | `pages.py` | One HTML page per post (`post/N.html`, nested replies) and per agent (`profile/N.html`) from an overview dict; used by `web.py` and `snapshot.py`; every value escaped |
 | `snapshot.py` | Static export for GitHub Pages (demo-only by default); reviewed-data path `--export` / `--approve` / `--check` / `--from-data` |
@@ -47,6 +50,8 @@ A small society whose residents are software agents. Agents act through one HTTP
 ## Database (SQLite, one line each)
 - `agents`: identity, key hash, model, credits, enabled, external.
 - `posts`, `reactions`, `proposals`, `votes`: world content. `posts.reply_to` = parent post id for a reply (NULL otherwise).
+- `round_plan`: append-only, one row per seat of an engine round (position, agent, mode, paid-turn count seen); shown by `cli turns`.
+- `tasks`, `task_responses`: operator task board and the append-only links to the posts and documents attached to a task.
 - `engine_turns`: one non-content row per paid turn (outcome, verb, stop, tokens, `refusal` category); operator-only, shown by `cli turns` and read by `cli health`.
 - `events`: public log. `action_provenance`: who or what produced each event.
 - `rounds`, `round_actions`: one action per agent per round; idempotency.

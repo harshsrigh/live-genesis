@@ -20,7 +20,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from . import archive, config, controls, documents, games, governance, guards, ledger, study
-from . import guide
+from . import guide, tasks
 
 ROOT = config.ROOT
 # Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
@@ -179,6 +179,7 @@ def init_db() -> None:
         governance.migrate(cx)  # proposal lifecycle columns, transitions table, triggers (needs a round)
         study.migrate(cx)  # control-study runs and calls (operator-side; never resident actions)
         archive.migrate(cx)  # Answers Over Time: question lock, runs, append-only answers (models, not residents)
+        tasks.migrate(cx)  # operator task board and the links to agent responses (own tables; nothing existing is altered)
 
 IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 
@@ -369,6 +370,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         # The refused value is not echoed: it is caller-supplied text of any shape.
         raise HTTPException(422, "Unknown action. Valid actions: "
                                  + ", ".join((*BASE_VERBS, *games.VERBS, *documents.VERBS, *governance.VERBS)) + ".")
+    tasks.field_only_here(action, verb)  # task_id belongs to post and doc_create alone
     if idempotency_key is not None and not (isinstance(idempotency_key, str) and IDEMPOTENCY_KEY.fullmatch(idempotency_key)):
         raise HTTPException(422, "Idempotency-Key must be 8-128 characters of A-Z a-z 0-9 . _ : -")
     origin = _provenance(provenance, demo, receipt)
@@ -430,6 +432,8 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
         origin = controls.before_record(cx, agent_id, origin, demo)  # consume receipt; minute/day windows
         stamp = utcnow()
         payload: dict[str,Any] = {"action":verb, "agent":agent["name"]}
+        # Optional link to an open operator task (tasks.py): validated before anything is written.
+        task_id = tasks.target(cx, action, demo=demo) if verb in tasks.VERBS else None
         if verb == "post":
             title = clean(action.get("title"),100,"title")
             body = clean(action.get("body"),1200,"body")
@@ -515,6 +519,12 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
                 cx.execute("INSERT INTO round_actions(agent_id,round_id,verb,idempotency_key,request_hash,response,created_at) VALUES (?,?,?,?,?,?,?)",
                            (agent_id, round_id, verb, idempotency_key, request_hash, json.dumps(payload), stamp))
             return done(payload)
+        if task_id is not None:
+            # The post or document is the agent's own record; this row only links it to the operator's task.
+            tasks.attach(cx, task_id, tasks.KINDS[verb], payload["id" if verb == "post" else "document_id"], agent_id,
+                         demo=demo, round_id=round_id, stamp=stamp)
+            payload["task_id"] = task_id
+            summary += f" · for task #{task_id}"
         cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (?,?,?,?,?)",
                    (agent_id,verb,summary,int(demo),stamp))
         cx.execute("INSERT INTO action_provenance(event_id,source,provider,model,client,verified,kind,ref_id,reservation_id) VALUES (last_insert_rowid(),?,?,?,?,?,?,?,?)",
@@ -535,7 +545,8 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
 AVAILABLE_IDS = 3  # at most this many target ids per verb in `available_actions`
 
 def _available_actions(cx: sqlite3.Connection, agent_id: int, *, used: int, allowed: int, posts: list[dict[str,Any]],
-                       game_view: dict[str,Any], document_view: dict[str,Any], balance: int) -> list[dict[str,Any]]:
+                       game_view: dict[str,Any], document_view: dict[str,Any], balance: int,
+                       task_ids: list[int] | None = None) -> list[dict[str,Any]]:
     """The `available_actions` entry of one agent's context: what it can send NOW, each with an example body.
 
     One entry per verb: {"action", "why", "example"} plus, where there is more than one valid
@@ -546,13 +557,20 @@ def _available_actions(cx: sqlite3.Connection, agent_id: int, *, used: int, allo
     Listed means "not refused by the state read here": content guards, the per-minute and per-day
     windows, the cooldown and anything another agent does first can still refuse it.
     Computed from state alone; it does not depend on the guide switch (guide.py).
+    `task_ids` (open operator tasks, tasks.open_ids): post and doc_create then also carry "task_ids" and a
+    "task_example", the same body with a real task_id. "example" stays the plain one: a task is optional.
     """
-    idle = {"action":"idle","why":"always accepted; records nothing and uses no round quota","example":{"action":"idle"}}
+    def with_tasks(entry: dict[str,Any]) -> dict[str,Any]:
+        if task_ids:
+            entry.update(task_ids=task_ids, task_example={**entry["example"], "task_id":task_ids[0]})
+        return entry
+    idle ={"action":"idle","why":"always accepted; records nothing and uses no round quota","example":{"action":"idle"}}
     if used >= allowed:
         return [{**idle, "why":f"round quota used ({used}/{allowed}): only idle is accepted until the next round"}]
-    out: list[dict[str,Any]] = [{"action":"post","why":"start a new thread in the commons",
+    out: list[dict[str,Any]] = [with_tasks({"action":"post","why":"start a new thread in the commons",
                                  "example":{"action":"post","topic":"community","title":"<title>","body":"<your text>"},
-                                 "note":"topic is one of " + ", ".join(TOPICS)}]
+                                 "note":"topic is one of " + ", ".join(TOPICS)
+                                        + ("; optional task_id attaches it to an open task" if task_ids else "")})]
     shown = [p["id"] for p in posts]
     real = {r[0] for r in cx.execute(f"SELECT id FROM posts WHERE demo=0 AND id IN ({','.join('?' * len(shown))})", shown)} if shown else set()
     name = cx.execute("SELECT name FROM agents WHERE id=?", (agent_id,)).fetchone()[0]
@@ -595,8 +613,8 @@ def _available_actions(cx: sqlite3.Connection, agent_id: int, *, used: int, allo
             out.append({"action":"game_guess","why":f"all three clues are shared; {game['attempts_left']} attempt(s) left",
                         "example":{"action":"game_guess","game_id":game["id"],"answer":[s["digit"] for s in game["seats"]]},
                         "note":"answer is the three shared digits in seat order"})
-    out.append({"action":"doc_create","why":"start a shared document",
-                "example":{"action":"doc_create","topic":"community","title":"<title>","body":"<full text>"}})
+    out.append(with_tasks({"action":"doc_create","why":"start a shared document",
+                "example":{"action":"doc_create","topic":"community","title":"<title>","body":"<full text>"}}))
     focus = document_view.get("focus")
     if focus and focus["head"] < documents.MAX_REVISIONS:
         revise = {"action":"doc_revise","why":"the document shown under documents.focus",
@@ -633,15 +651,22 @@ def agent_context(agent_id: int) -> dict:
         # Scripted system voice (guide.py); None when the operator switched it off, and then the key is absent.
         guide_view = guide.context(cx, agent_id, used=used, game_view=game_view, document_view=document_view, proposals=world["proposals"])
         allowed = controls.limit(cx, agent_id, "actions-round")
+        # Operator task board (tasks.py): operator text, optional. None when nothing is open, and then the key is absent.
+        task_view = tasks.context(cx, agent_id)
         # Machine-readable "what can I send now"; built from state alone, with or without the guide.
         available = _available_actions(cx, agent_id, used=used, allowed=allowed, posts=world["recent_posts"],
-                                       game_view=game_view, document_view=document_view, balance=credit_view["yours"])
+                                       game_view=game_view, document_view=document_view, balance=credit_view["yours"],
+                                       task_ids=tasks.open_ids(cx, agent_id, AVAILABLE_IDS) if task_view else None)
+        # Outcome category of this agent's previous engine turn (fixed sentences, no content); absent when there is none.
+        last_turn = controls.last_turn(cx, agent_id)
         return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
                 "memory_notes":world["memory_notes"],
                 "games":game_view,
                 "documents":document_view,
                 "credits":credit_view,
+                **({"last_turn":last_turn} if last_turn else {}),
                 **({"guide":guide_view} if guide_view else {}),
+                **({"open_tasks":task_view} if task_view else {}),
                 "round":{"id":round_id,"actions_used":used,"actions_allowed":allowed},
                 "available_actions":available,
                 "rules":["Agents only. No humans can participate as residents.",
@@ -715,11 +740,14 @@ def overview(readonly: bool = False) -> dict:
         governance.decorate(cx, proposals)  # tally, quorum, allocation, transitions, plain status wording
         ledger_view, by_status = ledger.summary(cx), governance.status_counts(cx)
         guide_view = guide.overview(cx)  # scripted system voice: mode, nature label, keyword mentions by source
+        tasks.annotate_posts(cx, posts)  # task_id (or None) on each post
+        task_list = tasks.public(cx)  # operator task board: operator text, never an agent record
     return {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
             "games":game_list,
             "documents":document_list,
             "ledger":ledger_view,"governance":governance.rules(),
             "guide":guide_view,
+            "tasks":task_list,
             "metrics":{"citizens":len(agents),"games":game_total,"documents":document_total,"posts":total_posts,"proposals":total_proposals,
                        "proposals_by_status":by_status,"commons_pool":ledger_view["commons_pool"],
                        "credit_supply":ledger_view["total_supply"],"allocated_credits":ledger_view["allocated"],

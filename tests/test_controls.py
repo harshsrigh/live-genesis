@@ -570,15 +570,15 @@ def test_calls_per_hour_per_agent_in_run_round(isolated_db,monkeypatch,clock):
     called=fake_provider(monkeypatch)
     monkeypatch.setenv('LIVE_CALLS_PER_HOUR','2')
     controls.set_limit(1,'inference-hour',0)  # Astra may not be called at all
-    out=engine.run_round(limit=2)
+    out=engine.run_round(limit=2,order='id')
     assert 'inference-hour' in out[0]['error'] and out[1]['action']=='post' and called==['Moss']
     with connect() as cx:  # the refused call left no hold
         assert cx.execute('SELECT COUNT(*) FROM budget_reservations WHERE agent_id=1').fetchone()[0]==0
-    engine.run_round(limit=2)
-    out=engine.run_round(limit=2)  # Moss has used 2 calls this hour
+    engine.run_round(limit=2,order='id')
+    out=engine.run_round(limit=2,order='id')  # Moss has used 2 calls this hour
     assert called==['Moss','Moss'] and all('inference-hour' in o['error'] for o in out)
     clock.advance(3600)
-    assert engine.run_round(limit=2)[1]['action']=='post' and called==['Moss']*3
+    assert engine.run_round(limit=2,order='id')[1]['action']=='post' and called==['Moss']*3
     assert budget_status()['open_reservations']==0
 
 
@@ -608,7 +608,7 @@ def test_resumed_round_does_not_recall_agents(isolated_db,monkeypatch):
     with connect() as cx:
         assert [tuple(r) for r in cx.execute('SELECT agent_id,round_id,status FROM budget_reservations ORDER BY id')]==[(1,2,'settled'),(2,2,'settled'),(3,2,'settled'),(4,2,'settled')]
     engine.run_round(limit=1)  # without --resume a new round opens and everyone may be called again
-    assert called[-1]=='Astra' and current_round()==3
+    assert called[-1]=='Orbit' and current_round()==3  # rotation: the first agent that has not had a paid turn yet
 
 
 def test_resume_skips_recorded_actions_and_interrupted_calls(isolated_db,monkeypatch):

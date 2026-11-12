@@ -403,7 +403,9 @@ def test_cli_turns_prints_json_for_the_latest_or_a_named_round(isolated_db, monk
     engine.run_round(limit=2)
     cli.main()
     latest = json.loads(capsys.readouterr().out)
-    assert latest['outcomes'] == {'recorded': 2} and [t['agent'] for t in latest['turns']] == ['Astra', 'Moss']
+    # Rotation: Astra had the paid (cut-off) turn in the round before, so the next two agents are called.
+    assert latest['outcomes'] == {'recorded': 2} and [t['agent'] for t in latest['turns']] == ['Moss', 'Quill']
+    assert latest['plan'] == {'mode': 'rotation', 'order': ['Moss', 'Quill']}
     monkeypatch.setattr(sys, 'argv', ['cli', 'turns', '--round', str(latest['round'] - 1)])
     cli.main()
     earlier = json.loads(capsys.readouterr().out)

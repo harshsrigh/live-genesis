@@ -214,7 +214,8 @@ def test_present_and_identical_with_the_guide_switched_off(isolated_db):
     guide.set_mode('off')
     without = agent_context(1)
     assert 'guide' not in without and without['available_actions'] == with_guide['available_actions']
-    assert set(without) | {'guide'} == set(agentkit.CONTEXT_FIELDS)
+    # last_turn: only after a failed engine turn; open_tasks: only while a task is open
+    assert set(without) | {'guide', 'last_turn', 'open_tasks'} == set(agentkit.CONTEXT_FIELDS)
 
 
 def test_it_stays_small_and_is_served_over_http(isolated_db, monkeypatch):

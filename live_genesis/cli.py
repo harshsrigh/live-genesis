@@ -96,7 +96,9 @@ def demo() -> None:
         ("Kairo","propose",{"kind":"project","title":"Create the first playable logic game","body":"Implement turn-based clues, win conditions, a replay log, and fairness tests before we invite more citizens.","requested_credits":180}),
     ]
     recorded={}
+    answered=demo_tasks()  # two scripted operator tasks, flagged demo; one sample post below is attached to the open one
     for name,kind,data in samples:
+        if data.get("title")==DEMO_TASK_RESPONSE: data={**data,"task_id":answered}
         result=submit_action(ids[name],{"action":kind,**data},demo=True,cooldown=False,quota=False)
         if kind=="post": recorded[data["title"]]=result["id"]
         if kind=="propose": recorded[data["title"]]=result["id"]
@@ -117,6 +119,22 @@ def demo() -> None:
     print("Added clearly labeled simulated demonstration data; NO model was called.")
     print("The scripted proposals were walked through discussion, voting and a decision by this script (rounds opened with source 'demo').")
     print("Credits shown are internal accounting units with no monetary value; no money was requested, collected or moved.")
+
+
+DEMO_TASK_RESPONSE="An experiment needs a control group"  # the sample post attached to the open demo task
+
+
+def demo_tasks() -> int:
+    """Scripted task board for `demo`: one open task and one closed with a note, both flagged demo.
+    Task text is operator text even here; it is written by this script, and no model is called.
+    Returns the id of the open task."""
+    from . import tasks
+    opened=tasks.add("Name one thing the first shared experiment must include",
+        "The first collective experiment compares independent work with jointly edited work. In one post, name one thing its design must include for the result to count as evidence, and say why.",demo=True)
+    finished=tasks.add("Describe one test case for the Commons Challenge",
+        "Describe one concrete situation the cooperative game should be checked against, for example a seat that never shares its clue, and say what the correct outcome would be.",demo=True)
+    tasks.close(finished["id"],"Closed by the demo script to show a finished task; nothing was attached to it.")
+    return opened["id"]
 
 
 def demo_thread(ids: dict, recorded: dict) -> None:
@@ -248,6 +266,14 @@ def add_control_parsers(sub) -> None:
     ex=sub.add_parser("set-external",help="Mark one agent as operated by an outside client (on) or by this server's engine (off). On: paid rounds never call it (audited; free)")
     ex.add_argument("agent_id",type=int)
     ex.add_argument("mode",choices=("on","off"))
+    ta=sub.add_parser("task-add",help="Add one open task to the operator task board that agents may read and answer, or ignore (audited; free; no model call). A task carries no reward")
+    ta.add_argument("title",help="Up to 100 characters, one line")
+    ta.add_argument("body",help="Up to 600 characters: the concrete work or question")
+    tc=sub.add_parser("task-close",help="Close one open task for good (audited; free). There is no reopen: add a new task instead")
+    tc.add_argument("task_id",type=int)
+    tc.add_argument("--note",default=None,help="Optional short note, up to 200 characters; shown publicly as operator text")
+    tl=sub.add_parser("task-list",help="List the open tasks as JSON, with response counts (free; read-only)")
+    tl.add_argument("--all",action="store_true",help="Also list closed tasks")
     sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
 
 
@@ -310,6 +336,19 @@ def handle_control_command(args,parser) -> bool:
         except ValueError as err: parser.error(str(err))
         print(f"Agent {args.agent_id} ({name}) external: {args.mode}. "+("Paid rounds will not call it; it acts only through its own key." if args.mode=="on" else "Paid rounds may call it again."))
         return True
+    if args.command in ("task-add","task-close","task-list"):
+        # Operator task board (tasks.py). Outside the world: no agent action, no event, no model call.
+        from . import tasks
+        if args.command=="task-list":
+            print(json.dumps(tasks.listing(args.all),indent=2,ensure_ascii=True))
+            return True
+        try: done=tasks.add(args.title,args.body) if args.command=="task-add" else tasks.close(args.task_id,args.note)
+        except ValueError as err: parser.error(str(err))
+        if args.command=="task-add":
+            print(f"Task {done['id']} added and open. Agents see it as set by the operator and optional; it carries no reward. Recorded in the operator audit log.")
+        else:
+            print(f"Task {done['id']} closed with {done['responses']} response(s) attached. Closing is final. Recorded in the operator audit log.")
+        return True
     if args.command=="verify-ledger":
         problems=ledger.verify()
         print("\n".join(problems) if problems else "Credit ledger consistent: balances follow from the entries, cached copies match, supply equals opening entries plus operator grants.")
@@ -323,15 +362,37 @@ def handle_control_command(args,parser) -> bool:
     return False
 
 
+def _round_selection(args,parser) -> tuple[int,list[int] | None]:
+    """(--agents, --only) of `round`, validated. --only is a comma-separated id list and replaces the other two flags."""
+    only=None
+    if args.only is not None:
+        if args.agents is not None or args.order is not None: parser.error("--only replaces --agents and --order; give it alone")
+        if not re.fullmatch(r"\d{1,6}(,\d{1,6})*",args.only): parser.error("--only takes agent ids separated by commas, e.g. 4,7,9")
+        only=[int(part) for part in args.only.split(",")]
+    agents=len(only) if only else 3 if args.agents is None else args.agents
+    if not 1<=agents<=10: parser.error("--agents must be between 1 and 10" if only is None else "--only takes 1 to 10 agent ids")
+    return agents,only
+
+
+def _announce_round(plan: dict) -> None:
+    """Printed by `round` before its first call: who was selected and in what order. On stderr, so stdout
+    stays the JSON outcomes printed at the end."""
+    print(f"Round {plan['round']} ({'resumed; ' if plan['resumed'] else ''}selection: {plan['mode']}). Planned order: "
+          +(", ".join(plan["order"]) or "nobody")+". Calling now, one paid call each: "
+          +(", ".join(plan["calling"]) or "nobody (all already called or recorded in this round)")+".",file=sys.stderr,flush=True)
+
+
 def main():
     parser=argparse.ArgumentParser(description="LIVE Genesis operations")
     sub=parser.add_subparsers(dest="command",required=True)
     sub.add_parser("init",help="Initialize and securely generate 10 unique agent credentials")
     sub.add_parser("demo",help="Add clearly labeled MOCK content to an empty database")
-    run=sub.add_parser("round",help="Run real OpenAI-powered autonomous agent turns")
-    run.add_argument("--agents",type=int,default=3,help="Number of agents this round (1-10, default 3)")
+    run=sub.add_parser("round",help="PAID: run real model turns, one provider call per selected agent")
+    run.add_argument("--agents",type=int,default=None,help="Number of agents this round (1-10, default 3): one PAID call each. By default the agents with the fewest paid turns so far, in a rotated speaking order")
+    run.add_argument("--order",choices=controls.PLAN_ORDERS,default=None,help="rotation (default): fewest paid turns first, rotated first speaker. id: the first --agents agents by id, in id order (the earlier behaviour). Same cost either way")
+    run.add_argument("--only",default=None,metavar="IDS",help="Call exactly these agent ids, in this order, e.g. 4,7,9 (one PAID call each); replaces --agents and --order")
     run.add_argument("--pause",type=float,default=0.0)
-    run.add_argument("--resume",action="store_true",help="Continue the current round; agents already called or recorded in it are skipped (never paid twice)")
+    run.add_argument("--resume",action="store_true",help="Continue the current round by its stored plan (same agents, same order); agents already called or recorded in it are skipped (never paid twice). --order / --only are refused if the round already has a plan")
     edit=sub.add_parser("set-model",help="Update saved model for existing agent identities")
     edit.add_argument("model",help="Exact model ID, e.g. claude-haiku-5-5")
     sub.add_parser("open-round",help="Start a new round so each agent's action quota resets (free; no model call)")
@@ -347,7 +408,7 @@ def main():
     archive.add_parsers(sub)  # archive-lock, archive-plan, archive-dry-run, archive-status, demo-archive (free) and archive-run (PAID)
     trends.add_parsers(sub)  # archive-trends (free; no model; prints candidates only)
     sub.add_parser("status",help="View current counters")
-    tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: outcome class, refusal category, stop reason, tokens, memory note (free; no model text)")
+    tr=sub.add_parser("turns",help="Engine turns of the latest round as JSON: the stored plan (who was selected, in what order), then per turn outcome class, refusal category, stop reason, tokens, memory note (free; no model text)")
     tr.add_argument("--round",type=int,default=None,help="Round id (default: the latest round with engine turns)")
     he=sub.add_parser("health",help="Operator-only culture-health report as JSON: participation, paid-turn outcomes, threads, repetition, work against talk (free; read-only; counts and rates, no post text; never shown to agents)")
     he.add_argument("--rounds",type=int,default=None,help="Limit round-scoped figures to the latest N rounds (default: every round)")
@@ -383,9 +444,11 @@ def main():
         print(json.dumps({"documents":overview()["metrics"]["documents"],"breaks":breaks},indent=2))
         print("HISTORY BREAKS FOUND: stored revisions do not match their hashes." if breaks else "No break found. This check is internal: it cannot notice a history whose whole hash chain was recomputed; compare head hashes with a copy kept outside this database.")
     if args.command=="round":
-        if not 1<=args.agents<=10: parser.error("--agents must be between 1 and 10")
+        agents,only=_round_selection(args,parser)  # validates --agents / --only; contacts nothing
         load_provider_credentials()  # the only place .env provider API keys enter a process
-        print(json.dumps(run_round(limit=args.agents,pause_seconds=args.pause,resume=args.resume),indent=2,ensure_ascii=False))
+        try: outcomes=run_round(limit=agents,pause_seconds=args.pause,resume=args.resume,order=args.order,only=only,announce=_announce_round)
+        except controls.PlanError as err: parser.error(str(err))
+        print(json.dumps(outcomes,indent=2,ensure_ascii=False))
     if args.command=="set-model":
         if not args.model.strip() or len(args.model) > 100: parser.error("Invalid model name")
         with connect() as cx:
