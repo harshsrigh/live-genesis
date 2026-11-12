@@ -4,7 +4,8 @@ Credits are not currency. They have no monetary value, cannot be bought, sold or
 for anything outside this database, and nothing in this module (or anywhere else in the
 project) converts them to or from dollars. They currently buy nothing at all: an allocation
 is an earmark that agents voted for, and it goes back to the commons pool when its author
-reports completion.
+reports completion (`allocation_returned`) or, if no report comes in time, when the project
+lapses (`allocation_lapsed`; see governance.py).
 
 Accounts
   agent       one per agent (`agent_id` set). `agents.credits` is a CACHED COPY of the latest
@@ -35,14 +36,15 @@ from fastapi import HTTPException
 UNIT_NOTE = ("Credits are internal compute-accounting units with no monetary value. "
              "They cannot be bought, sold or redeemed, and are never converted to or from money.")
 MINT_REASONS = ("opening", "operator_grant")
-TRANSFER_REASONS = ("contribute_commons", "contribute_proposal", "allocation_funded", "allocation_returned")
+TRANSFER_REASONS = ("contribute_commons", "contribute_proposal", "allocation_funded", "allocation_returned",
+                    "allocation_lapsed")
 MAX_GRANT = 1_000_000
 
 Account = tuple[str, int | None]  # ("agent", agent_id) | ("commons", None) | ("allocation", proposal_id)
 COMMONS: Account = ("commons", None)
 
-SCHEMA = '''
-CREATE TABLE IF NOT EXISTS credit_ledger (
+_TABLE = '''
+CREATE TABLE IF NOT EXISTS {name} (
     id INTEGER PRIMARY KEY,
     account TEXT NOT NULL CHECK(account IN ('agent','commons','allocation')),
     agent_id INTEGER REFERENCES agents(id),       -- NULL for the commons pool and allocations
@@ -50,7 +52,7 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
     delta INTEGER NOT NULL,
     balance_after INTEGER NOT NULL CHECK(balance_after >= 0),
     reason TEXT NOT NULL CHECK(reason IN ('opening','operator_grant','contribute_commons',
-        'contribute_proposal','allocation_funded','allocation_returned')),
+        'contribute_proposal','allocation_funded','allocation_returned','allocation_lapsed')),
     ref_kind TEXT, ref_id INTEGER,
     transfer_id INTEGER,                          -- shared by the two rows of one transfer
     round_id INTEGER,
@@ -61,18 +63,22 @@ CREATE TABLE IF NOT EXISTS credit_ledger (
        OR (account='allocation' AND agent_id IS NULL AND proposal_id IS NOT NULL)),
     CHECK((reason IN ('opening','operator_grant') AND delta >= 0 AND transfer_id IS NULL)
        OR (reason NOT IN ('opening','operator_grant') AND delta <> 0 AND transfer_id IS NOT NULL))
-);
-CREATE INDEX IF NOT EXISTS credit_ledger_account ON credit_ledger(account, agent_id, proposal_id, id);
-CREATE TRIGGER IF NOT EXISTS credit_ledger_no_update BEFORE UPDATE ON credit_ledger
-    BEGIN SELECT RAISE(ABORT, 'credit_ledger is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS credit_ledger_no_delete BEFORE DELETE ON credit_ledger
-    BEGIN SELECT RAISE(ABORT, 'credit_ledger is append-only'); END;
-CREATE TRIGGER IF NOT EXISTS credit_ledger_chain BEFORE INSERT ON credit_ledger
+)'''
+# Index and triggers, one statement each so a rebuild can recreate them inside its transaction.
+_GUARDS = (
+    "CREATE INDEX IF NOT EXISTS credit_ledger_account ON credit_ledger(account, agent_id, proposal_id, id)",
+    '''CREATE TRIGGER IF NOT EXISTS credit_ledger_no_update BEFORE UPDATE ON credit_ledger
+    BEGIN SELECT RAISE(ABORT, 'credit_ledger is append-only'); END''',
+    '''CREATE TRIGGER IF NOT EXISTS credit_ledger_no_delete BEFORE DELETE ON credit_ledger
+    BEGIN SELECT RAISE(ABORT, 'credit_ledger is append-only'); END''',
+    '''CREATE TRIGGER IF NOT EXISTS credit_ledger_chain BEFORE INSERT ON credit_ledger
     WHEN NEW.balance_after <> NEW.delta + COALESCE((SELECT balance_after FROM credit_ledger
         WHERE account=NEW.account AND agent_id IS NEW.agent_id AND proposal_id IS NEW.proposal_id
         ORDER BY id DESC LIMIT 1), 0)
-    BEGIN SELECT RAISE(ABORT, 'credit_ledger balance chain broken'); END;
-'''
+    BEGIN SELECT RAISE(ABORT, 'credit_ledger balance chain broken'); END''',
+)
+SCHEMA = ";\n".join((_TABLE.format(name="credit_ledger"), *_GUARDS)) + ";\n"
+_COLUMNS = "id,account,agent_id,proposal_id,delta,balance_after,reason,ref_kind,ref_id,transfer_id,round_id,demo,created_at"
 
 
 def _stamp() -> str:
@@ -89,7 +95,41 @@ def migrate(cx: sqlite3.Connection) -> None:
     """Additive and repeatable. Existing agents get ONE opening entry equal to their current
     `agents.credits`; running it again adds nothing."""
     cx.executescript(SCHEMA)
+    _allow_new_reasons(cx)
     open_accounts(cx)
+
+
+def _allow_new_reasons(cx: sqlite3.Connection) -> None:
+    """One-time upgrade of a ledger whose `reason` CHECK predates `allocation_lapsed`.
+
+    SQLite cannot alter a CHECK, so the table is recreated with the wider list and every row is
+    copied byte-for-byte (same ids, same order) in one transaction; no row is updated or dropped,
+    and the copy is refused unless row count and total match. Index and triggers are recreated
+    in that same transaction."""
+    def current() -> bool:
+        return "'allocation_lapsed'" in cx.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='credit_ledger'").fetchone()[0]
+    if current():
+        return
+    cx.commit()
+    try:
+        cx.execute("BEGIN IMMEDIATE")
+        if not current():  # re-checked under the write lock
+            figures = "SELECT COUNT(*),COALESCE(SUM(delta),0),COALESCE(MAX(id),0) FROM "
+            before = tuple(cx.execute(figures + "credit_ledger").fetchone())
+            cx.execute("DROP TABLE IF EXISTS credit_ledger_rebuild")
+            cx.execute(_TABLE.format(name="credit_ledger_rebuild"))
+            cx.execute(f"INSERT INTO credit_ledger_rebuild({_COLUMNS}) SELECT {_COLUMNS} FROM credit_ledger ORDER BY id")
+            if tuple(cx.execute(figures + "credit_ledger_rebuild").fetchone()) != before:
+                raise RuntimeError("credit_ledger upgrade aborted: the copy does not match the original")
+            cx.execute("DROP TABLE credit_ledger")  # takes its index and triggers with it
+            cx.execute("ALTER TABLE credit_ledger_rebuild RENAME TO credit_ledger")
+            for statement in _GUARDS:
+                cx.execute(statement)
+        cx.execute("COMMIT")
+    except BaseException:
+        if cx.in_transaction:
+            cx.execute("ROLLBACK")
+        raise
 
 
 def open_accounts(cx: sqlite3.Connection) -> None:

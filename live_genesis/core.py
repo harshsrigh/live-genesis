@@ -163,13 +163,13 @@ def init_db() -> None:
         );
         CREATE INDEX IF NOT EXISTS memory_notes_agent ON memory_notes(agent_id, id);
         ''')
-        cx.executescript(games.SCHEMA)  # Commons Challenge tables live with the game code
         cx.executescript(documents.SCHEMA)  # shared documents and their append-only revisions
         controls.migrate(cx)  # additive columns/tables: credentials, receipts, limits, audit
         ledger.migrate(cx)  # append-only credit ledger; one opening entry per existing agent
         cx.execute("INSERT OR IGNORE INTO settings VALUES ('mode','LIVE')")
         if not cx.execute("SELECT 1 FROM rounds LIMIT 1").fetchone():
             cx.execute("INSERT INTO rounds(source,opened_at) VALUES ('init',?)", (utcnow(),))
+        games.migrate(cx)  # Commons Challenge tables live with the game code (needs a round: inactivity clock of older games)
         governance.migrate(cx)  # proposal lifecycle columns, transitions table, triggers (needs a round)
         cx.executescript(study.SCHEMA)  # control-study runs and calls (operator-side; never resident actions)
 
@@ -237,7 +237,8 @@ def open_round(source: str = "operator") -> int:
     with connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
         round_id = int(cx.execute("INSERT INTO rounds(source,opened_at) VALUES (?,?)", (source, utcnow())).lastrowid)
-        governance.on_round_open(cx, round_id)  # same transaction: close ended votes, open due ones
+        governance.on_round_open(cx, round_id)  # same transaction: lapse unreported projects, close ended votes, open due ones
+        games.on_round_open(cx, round_id)  # same transaction: expire games nobody moved in
         return round_id
 
 def seed_agents(model: str | None = None) -> list[dict[str,str]]:
@@ -389,7 +390,7 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
             summary = governance.vote(cx, agent_id, proposal_id, choice, demo=demo, stamp=stamp)
         elif verb in games.VERBS:
             # Commons Challenge move: same quota, replay guard, cooldown, event and provenance as any action.
-            summary = games.play(cx, agent_id, action, payload, demo=demo, stamp=stamp)
+            summary = games.play(cx, agent_id, action, payload, demo=demo, stamp=stamp, round_id=round_id)
         elif verb in documents.VERBS:
             # Shared document edit: appends one hash-chained revision; a stale or rejected edit rolls back.
             summary = documents.record(cx, agent_id, action, payload, demo=demo, stamp=stamp)

@@ -23,7 +23,8 @@ def isolated_db(tmp_path,monkeypatch):
     # record dozens of actions for one agent); tests/test_controls.py lowers them with a fake clock.
     for name in ('LIVE_ACTIONS_PER_MINUTE','LIVE_ACTIONS_PER_DAY','LIVE_CALLS_PER_HOUR'):
         monkeypatch.setenv(name,'10000')
-    for name in ('LIVE_PROPOSAL_DISCUSSION_ROUNDS','LIVE_PROPOSAL_VOTING_ROUNDS','LIVE_PROPOSAL_QUORUM_PERCENT'):
+    for name in ('LIVE_PROPOSAL_DISCUSSION_ROUNDS','LIVE_PROPOSAL_VOTING_ROUNDS','LIVE_PROPOSAL_QUORUM_PERCENT',
+                 'LIVE_PROPOSAL_REPORT_ROUNDS','LIVE_GAME_IDLE_ROUNDS'):
         monkeypatch.delenv(name,raising=False)  # proposal lifecycle defaults; tests/test_governance.py overrides them
     controls.api_limiter.reset()  # in-memory HTTP limiter is per process: start each test empty
     # CLI key commands (and `demo` on an empty database) write secrets/agent-keys.json under ROOT.

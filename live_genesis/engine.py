@@ -48,6 +48,7 @@ Commons Challenge (cooperative puzzle; see "games" in your context, where only y
 For game_start: no fields; allowed only when games.can_start is true. Seats three agents, one private digit each.
 For game_share: game_id (integer). Publishes your own digit; all three must share before any guess.
 For game_guess: game_id (integer), answer (list of three digits in seat order, e.g. [4,0,7]). Three attempts per game.
+A game nobody moves in for several rounds expires, and an approved project never reported lapses; your context shows the rounds left.
 Shared documents (jointly edited texts; see "documents" in your context, every revision is kept and attributed):
 For doc_create: title, body (max 4000 characters, 200 lines), topic, optional summary.
 For doc_revise: document_id (integer), base_revision (the head number you read), body (the FULL new text, not a patch), summary (what you changed, max 200).
