@@ -368,7 +368,7 @@ def test_turns_table_is_append_only_and_survives_a_second_init(isolated_db, monk
             cx.execute("INSERT INTO engine_turns(round_id,agent_id,outcome,created_at) VALUES (1,1,'some model text','now')")
         columns = [r[1] for r in cx.execute('PRAGMA table_info(engine_turns)')]
     assert columns == ['id', 'round_id', 'agent_id', 'reservation_id', 'outcome', 'stop', 'input_tokens', 'output_tokens',
-                       'memory', 'memory_refusal', 'created_at', 'refusal']
+                       'memory', 'memory_refusal', 'created_at', 'refusal', 'verb']
     assert count('engine_turns') == 1
 
 
@@ -552,3 +552,73 @@ def test_cli_turns_shows_the_refusal(isolated_db, monkeypatch, capsys):
     printed = capsys.readouterr().out
     turn, = json.loads(printed)['turns']
     assert (turn['agent'], turn['outcome'], turn['refusal']) == ('Astra', 'action_refused', '404:not_found') and MARK not in printed
+
+
+# ---- 7. Which verb a paid turn chose (idle included): engine_turns.verb ---------------------
+
+def test_turns_store_the_chosen_verb_for_schema_valid_replies_only(isolated_db, monkeypatch):
+    seed_agents()
+    replies = {
+        'Astra': json.dumps({'action': 'idle', 'memory': MARK}),
+        'Moss': json.dumps({'action': 'post', 'title': 'Fine', 'body': 'An ordinary accepted post.'}),
+        'Quill': json.dumps({'action': 'vote', 'proposal_id': 999, 'choice': 'yes'}),      # refused by submit_action
+        'Vela': json.dumps({'action': 'react', 'post_id': MARK, 'choice': 'like'}),          # fails the schema
+        'Orbit': 'not json at all ' + MARK,
+        'Kairo': json.dumps({'action': MARK}),                                               # schema-valid, unknown verb
+        'Echo-7': json.dumps({'action': 'contribute', 'amount': 500}),                       # engine cap
+    }
+    stops = {'Nori': 'length'}
+    mock_infer(monkeypatch, lambda name, prompt: engine.Completion(replies.get(name, CUT), 100, 20, stops.get(name, 'end')))
+    events = count('events')
+    out = engine.run_round(limit=8)
+    turns = rows('engine_turns')
+    with connect() as cx:
+        names = {r['id']: r['name'] for r in cx.execute('SELECT id,name FROM agents')}
+    assert {names[t['agent_id']]: (t['outcome'], t['verb']) for t in turns} == {
+        'Astra': ('recorded', 'idle'), 'Moss': ('recorded', 'post'), 'Quill': ('action_refused', 'vote'),
+        'Vela': ('invalid_schema', None), 'Orbit': ('invalid_json', None), 'Kairo': ('action_refused', None),
+        'Echo-7': ('action_refused', 'contribute'), 'Nori': ('truncated', None)}
+    # Idle leaves no event and no post: the turn row is its only trace.
+    assert count('events') == events + 1 and out[0] == {**out[0], 'action': 'idle', 'agent': 'Astra'}
+    assert MARK not in json.dumps(turns)
+    assert {t['agent']: t['verb'] for t in controls.turns()['turns']}['Astra'] == 'idle'
+
+
+def test_record_turn_stores_only_known_verbs(isolated_db):
+    seed_agents()
+    for verb in ('idle', 'doc_revise', 'game_guess', 'proposal_report', 'IDLE', 'post; DROP', MARK, '', ['post'], 7, None):
+        controls.record_turn(1, 1, 'recorded', verb=verb)
+    controls.record_turn(1, 1, 'recorded')
+    assert [t['verb'] for t in rows('engine_turns')] == ['idle', 'doc_revise', 'game_guess', 'proposal_report'] + [None] * 8
+    assert controls.known_verbs() == {'post', 'react', 'reply', 'propose', 'vote', 'idle', 'game_start', 'game_share', 'game_guess',
+                                      'doc_create', 'doc_revise', 'doc_revert', 'contribute', 'proposal_withdraw', 'proposal_report'}
+
+
+def test_existing_turns_table_gains_the_verb_column(isolated_db, monkeypatch):
+    seed_agents()
+    with connect() as cx:
+        cx.execute('ALTER TABLE engine_turns DROP COLUMN verb')  # the table as the owner's database has it
+        cx.execute("INSERT INTO engine_turns(round_id,agent_id,outcome,created_at,refusal) VALUES (1,1,'action_refused','earlier','404:not_found')")
+        assert 'verb' not in [r[1] for r in cx.execute('PRAGMA table_info(engine_turns)')]
+    init_db()
+    init_db()  # repeatable
+    assert [(t['outcome'], t['refusal'], t['verb']) for t in rows('engine_turns')] == [('action_refused', '404:not_found', None)]
+    with connect() as cx:
+        assert [r[1] for r in cx.execute('PRAGMA table_info(engine_turns)')].count('verb') == 1
+        with pytest.raises(sqlite3.DatabaseError, match='append-only'):
+            cx.execute("UPDATE engine_turns SET verb='idle'")  # old rows stay NULL: nothing is back-filled
+        with pytest.raises(sqlite3.DatabaseError, match='append-only'):
+            cx.execute('DELETE FROM engine_turns')
+    mock_infer(monkeypatch, lambda name, prompt: engine.Completion('{"action":"idle"}', 100, 20, 'end'))
+    engine.run_round(limit=1)
+    assert (rows('engine_turns')[-1]['outcome'], rows('engine_turns')[-1]['verb']) == ('recorded', 'idle')
+
+
+def test_cli_turns_shows_the_verb(isolated_db, monkeypatch, capsys):
+    seed_agents()
+    mock_infer(monkeypatch, lambda name, prompt: engine.Completion('{"action":"idle"}', 100, 20, 'end'))
+    engine.run_round(limit=1)
+    monkeypatch.setattr(sys, 'argv', ['cli', 'turns'])
+    cli.main()
+    turn, = json.loads(capsys.readouterr().out)['turns']
+    assert (turn['agent'], turn['outcome'], turn['verb']) == ('Astra', 'recorded', 'idle')

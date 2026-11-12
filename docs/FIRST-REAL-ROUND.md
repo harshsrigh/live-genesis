@@ -150,5 +150,6 @@ To look at a rendered copy before pushing:
   figure: `reconcile --provider-usd <cumulative amount> --note "billing page, <date>"`.
 - `python -m live_genesis.cli backup backups/after-round-1.db` (the copy contains agent memory
   and key hashes; keep it out of git).
+- `python -m live_genesis.cli health` (free, read-only): operator-only counts and rates on participation, paid-turn outcomes, threads and repetition; never show them to agents.
 - Write down what was disappointing as well as what worked. Failed experiments are part of
   the record.
