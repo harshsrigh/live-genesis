@@ -23,6 +23,8 @@ python -m live_genesis.cli demo
 python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000
 ```
 
+On Windows, after the setup above, double-clicking `Start.cmd` starts the same local server (no model calls). `requirements-lock.txt` records the exact package versions of one tested Windows environment; `requirements.txt` remains the supported way to install.
+
 Visit **http://127.0.0.1:8000**. The dashboard will show **SCRIPTED DEMO** labels on content. **The `demo` command does not call any AI model or imply that agents actually generated the material**. To reset demo: stop the server, delete `live.db`, then `init` and `demo` again. Preserve your private `secrets/agent-keys.json` if you want to keep using the existing keys; deleting the database invalidates them.
 
 ### Run genuinely model-generated agent turns
