@@ -183,8 +183,8 @@ def test_transition_table_matches_the_documented_state_machine(isolated_db):
     assert governance.LEGAL == {
         'DISCUSSION': ('VOTING', 'WITHDRAWN'),
         'VOTING': ('APPROVED', 'APPROVED_UNFUNDED', 'ENDORSED_FOR_OPERATOR_REVIEW', 'REJECTED', 'EXPIRED', 'WITHDRAWN'),
-        'APPROVED_UNFUNDED': ('APPROVED', 'COMPLETED'),
-        'APPROVED': ('COMPLETED',)}
+        'APPROVED_UNFUNDED': ('APPROVED', 'COMPLETED', 'LAPSED'),
+        'APPROVED': ('COMPLETED', 'LAPSED')}
     pid = propose()
     with connect() as cx:
         row = dict(cx.execute('SELECT * FROM proposals WHERE id=?', (pid,)).fetchone())
@@ -371,7 +371,7 @@ def test_concurrent_round_openings_do_not_duplicate_transitions(isolated_db):
 
 def test_thresholds_are_settings(isolated_db, monkeypatch):
     seed_agents()
-    assert governance.rules() == {'discussion_rounds': 1, 'voting_rounds': 2, 'quorum_percent': 50} == overview()['governance']
+    assert governance.rules() == {'discussion_rounds': 1, 'voting_rounds': 2, 'quorum_percent': 50, 'report_rounds': 10} == overview()['governance']
     monkeypatch.setenv('LIVE_PROPOSAL_DISCUSSION_ROUNDS', '2')
     monkeypatch.setenv('LIVE_PROPOSAL_VOTING_ROUNDS', '1')
     monkeypatch.setenv('LIVE_PROPOSAL_QUORUM_PERCENT', '100')
@@ -561,13 +561,13 @@ def test_overview_and_context_shapes(isolated_db):
     for voter in (2, 3, 4, 5, 6):
         vote(voter, pid)
     rounds(2)
-    assert mine(1) == ('APPROVED_UNFUNDED', 'nothing required; contribute possible, 220 credits fit')
-    assert mine(LUMEN) == ('APPROVED_UNFUNDED', 'proposal_report when the work is done; contribute possible, 220 credits fit')
+    assert mine(1) == ('APPROVED_UNFUNDED', 'nothing required (lapses in 10 rounds); contribute possible, 220 credits fit')
+    assert mine(LUMEN) == ('APPROVED_UNFUNDED', 'proposal_report when done (lapses in 10 rounds); contribute possible, 220 credits fit')
     act(LUMEN, {'action': 'proposal_report', 'proposal_id': pid, 'body': 'Done.'})
     assert mine(1) == ('COMPLETED', 'closed')
     ctx = agent_context(1)
     assert list(ctx['proposals'][0])[-2:] == ['status', 'next'] and all(len(p['next']) <= 90 for p in ctx['proposals'])
-    assert len(engine.build_prompt(ctx)) < engine.PROMPT_CHAR_LIMIT
+    assert len(engine.build_prompt(ctx).encode()) < engine.PROMPT_BYTE_LIMIT
     assert any('proposal_withdraw' in rule for rule in ctx['rules']) and any('authorizes no money' in rule for rule in ctx['rules'])
     for word in ('contribute', 'proposal_withdraw', 'proposal_report', 'ENDORSED_FOR_OPERATOR_REVIEW', 'authorizes no money'):
         assert word in engine.CONSTITUTION, word

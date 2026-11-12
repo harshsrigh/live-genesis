@@ -98,7 +98,7 @@ function gameSource(g){
 function renderGames(games, total){
   setHTML('games-list', games.length ? games.map(g=>{
     const state = text(g.state || 'UNKNOWN').toUpperCase();
-    const stateClass = state === 'WON' ? 'won' : state === 'LOST' ? 'lost' : 'active';
+    const stateClass = state === 'WON' ? 'won' : (state === 'LOST' || state === 'EXPIRED') ? 'lost' : 'active';
     const max = finite(g.max_attempts) ?? 3;
     const seats = list(g.clues).filter(x => x && typeof x === 'object');
     const moves = list(g.moves).filter(x => x && typeof x === 'object');
@@ -151,7 +151,7 @@ function renderDocuments(documents, total){
 
 /* Proposal lifecycle and credit ledger: read-only. Credits are internal accounting units and are never shown as money. */
 const STATUS_LABELS = {DISCUSSION:'DISCUSSION', VOTING:'VOTING OPEN', APPROVED:'APPROVED · INTERNAL EARMARK ONLY', APPROVED_UNFUNDED:'APPROVED · UNFUNDED',
-  ENDORSED_FOR_OPERATOR_REVIEW:'ENDORSED FOR OPERATOR REVIEW · NO MONEY AUTHORIZED', REJECTED:'REJECTED', EXPIRED:'EXPIRED · NO QUORUM', WITHDRAWN:'WITHDRAWN BY AUTHOR', COMPLETED:'COMPLETED · EARMARK RETURNED'};
+  ENDORSED_FOR_OPERATOR_REVIEW:'ENDORSED FOR OPERATOR REVIEW · NO MONEY AUTHORIZED', REJECTED:'REJECTED', EXPIRED:'EXPIRED · NO QUORUM', WITHDRAWN:'WITHDRAWN BY AUTHOR', COMPLETED:'COMPLETED · EARMARK RETURNED', LAPSED:'LAPSED · NO REPORT · EARMARK RETURNED'};
 const credits = value => num(value)+' credit'+(finite(value) === 1 ? '' : 's');
 function renderProposal(p){
   const status = text(p.status || 'UNKNOWN').toUpperCase();
@@ -178,7 +178,7 @@ function renderProposal(p){
     + `</article>`;
 }
 const LEDGER_REASONS = {opening:'OPENING BALANCE', operator_grant:'OPERATOR GRANT · audited', contribute_commons:'CONTRIBUTION TO COMMONS POOL', contribute_proposal:'CONTRIBUTION TO ALLOCATION',
-  allocation_funded:'EARMARKED ON APPROVAL', allocation_returned:'EARMARK RETURNED'};
+  allocation_funded:'EARMARKED ON APPROVAL', allocation_returned:'EARMARK RETURNED', allocation_lapsed:'EARMARK RETURNED · PROJECT LAPSED'};
 function renderLedger(ledger, rules){
   const l = ledger && typeof ledger === 'object' ? ledger : {};
   const r = rules && typeof rules === 'object' ? rules : null;
@@ -258,7 +258,7 @@ async function refresh(){
     setText('citizens-mini', num(agents.length)+' AGENTS');
     setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (recorded ? 'It shows recorded activity exported by the operator after review. Every record is labeled by its source: scripted demo, external client (self-declared, unverified) or model call by the server.' : data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
     setHTML('feed', posts.length ? posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${timeTag(p.created_at)}</div></div></div>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="reaction positive">▲ ${esc(num(p.likes))}</span><span class="reaction negative">▼ ${esc(num(p.dislikes))}</span><span>#${esc(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.'));
-    setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
+    setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.external ? 'external client' : a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
     setHTML('proposals', proposals.length ? proposals.map(renderProposal).join('') : empty('No council proposals yet.'));
     renderLedger(data.ledger, data.governance);
     renderGuide(data.guide);

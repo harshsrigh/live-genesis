@@ -53,8 +53,8 @@ def test_concurrent_reservations_cannot_overshoot(isolated_db):
 def test_round_respects_holds_from_another_runner(isolated_db,monkeypatch):
     seed_agents()
     monkeypatch.setenv('OPENAI_API_KEY','fake')
-    monkeypatch.setenv('LIVE_SPEND_LIMIT_USD','0.005')  # one call's hold is $0.00318
-    reserve_budget(None,'other-runner',0.003,0.005)
+    monkeypatch.setenv('LIVE_SPEND_LIMIT_USD','0.005')  # one call's hold here is about $0.002 (sized from the prompt bytes)
+    reserve_budget(None,'other-runner',0.004,0.005)
     monkeypatch.setattr(engine,'infer',lambda *a: (_ for _ in ()).throw(AssertionError('must not call')))
     result=engine.run_round(limit=1)
     assert 'ceiling' in result[0]['error']
@@ -78,8 +78,11 @@ def test_failed_inference_stays_counted_as_unconfirmed(isolated_db,monkeypatch):
     assert 'reconcile' in engine.run_round(limit=2)[0]['error']
     status=budget_status()
     assert status['open_reservations']==1
-    assert status['reserved_usd']==pytest.approx(0.00318)
-    assert status['committed_usd']==pytest.approx(0.00318+status['estimated_usd'])
+    with connect() as cx:
+        hold=cx.execute('SELECT reserved_usd FROM budget_reservations WHERE id=1').fetchone()[0]
+    assert 0.001<hold<=engine.call_hold('x'*engine.PROMPT_BYTE_LIMIT,0.20,1.20)  # sized from the prompt actually sent
+    assert status['reserved_usd']==pytest.approx(hold, abs=1e-6)  # status rounds to 6 decimals
+    assert status['committed_usd']==pytest.approx(hold+status['estimated_usd'], abs=1e-6)
     metrics=overview()['metrics']
     assert metrics['reserved_usd']==status['reserved_usd'] and metrics['provider_reported_usd'] is None
     with connect() as cx:

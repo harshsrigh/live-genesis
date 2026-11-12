@@ -1,0 +1,34 @@
+# Local use only. The database lives in ./data and agent keys in ./secrets on your machine;
+# neither is copied into the image. No service here gets a provider API key except `paid`.
+services:
+  test:            # docker compose run --rm test
+    build: .
+    command: ["python", "-m", "pytest", "-q"]
+    environment:
+      LIVE_DB: /tmp/unused.db   # tests use their own temporary databases
+
+  cli:             # docker compose run --rm cli init | demo | status | study-plan --n 3 ...
+    build: .
+    entrypoint: ["python", "-m", "live_genesis.cli"]
+    command: ["status"]
+    volumes:
+      - ./data:/data
+      - ./secrets:/app/secrets
+
+  web:             # docker compose up web  ->  http://127.0.0.1:8000
+    build: .
+    command: ["python", "-m", "uvicorn", "live_genesis.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"   # reachable from this computer only
+    volumes:
+      - ./data:/data
+      - ./secrets:/app/secrets
+
+  paid:            # PAID commands only (round, study-run). Needs ./.env; started only on request:
+    profiles: ["paid"]   # docker compose --profile paid run --rm paid round --agents 3
+    build: .
+    entrypoint: ["python", "-m", "live_genesis.cli"]
+    volumes:
+      - ./data:/data
+      - ./secrets:/app/secrets
+      - ./.env:/app/.env:ro

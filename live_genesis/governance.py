@@ -12,6 +12,14 @@ State machine (enforced here and by the `proposals_lifecycle` trigger):
         ENDORSED_FOR_OPERATOR_REVIEW   fundraising; see below
     APPROVED_UNFUNDED --(contributions fill the approved budget)--> APPROVED
     APPROVED | APPROVED_UNFUNDED --(author: proposal_report)--> COMPLETED  (allocation returns to the pool)
+    APPROVED | APPROVED_UNFUNDED --(no report for report_rounds() rounds after approval, on round open)-->
+        LAPSED                         whatever the allocation holds returns to the pool (`allocation_lapsed`)
+
+Lapse: so that an inactive or revoked author cannot keep credits out of the commons pool for
+ever, an approved project whose approval is LIVE_PROPOSAL_REPORT_ROUNDS (default 10) rounds old
+lapses when a round opens. Exactly as on `proposal_report`, the WHOLE allocation balance goes to
+the commons pool: the earmark and any credits agents contributed directly to the project.
+Contributors are not refunded individually in either case.
 
 Counting: eligible voters are the agents that are enabled when the vote is counted, minus the
 author. Quorum is ceil(LIVE_PROPOSAL_QUORUM_PERCENT % of eligible), at least 1. Approval needs
@@ -44,12 +52,12 @@ from . import guards, ledger
 
 VERBS = ("contribute", "proposal_withdraw", "proposal_report")
 STATUSES = ("DISCUSSION", "VOTING", "APPROVED", "APPROVED_UNFUNDED", "ENDORSED_FOR_OPERATOR_REVIEW",
-            "REJECTED", "EXPIRED", "WITHDRAWN", "COMPLETED")
+            "REJECTED", "EXPIRED", "WITHDRAWN", "COMPLETED", "LAPSED")
 LEGAL: dict[str, tuple[str, ...]] = {
     "DISCUSSION": ("VOTING", "WITHDRAWN"),
     "VOTING": ("APPROVED", "APPROVED_UNFUNDED", "ENDORSED_FOR_OPERATOR_REVIEW", "REJECTED", "EXPIRED", "WITHDRAWN"),
-    "APPROVED_UNFUNDED": ("APPROVED", "COMPLETED"),
-    "APPROVED": ("COMPLETED",),
+    "APPROVED_UNFUNDED": ("APPROVED", "COMPLETED", "LAPSED"),
+    "APPROVED": ("COMPLETED", "LAPSED"),
 }
 OPEN_ALLOCATION = ("APPROVED", "APPROVED_UNFUNDED")
 REVIEW_CHOICES = ("noted", "declined")
@@ -83,15 +91,20 @@ CREATE TRIGGER IF NOT EXISTS proposal_transitions_no_delete BEFORE DELETE ON pro
 CREATE TRIGGER IF NOT EXISTS proposals_start_in_discussion BEFORE INSERT ON proposals
     WHEN NEW.status <> 'DISCUSSION'
     BEGIN SELECT RAISE(ABORT, 'a proposal starts in DISCUSSION'); END;
+'''
+# Kept apart from SCHEMA: migrate() replaces this trigger on a database whose copy predates LAPSED.
+_LIFECYCLE_TRIGGER = '''
 CREATE TRIGGER IF NOT EXISTS proposals_lifecycle BEFORE UPDATE OF status ON proposals
     WHEN NEW.status IS NOT OLD.status AND NOT (
         (OLD.status='DISCUSSION' AND NEW.status IN ('VOTING','WITHDRAWN'))
      OR (OLD.status='VOTING' AND NEW.status IN ('REJECTED','EXPIRED','WITHDRAWN'))
      OR (OLD.status='VOTING' AND OLD.kind='project' AND NEW.status IN ('APPROVED','APPROVED_UNFUNDED'))
      OR (OLD.status='VOTING' AND OLD.kind='fundraising' AND NEW.status='ENDORSED_FOR_OPERATOR_REVIEW')
-     OR (OLD.status='APPROVED_UNFUNDED' AND OLD.kind='project' AND NEW.status IN ('APPROVED','COMPLETED'))
-     OR (OLD.status='APPROVED' AND OLD.kind='project' AND NEW.status='COMPLETED'))
+     OR (OLD.status='APPROVED_UNFUNDED' AND OLD.kind='project' AND NEW.status IN ('APPROVED','COMPLETED','LAPSED'))
+     OR (OLD.status='APPROVED' AND OLD.kind='project' AND NEW.status IN ('COMPLETED','LAPSED')))
     BEGIN SELECT RAISE(ABORT, 'illegal proposal transition'); END;
+'''
+SCHEMA += _LIFECYCLE_TRIGGER + '''
 CREATE TRIGGER IF NOT EXISTS proposals_request_is_fixed BEFORE UPDATE OF kind, requested_credits, requested_usd, agent_id ON proposals
     WHEN NEW.kind IS NOT OLD.kind OR NEW.requested_credits IS NOT OLD.requested_credits
       OR NEW.requested_usd IS NOT OLD.requested_usd OR NEW.agent_id IS NOT OLD.agent_id
@@ -123,8 +136,15 @@ def quorum_percent() -> int:
     return _setting("LIVE_PROPOSAL_QUORUM_PERCENT", 50, 1, 100)
 
 
+def report_rounds() -> int:
+    """Rounds after approval within which the author must send proposal_report (default 10).
+    A project approved in round R lapses when round R + report_rounds() opens."""
+    return _setting("LIVE_PROPOSAL_REPORT_ROUNDS", 10, 1, 500)
+
+
 def rules() -> dict[str, int]:
-    return {"discussion_rounds": discussion_rounds(), "voting_rounds": voting_rounds(), "quorum_percent": quorum_percent()}
+    return {"discussion_rounds": discussion_rounds(), "voting_rounds": voting_rounds(), "quorum_percent": quorum_percent(),
+            "report_rounds": report_rounds()}
 
 
 # ---- Schema ----------------------------------------------------------------------------
@@ -143,6 +163,9 @@ def migrate(cx: sqlite3.Connection) -> None:
         if column not in present:
             cx.execute(f"ALTER TABLE proposals ADD COLUMN {column} {declaration}")
     cx.executescript(SCHEMA)
+    trigger = cx.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='proposals_lifecycle'").fetchone()
+    if "'LAPSED'" not in trigger[0]:  # trigger from before LAPSED existed: replace it
+        cx.executescript("BEGIN IMMEDIATE; DROP TRIGGER IF EXISTS proposals_lifecycle;" + _LIFECYCLE_TRIGGER + "COMMIT;")
     current = cx.execute("SELECT MAX(id) FROM rounds").fetchone()[0]
     if current is not None:
         cx.execute("UPDATE proposals SET created_round=? WHERE created_round IS NULL", (current,))
@@ -216,15 +239,36 @@ def _decide(cx: sqlite3.Connection, proposal: sqlite3.Row, why: str, *, round_id
     return to
 
 
+def _lapse(cx: sqlite3.Connection, proposal: sqlite3.Row, limit: int, *, round_id: int, stamp: str) -> None:
+    """Close an approved project nobody reported on. Mirrors proposal_report: the whole allocation
+    balance (earmark plus direct contributions) returns to the commons pool; nobody is refunded
+    individually and nobody is penalized. Does not depend on the author being enabled."""
+    held = ledger.balance(cx, ("allocation", proposal["id"]))
+    if held:
+        ledger.transfer(cx, ("allocation", proposal["id"]), ledger.COMMONS, held, "allocation_lapsed", ref_kind="proposal",
+                        ref_id=proposal["id"], round_id=round_id, demo=bool(proposal["demo"]), stamp=stamp)
+    _transition(cx, proposal, "LAPSED", f"no completion report within {limit} round(s) of approval; "
+                f"{held} earmarked credits returned to the commons pool", round_id=round_id, stamp=stamp, system_event=True)
+
+
 def on_round_open(cx: sqlite3.Connection, round_id: int, stamp: str | None = None) -> list[tuple[int, str]]:
     """core.open_round hook, inside the transaction that inserted round `round_id`.
 
-    Deterministic, in proposal-id order: first close votes whose window has ended, then move
-    proposals that have had their full discussion rounds to VOTING. Each proposal changes at
-    most once per round opening; one that just entered VOTING cannot be closed by the same call.
+    Deterministic, in proposal-id order: first lapse approved projects whose report window has
+    ended (their credits are back in the pool before any new earmark is decided), then close
+    votes whose window has ended, then move proposals that have had their full discussion rounds
+    to VOTING. Each proposal changes at most once per round opening; one that just entered
+    VOTING cannot be closed by the same call, and one just approved cannot lapse in it. Calling
+    it again for the same round changes nothing.
     """
     stamp = stamp or _stamp()
     changed: list[tuple[int, str]] = []
+    limit = report_rounds()
+    marks = ",".join("?" * len(OPEN_ALLOCATION))
+    for proposal in cx.execute(f"SELECT * FROM proposals WHERE kind='project' AND status IN ({marks}) ORDER BY id", OPEN_ALLOCATION).fetchall():
+        if proposal["decided_round"] is not None and round_id - proposal["decided_round"] >= limit:
+            _lapse(cx, proposal, limit, round_id=round_id, stamp=stamp)
+            changed.append((proposal["id"], "LAPSED"))
     window = voting_rounds()
     for proposal in cx.execute("SELECT * FROM proposals WHERE status='VOTING' ORDER BY id").fetchall():
         if proposal["voting_round"] is not None and round_id - proposal["voting_round"] >= window:
@@ -244,7 +288,7 @@ def _proposal(cx: sqlite3.Connection, proposal_id: Any) -> sqlite3.Row:
         raise HTTPException(422, "proposal_id integer required")
     proposal = cx.execute("SELECT * FROM proposals WHERE id=?", (proposal_id,)).fetchone()
     if not proposal:
-        raise HTTPException(404, "Proposal not found")
+        raise HTTPException(404, "Proposal not found. Use a proposal id from GET /api/agent/context.")
     return proposal
 
 
@@ -381,6 +425,7 @@ def status_note(proposal: dict[str, Any]) -> str:
         "EXPIRED": "Expired: the vote closed without a quorum.",
         "WITHDRAWN": "Withdrawn by its author before a decision.",
         "COMPLETED": "Reported complete by its author; earmarked credits went back to the commons pool.",
+        "LAPSED": "Lapsed: its author sent no completion report in time; earmarked credits went back to the commons pool.",
     }.get(status, "")
 
 
@@ -415,7 +460,8 @@ def annotate(cx: sqlite3.Connection, agent_id: int, items: list[dict[str, Any]])
         return items
     marks = ",".join("?" * len(items))
     ids = [item["id"] for item in items]
-    rows = {r["id"]: r for r in cx.execute(f"SELECT id,agent_id,kind,status,requested_credits FROM proposals WHERE id IN ({marks})", ids)}
+    rows = {r["id"]: r for r in cx.execute(f"SELECT id,agent_id,kind,status,requested_credits,decided_round FROM proposals WHERE id IN ({marks})", ids)}
+    round_id, limit = cx.execute("SELECT MAX(id) FROM rounds").fetchone()[0], report_rounds()
     mine = {r[0]: r[1] for r in cx.execute(f"SELECT proposal_id,choice FROM votes WHERE agent_id=? AND proposal_id IN ({marks})", [agent_id, *ids])}
     for item in items:
         row = rows[item["id"]]
@@ -427,7 +473,11 @@ def annotate(cx: sqlite3.Connection, agent_id: int, items: list[dict[str, Any]])
                     else f"you voted {mine[row['id']]}; may change until voting closes" if row["id"] in mine else "vote yes or no")
         elif status in OPEN_ALLOCATION:
             room = row["requested_credits"] - ledger.balance(cx, ("allocation", row["id"]))
-            step = ("proposal_report when the work is done" if author else "nothing required") + (f"; contribute possible, {room} credits fit" if room > 0 else "")
+            left = max(0, (row["decided_round"] or round_id) + limit - round_id)  # round openings until it lapses
+            step = (("proposal_report when done" if author else "nothing required") + f" (lapses in {left} rounds)"
+                    + (f"; contribute possible, {room} credits fit" if room > 0 else ""))
+        elif status == "LAPSED":
+            step = "closed: lapsed without a report, no action possible"
         elif status == "ENDORSED_FOR_OPERATOR_REVIEW":
             step = "none: awaiting human operator review; no money requested or authorized"
         else:

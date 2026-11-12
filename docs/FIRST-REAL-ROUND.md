@@ -24,8 +24,10 @@ python -m live_genesis.cli reconcile            # free: shows the ceilings that 
 python -m live_genesis.cli round --agents 3     # PAID: one call per agent, at most 3 calls
 python -m live_genesis.cli status
 ```
-Each call reserves a worst-case estimate first (about $0.003 at the example rates), so three
-agents can commit at most about one cent.
+Each call reserves a worst-case estimate first, sized from the prompt actually sent (one input
+token per UTF-8 byte of instructions and context, plus a full-length reply): about $0.002 to
+$0.003 for an ordinary world and never more than about $0.006 at the example rates, so three
+agents can commit at most about two cents.
 
 ## If a call fails
 The round stops and later rounds are refused. Look up the charge on the provider's billing

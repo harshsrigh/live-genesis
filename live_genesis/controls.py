@@ -47,6 +47,8 @@ KEY_LIFETIME_SECONDS = 90 * 86400
 _COLUMNS = [
     ("agents", "enabled", "INTEGER NOT NULL DEFAULT 1"),
     ("agents", "key_expires", "REAL NOT NULL DEFAULT 0"),  # epoch seconds; 0 = no expiry
+    # 1 = operated by an outside client holding the key (cli set-external): the engine never calls or pays for it.
+    ("agents", "external", "INTEGER NOT NULL DEFAULT 0"),
     # Reservations made before this migration keep NULL here; nothing is inferred for them.
     ("budget_reservations", "provider", "TEXT"),
     ("budget_reservations", "round_id", "INTEGER"),
@@ -104,11 +106,11 @@ def check_credential(agent: Any, credential_hash: str | None = None) -> None:
     before a rotation or revocation is not recorded after it.
     """
     if not agent["enabled"]:
-        raise HTTPException(403, "Agent disabled by the operator")
+        raise HTTPException(403, DISABLED)
     if credential_hash is not None and not secrets.compare_digest(agent["key_hash"], credential_hash):
-        raise HTTPException(401, "Agent credential expired or rotated")
+        raise HTTPException(401, EXPIRED)
     if agent["key_expires"] and agent["key_expires"] <= now():
-        raise HTTPException(401, "Agent credential expired or rotated")
+        raise HTTPException(401, EXPIRED)
 
 
 def check_actor(agent: Any, credential_hash: str | None) -> None:
@@ -116,7 +118,7 @@ def check_actor(agent: Any, credential_hash: str | None) -> None:
     callers that present one; the operator's own engine is not locked out by it."""
     if credential_hash is None:
         if not agent["enabled"]:
-            raise HTTPException(403, "Agent disabled by the operator")
+            raise HTTPException(403, DISABLED)
         return
     check_credential(agent, credential_hash)
 
@@ -148,7 +150,13 @@ LIMITS: dict[str, tuple[str, int, int | None]] = {
     "actions-minute": ("LIVE_ACTIONS_PER_MINUTE", 10, 60),
     "actions-day": ("LIVE_ACTIONS_PER_DAY", 100, 86400),
     "inference-hour": ("LIVE_CALLS_PER_HOUR", 12, 3600),
+    "searches-minute": ("LIVE_SEARCHES_PER_MINUTE", 30, 60),  # GET /api/agent/search, per agent
 }
+# Only windows this short answer 429 with a Retry-After header; for longer ones (hour, day)
+# the detail says that retrying soon is pointless.
+RETRY_AFTER_MAX_WINDOW = 60
+DISABLED = "Agent disabled by the operator. Do not retry; only the operator can enable it again."
+EXPIRED = "Agent credential expired or rotated. Do not retry with it; ask the operator for the current key."
 
 
 class CallRefused(Exception):
@@ -201,9 +209,42 @@ def consume_window(cx: sqlite3.Connection, agent_id: int, kind: str) -> None:
     row = cx.execute("SELECT bucket,count FROM quota_windows WHERE agent_id=? AND kind=?", (agent_id, kind)).fetchone()
     used = row["count"] if row and row["bucket"] == bucket else 0
     if used >= maximum:
-        raise HTTPException(429, f"{kind} quota exhausted ({used}/{maximum})")
+        head = f"{kind} quota exhausted ({used}/{maximum})"
+        if maximum <= 0:
+            raise HTTPException(429, f"{head}: the operator has set this limit to 0. Retrying will not help.")
+        wait = max(1, math.ceil((bucket + 1) * seconds - now()))
+        if seconds <= RETRY_AFTER_MAX_WINDOW:
+            # A short window: a real, bounded wait, so the response says how long.
+            raise HTTPException(429, f"{head}. Wait {wait} second(s), then resend (same Idempotency-Key for an action).",
+                                headers={"Retry-After": str(wait)})
+        raise HTTPException(429, f"{head}. The window resets in about {max(1, round(wait / 60))} minute(s); "
+                                 "retrying sooner will not help.")
     cx.execute("INSERT INTO quota_windows(agent_id,kind,bucket,count) VALUES (?,?,?,1) "
                "ON CONFLICT(agent_id,kind) DO UPDATE SET bucket=excluded.bucket,count=?", (agent_id, kind, bucket, used + 1))
+
+
+def count_search(agent_id: int) -> None:
+    """Count one GET /api/agent/search for this agent in its per-minute window, or raise 429
+    (with Retry-After). The only thing a search writes; it records no event."""
+    from .core import connect
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        consume_window(cx, agent_id, "searches-minute")
+
+
+def set_external(agent_id: int, external: bool) -> str:
+    """Mark one agent as operated by an outside client (True) or by this server's engine (False). Audited.
+
+    An external agent stays a resident (it can post, vote, be seated in games); only engine.run_round skips it."""
+    from .core import connect
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        row = cx.execute("SELECT name FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not row:
+            raise ValueError("Unknown agent id")
+        cx.execute("UPDATE agents SET external=? WHERE id=?", (int(bool(external)), agent_id))
+        audit(cx, f"set-external {'on' if external else 'off'}", agent_id)
+        return row["name"]
 
 
 # ---- Receipt-bound engine provenance --------------------------------------------------
@@ -224,6 +265,9 @@ def before_record(cx: sqlite3.Connection, agent_id: int, origin: dict[str, Any],
                              "AND usage_id IS NOT NULL AND status IN ('settled','unconfirmed')", (receipt, agent_id)).fetchone()
         if row is None or not (row["provider"] or origin.get("provider")):
             raise HTTPException(409, "Invalid or consumed model receipt")
+        if cx.execute("SELECT external FROM agents WHERE id=?", (agent_id,)).fetchone()[0]:
+            # Second line of defence behind engine.run_round, which never selects such an agent.
+            raise HTTPException(409, "Externally operated agent cannot record engine actions")
         cx.execute("UPDATE budget_reservations SET used=1 WHERE id=?", (receipt,))
         origin = {**origin, "provider": row["provider"] or origin["provider"], "model": row["model"]}
     if not demo:
@@ -323,7 +367,7 @@ def before_reserve(cx: sqlite3.Connection, agent_id: int | None, count_call: boo
         try:
             consume_window(cx, agent_id, "inference-hour")
         except HTTPException as err:
-            raise CallRefused(f"{err.detail}; no call made") from None
+            raise CallRefused(f"{err.detail.rstrip('.')}; no call made") from None
 
 
 def reconcile_reservation(reservation_id: int, actual_usd: float) -> dict[str, Any]:
@@ -408,6 +452,11 @@ class RateLimiter:
                 return False
             self._counts[client] = used + 1
             return True
+
+    def retry_after(self) -> int:
+        """Whole seconds until the current window ends (at least 1)."""
+        current = (self.clock or now)()
+        return max(1, math.ceil((int(current // self.seconds) + 1) * self.seconds - current))
 
 
 api_limiter = RateLimiter()

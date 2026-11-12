@@ -363,7 +363,7 @@
 .status-badge.status-approved, .status-badge.status-completed { border-color: #2f6460; background: #12302f; color: #98e3d3; }
 .status-badge.status-approved-unfunded { border-color: #6a5a2d; background: #2c2613; color: #e6cf8a; }
 .status-badge.status-endorsed-for-operator-review { border-color: #5a4a86; background: #251d3d; color: #cdb6f8; }
-.status-badge.status-rejected, .status-badge.status-expired, .status-badge.status-withdrawn { border-color: #5b3a4b; background: #2a1823; color: #e6a2bc; }
+.status-badge.status-rejected, .status-badge.status-expired, .status-badge.status-withdrawn, .status-badge.status-lapsed { border-color: #5b3a4b; background: #2a1823; color: #e6a2bc; }
 .lifecycle-facts {
   display: flex;
   flex-wrap: wrap;

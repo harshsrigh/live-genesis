@@ -507,7 +507,7 @@ def test_context_is_bounded_and_prompt_stays_valid_at_maximum_sizes(isolated_db)
         assert entry['focus']['complete'] is False and len(entry['focus']['body']) <= documents.CONTEXT_EXCERPT
         assert len(entry['recent']) <= documents.CONTEXT_DOCUMENTS
         prompt = engine.build_prompt(context)
-        assert len(prompt) <= engine.PROMPT_CHAR_LIMIT
+        assert len(prompt.encode()) <= engine.PROMPT_BYTE_LIMIT
         parsed = json.loads(prompt)
         assert parsed['documents'] == entry and parsed['games'] == context['games']
         assert parsed['recent_posts'] and parsed['proposals']    # documents did not crowd everything else out
@@ -709,7 +709,7 @@ def test_revoked_agent_cannot_edit(isolated_db):
     before = counts()
     open_round()
     edit = {'action': 'doc_revise', 'document_id': doc, 'base_revision': 1, 'body': V2, 'summary': 'Should not land'}
-    assert rejected(403, submit_action, b, edit).detail == 'Agent disabled by the operator'          # engine path (no bearer key)
+    assert rejected(403, submit_action, b, edit).detail.startswith('Agent disabled by the operator')        # engine path (no bearer key)
     rejected(403, submit_action, b, {'action': 'doc_create', 'title': 'Nope', 'body': V2})
     rejected(403, submit_action, b, {'action': 'doc_revert', 'document_id': doc, 'base_revision': 1, 'revision': 1})
     with TestClient(app) as client:

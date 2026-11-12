@@ -434,7 +434,7 @@ def test_overrun_reconciled_to_a_different_figure_and_release_open(isolated_db):
 
 def test_engine_overrun_records_the_paid_action_then_stops(isolated_db,monkeypatch):
     seed_agents()
-    called=fake_provider(monkeypatch,tokens=(50000,650))  # above the 12,000-token bound that was held
+    called=fake_provider(monkeypatch,tokens=(50000,650))  # above the byte-bound hold for the prompt sent
     out=engine.run_round(limit=3)
     assert called==['Astra'] and out[0]['action']=='post' and 'reconcile' in out[1]['error']
     status=budget_status()
@@ -525,7 +525,7 @@ def test_window_quotas_with_injected_clock(isolated_db,monkeypatch,clock):
 def test_window_defaults_and_unreadable_values(isolated_db,monkeypatch):
     for name in ('LIVE_ACTIONS_PER_MINUTE','LIVE_ACTIONS_PER_DAY','LIVE_CALLS_PER_HOUR'):
         monkeypatch.delenv(name)
-    assert [controls.default_limit(k) for k in sorted(controls.LIMITS)]==[100,10,1,12]
+    assert [controls.default_limit(k) for k in sorted(controls.LIMITS)]==[100,10,1,12,30]
     monkeypatch.setenv('LIVE_ACTIONS_PER_MINUTE','lots')
     monkeypatch.setenv('LIVE_ACTIONS_PER_DAY','-5')
     assert controls.default_limit('actions-minute')==10 and controls.default_limit('actions-day')==1

@@ -78,10 +78,10 @@ def test_every_verb_of_submit_action_is_in_the_guide_and_the_schema(isolated_db)
         try:
             core.submit_action(agent['id'], {'action': verb})
         except Exception as err:
-            assert getattr(err, 'detail', '') != 'Unknown action', verb
+            assert not str(getattr(err, 'detail', '')).startswith('Unknown action'), verb
     with pytest.raises(Exception) as refused:
         core.submit_action(agent['id'], {'action': 'not_a_verb'})
-    assert refused.value.detail == 'Unknown action'
+    assert refused.value.detail.startswith('Unknown action. Valid actions: ') and 'not_a_verb' not in refused.value.detail
 
 
 def test_action_specs_use_only_real_request_fields():
