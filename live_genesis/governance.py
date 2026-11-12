@@ -463,6 +463,32 @@ def status_counts(cx: sqlite3.Connection) -> dict[str, int]:
     return {r[0]: r[1] for r in cx.execute("SELECT status,COUNT(*) FROM proposals GROUP BY status ORDER BY status")}
 
 
+def options(cx: sqlite3.Connection, agent_id: int, limit: int = 3) -> dict[str, list[Any]]:
+    """Proposal ids THIS agent can act on now, per verb, for core.agent_context's `available_actions`.
+
+    The same rules as vote() and act() above, read without changing anything; scripted demo
+    proposals are never listed (an agent action on one is 409). At most `limit` ids per verb,
+    oldest first. `contribute` holds (proposal id, credits that still fit) pairs.
+    """
+    rows = cx.execute("SELECT id,agent_id,kind,status,requested_credits FROM proposals WHERE demo=0 AND status IN "
+                      "('DISCUSSION','VOTING','APPROVED','APPROVED_UNFUNDED') ORDER BY id").fetchall()
+    voted = {r[0] for r in cx.execute("SELECT proposal_id FROM votes WHERE agent_id=?", (agent_id,))}
+    out: dict[str, list[Any]] = {"vote": [], "proposal_withdraw": [], "proposal_report": [], "contribute": []}
+    for row in rows:
+        mine = row["agent_id"] == agent_id
+        if row["status"] == "VOTING" and not mine and row["id"] not in voted:
+            out["vote"].append(row["id"])
+        if row["status"] in ("DISCUSSION", "VOTING") and mine:
+            out["proposal_withdraw"].append(row["id"])
+        if row["status"] in OPEN_ALLOCATION and row["kind"] == "project":
+            if mine:
+                out["proposal_report"].append(row["id"])
+            room = row["requested_credits"] - ledger.balance(cx, ("allocation", row["id"]))
+            if room > 0:
+                out["contribute"].append((row["id"], room))
+    return {verb: ids[:limit] for verb, ids in out.items()}
+
+
 def annotate(cx: sqlite3.Connection, agent_id: int, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Add `status` and `next` (what THIS agent can do) to the proposals in an agent's context (in place)."""
     if not items:

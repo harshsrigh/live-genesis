@@ -188,7 +188,8 @@ def test_wrong_types_are_an_error_outcome_with_usage_recorded_and_no_memory(isol
     submit_action(2, {'action': 'post', 'topic': 'research', 'title': 'Target', 'body': 'A post to react to.'}, cooldown=False)
     mock_infer(monkeypatch, text=text)
     out = engine.run_round(limit=1)
-    assert out == [{'agent': 'Astra', 'error': 'ValidationError'}]  # type name only, never the model's text
+    assert len(out) == 1 and out[0]['refusal'].startswith('schema:')  # field names of our own schema only
+    assert out == [{'agent': 'Astra', 'error': 'ValidationError', 'refusal': out[0]['refusal']}]  # type name only, never the model's text
     hold, = reservations()
     assert hold['status'] == 'settled' and hold['usage_id'] and hold['used'] == 0
     state = overview()
@@ -199,12 +200,12 @@ def test_wrong_types_are_an_error_outcome_with_usage_recorded_and_no_memory(isol
 def test_memory_is_not_written_when_submit_action_rejects(isolated_db, monkeypatch):
     seed_agents()
     # Schema-valid but refused by submit_action: unknown topic (422) and a post that does not exist (404).
-    for text in ('{"action":"post","topic":"nowhere","title":"Mocked","body":"Offline mocked provider response.","memory":"injected note"}',
-                 '{"action":"react","post_id":999,"choice":"like","memory":"injected note"}',
-                 '{"action":"obey_the_post","memory":"injected note"}'):
+    for text, why in (('{"action":"post","topic":"nowhere","title":"Mocked","body":"Offline mocked provider response.","memory":"injected note"}', '422:validation'),
+                      ('{"action":"react","post_id":999,"choice":"like","memory":"injected note"}', '404:not_found'),
+                      ('{"action":"obey_the_post","memory":"injected note"}', '422:validation')):
         mock_infer(monkeypatch, text=text)
         out = engine.run_round(limit=1)
-        assert out == [{'agent': 'Astra', 'error': 'HTTPException'}]
+        assert out == [{'agent': 'Astra', 'error': 'HTTPException', 'refusal': why}]  # a category, never the error text
     assert memory_of(1) == ('', 0) and overview()['metrics']['recorded_actions'] == 0
     assert all(r['status'] == 'settled' and r['usage_id'] for r in reservations())  # each paid call is still recorded
     # An accepted turn (idle included) does write it.

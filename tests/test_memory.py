@@ -235,7 +235,7 @@ def test_large_world_context_blends_recent_relevant_and_open_business(isolated_d
     assert proposals[2] == 'unvoted' and astra['proposals'][1]['id'] == 2  # open business right after the newest item
     assert set(posts.values()) <= {'recent', 'relevant', 'unvoted', 'yours'}
     # Same fields as before, plus `why` (and, for proposals, the lifecycle `status` and `next`).
-    assert list(astra['recent_posts'][0]) == ['id', 'topic', 'title', 'body', 'author', 'likes', 'dislikes', 'why']
+    assert list(astra['recent_posts'][0]) == ['id', 'reply_to', 'topic', 'title', 'body', 'author', 'likes', 'dislikes', 'why']
     assert list(astra['proposals'][0]) == ['id', 'title', 'body', 'kind', 'requested_usd', 'requested_credits', 'author', 'yes', 'no', 'why', 'status', 'next']
     assert [p for p in astra['recent_posts'] if p['id'] == 2][0]['likes'] == 1
     # A different role gets a different older selection but the same newest items.
@@ -261,7 +261,7 @@ def test_voted_proposals_show_counts_and_memory_changes_selection(isolated_db):
 
 def legacy_sets():
     with connect() as cx:
-        posts = [dict(r) for r in cx.execute('''SELECT p.id,p.topic,p.title,p.body,a.name author,
+        posts = [dict(r) for r in cx.execute('''SELECT p.id,p.reply_to,p.topic,p.title,p.body,a.name author,
            COALESCE(SUM(CASE WHEN r.choice='like' THEN 1 ELSE 0 END),0) likes,
            COALESCE(SUM(CASE WHEN r.choice='dislike' THEN 1 ELSE 0 END),0) dislikes
            FROM posts p JOIN agents a ON p.agent_id=a.id LEFT JOIN reactions r ON r.post_id=p.id
@@ -283,6 +283,9 @@ def test_small_world_returns_the_same_items_as_before(isolated_db, tmp_path, mon
     seed_agents()  # ten agents exist, so demo() writes no key file
     empty = agent_context(1)
     assert empty['recent_posts'] == [] and empty['proposals'] == [] and empty['memory_notes'] == []
+    # The scripted thread (two replies) would make 9 posts, one more than a context shows: left out here,
+    # because this test is about a world small enough to be shown whole.
+    monkeypatch.setattr('live_genesis.cli.demo_thread', lambda ids, recorded: None)
     demo()  # scripted sample world: 7 posts, 3 proposals, reactions and votes
     old_posts, old_proposals = legacy_sets()
     for agent_id in ids_by_name().values():

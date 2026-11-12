@@ -296,7 +296,7 @@ def test_engine_round_can_play_a_move(isolated_db, monkeypatch):
     monkeypatch.setattr(engine, 'infer', lambda provider, model, prompt: engine.Completion('{"action":"game_start","memory":"started"}', 10, 5))
     outcomes = engine.run_round(limit=2)
     assert outcomes[0]['action'] == 'game_start' and outcomes[0]['game_id'] == 1
-    assert outcomes[1] == {'agent': 'Moss', 'error': 'HTTPException'}      # second start rejected, nothing recorded
+    assert outcomes[1] == {'agent': 'Moss', 'error': 'HTTPException', 'refusal': '409:conflict'}      # second start rejected, nothing recorded
     game = overview()['games'][0]
     assert game['source'] == 'engine' and len(game['moves']) == 1 and game['moves'][0]['model'] == 'test-model-1'
 

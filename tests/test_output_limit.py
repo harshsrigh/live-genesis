@@ -188,7 +188,7 @@ def test_unknown_stop_falls_through_to_the_json_check(isolated_db, monkeypatch):
                       'estimated_usd': out[0]['estimated_usd'], 'reservation': out[0]['reservation']}
     assert engine.NOT_JSON == 'reply was not one valid JSON object'
     assert out[1]['action'] == 'post'
-    assert out[2] == {'agent': 'Quill', 'error': 'ValidationError'}  # schema failure keeps its own error
+    assert out[2] == {'agent': 'Quill', 'error': 'ValidationError', 'refusal': 'schema:proposal_id'}  # schema failure keeps its own error
     assert out[3]['error'] == engine.NOT_JSON
     assert [(t['outcome'], t['stop']) for t in rows('engine_turns')] == [
         ('invalid_json', 'unknown'), ('recorded', 'unknown'), ('invalid_schema', 'end'), ('invalid_json', 'other')]
@@ -368,7 +368,7 @@ def test_turns_table_is_append_only_and_survives_a_second_init(isolated_db, monk
             cx.execute("INSERT INTO engine_turns(round_id,agent_id,outcome,created_at) VALUES (1,1,'some model text','now')")
         columns = [r[1] for r in cx.execute('PRAGMA table_info(engine_turns)')]
     assert columns == ['id', 'round_id', 'agent_id', 'reservation_id', 'outcome', 'stop', 'input_tokens', 'output_tokens',
-                       'memory', 'memory_refusal', 'created_at']
+                       'memory', 'memory_refusal', 'created_at', 'refusal']
     assert count('engine_turns') == 1
 
 
@@ -441,3 +441,114 @@ def test_study_keeps_its_own_default_and_records_the_stop_value(isolated_db, mon
     stops = [c['stop'] for c in rows('study_calls')]
     assert stops[0] == 'length' and set(stops[1:]) == {'unknown'}
     assert 'cut off at the output limit of 650 tokens' in study.render_markdown(study.report(done['run_id']))
+
+# ---- 6. Why a paid turn recorded nothing: engine_turns.refusal ------------------------------
+
+MARK = 'PLANTED-MODEL-TEXT'
+
+
+def test_refused_and_malformed_turns_store_a_category_never_the_text(isolated_db, monkeypatch):
+    monkeypatch.setenv('LIVE_DUPLICATE_GUARD', '1')
+    seed_agents()
+    engine.submit_action(8, {'action': 'post', 'title': 'Said once', 'body': 'A text that will be sent a second time.'})  # Nori, earlier round
+    controls.set_limit(7, 'actions-round', 0)  # Echo-7: the operator blocked its round quota
+    replies = {
+        'Astra': {'action': 'vote', 'proposal_id': 999, 'choice': 'yes'},
+        'Moss': {'action': 'post', 'topic': MARK, 'title': 'T', 'body': f'Body with {MARK} inside.'},
+        'Quill': {'action': 'post', 'title': 'Mail', 'body': f'{MARK} write to planted.person@example.org today.'},
+        'Vela': {'action': 'react', 'post_id': MARK, 'choice': 'like', 'amount': 'ten'},
+        'Orbit': {'action': 'contribute', 'amount': 500},
+        'Kairo': {'action': 'post', 'title': 'Fine', 'body': 'An ordinary accepted post.'},
+        'Echo-7': {'action': 'post', 'title': 'Blocked', 'body': f'{MARK} never recorded.'},
+        'Nori': {'action': 'post', 'title': 'Said once', 'body': 'A text that will be sent a second time.'},
+        'Lumen': {'action': MARK},
+        'Solace': {'action': 'doc_revise', 'document_id': 1, 'base_revision': 1, 'body': MARK, 'summary': MARK},
+    }
+    mock_infer(monkeypatch, lambda name, prompt: engine.Completion(json.dumps({**replies[name], 'memory': MARK}), 100, 20, 'end'))
+    out = engine.run_round(limit=10)
+    expected = {
+        'Astra': ('action_refused', '404:not_found'),
+        'Moss': ('action_refused', '422:validation'),
+        'Quill': ('action_refused', '422:guard:looks like an email address'),
+        'Vela': ('invalid_schema', 'schema:amount,post_id'),
+        'Orbit': ('action_refused', 'contribute_cap'),
+        'Kairo': ('recorded', None),
+        'Echo-7': ('action_refused', '429:quota'),
+        'Nori': ('action_refused', '409:guard:duplicate of content you already published'),
+        'Lumen': ('action_refused', '422:validation'),
+        'Solace': ('action_refused', '404:not_found'),
+    }
+    turns = rows('engine_turns')
+    with connect() as cx:
+        names = {r['id']: r['name'] for r in cx.execute('SELECT id,name FROM agents')}
+    assert {names[t['agent_id']]: (t['outcome'], t['refusal']) for t in turns} == expected
+    # The printed outcome of the round names the same category for that agent.
+    assert {o['agent']: o.get('refusal') for o in out} == {name: why for name, (_, why) in expected.items()}
+    assert all('refusal' not in o for o in out if o.get('action'))
+    # Nothing the model wrote is in the diagnostics or the outcomes: no body, no topic, no address, no bad value.
+    for text in (json.dumps(turns), json.dumps(out)):
+        assert MARK not in text and 'example.org' not in text and '"ten"' not in text and 'never recorded' not in text
+    assert all(t['memory'] == 'none' for t in turns if t['outcome'] != 'recorded')
+    assert all(t['reservation_id'] and t['input_tokens'] == 100 for t in turns)  # each of these turns was paid for
+    shown = controls.turns()
+    assert shown['outcomes'] == {'action_refused': 8, 'invalid_schema': 1, 'recorded': 1}
+    assert [t['refusal'] for t in shown['turns']] == [expected[t['agent']][1] for t in shown['turns']]
+
+
+def test_refusal_category_uses_a_fixed_vocabulary():
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+    from live_genesis import guards
+    from live_genesis.action_schema import ActionRequest
+    assert engine.refusal_category(HTTPException(422, f'detail that quotes {MARK}')) == '422:validation'
+    assert engine.refusal_category(HTTPException(403, MARK)) == '403:forbidden'
+    assert engine.refusal_category(HTTPException(418, MARK)) == '418:other'
+    assert engine.refusal_category(guards.refusal('looks like a phone number')) == '422:guard:looks like a phone number'
+    assert engine.refusal_category(guards.refusal("duplicate of another agent's recent content", 409)) == "409:guard:duplicate of another agent's recent content"
+    assert engine.refusal_category(RuntimeError(MARK)) == 'error:RuntimeError'
+    with pytest.raises(ValidationError) as err:
+        ActionRequest.model_validate({'title': [MARK], 'answer': [MARK], 'dry_run': MARK})
+    assert engine.refusal_category(err.value) == 'schema:action,answer,dry_run,title'  # field names of our schema only
+    # Every guard category that can reach the column fits its shape; anything else is stored as 'unrecognised'.
+    for reason in ('looks like an email address', 'looks like an API key or credential', 'looks like a bank account number (IBAN)',
+                   'contains a payment or donation link', 'is mostly one repeated word', "duplicate of another agent's recent content"):
+        assert controls.REFUSAL_SHAPE.fullmatch(f'409:guard:{reason}')
+
+
+def test_record_turn_refuses_to_store_free_text_as_a_refusal(isolated_db):
+    seed_agents()
+    controls.record_turn(1, 1, 'action_refused', refusal='409:conflict')
+    controls.record_turn(1, 1, 'action_refused', refusal='The model wrote: {"hello": "world"} <script>')
+    controls.record_turn(1, 1, 'action_refused', refusal='x' * 121)
+    controls.record_turn(1, 1, 'action_refused', refusal=['a', 'list'])
+    controls.record_turn(1, 1, 'recorded')
+    assert [t['refusal'] for t in rows('engine_turns')] == ['409:conflict', 'unrecognised', 'unrecognised', 'unrecognised', None]
+
+
+def test_existing_turns_table_gains_the_refusal_column(isolated_db, monkeypatch):
+    seed_agents()
+    with connect() as cx:
+        cx.execute('ALTER TABLE engine_turns DROP COLUMN refusal')  # the table as it was first shipped
+        cx.execute("INSERT INTO engine_turns(round_id,agent_id,outcome,created_at) VALUES (1,1,'action_refused','earlier')")
+        assert 'refusal' not in [r[1] for r in cx.execute('PRAGMA table_info(engine_turns)')]
+    init_db()
+    init_db()  # repeatable
+    assert [(t['outcome'], t['refusal']) for t in rows('engine_turns')] == [('action_refused', None)]  # old rows read NULL
+    with connect() as cx:
+        with pytest.raises(sqlite3.DatabaseError, match='append-only'):  # the triggers are still there
+            cx.execute("UPDATE engine_turns SET refusal='x'")
+    mock_infer(monkeypatch, lambda name, prompt: engine.Completion('{"action":"vote","proposal_id":999,"choice":"yes"}', 100, 20, 'end'))
+    engine.run_round(limit=1)
+    assert rows('engine_turns')[-1]['refusal'] == '404:not_found'
+
+
+def test_cli_turns_shows_the_refusal(isolated_db, monkeypatch, capsys):
+    seed_agents()
+    mock_infer(monkeypatch, lambda name, prompt: engine.Completion(json.dumps({'action': 'react', 'post_id': 999, 'choice': 'like', 'memory': MARK}), 100, 20, 'end'))
+    out = engine.run_round(limit=1)
+    assert out == [{'agent': 'Astra', 'error': 'HTTPException', 'refusal': '404:not_found'}]
+    monkeypatch.setattr(sys, 'argv', ['cli', 'turns'])
+    cli.main()
+    printed = capsys.readouterr().out
+    turn, = json.loads(printed)['turns']
+    assert (turn['agent'], turn['outcome'], turn['refusal']) == ('Astra', 'action_refused', '404:not_found') and MARK not in printed

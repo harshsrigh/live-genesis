@@ -226,6 +226,6 @@ def test_demo_still_succeeds_with_guards_on(isolated_db,monkeypatch):
     monkeypatch.setenv('LIVE_DUPLICATE_GUARD','1')
     demo()
     state=overview()
-    assert state['metrics']['posts']==7 and state['metrics']['proposals']==3
+    assert state['metrics']['posts']==9 and state['metrics']['proposals']==3  # 7 posts and 2 scripted replies
     assert state['mode']=='DEMO'
     assert agent_context(1)['round']['actions_used']==0

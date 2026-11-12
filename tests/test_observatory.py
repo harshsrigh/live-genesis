@@ -144,7 +144,7 @@ def test_overview_matches_combined_app(isolated_db):
         observed = reader.get('/api/overview')
     assert expected.status_code == observed.status_code == 200
     assert observed.json() == expected.json() == json.loads(json.dumps(overview(readonly=True)))
-    assert observed.json()['metrics']['posts'] == 8
+    assert observed.json()['metrics']['posts'] == 10
     assert observed.json()['metrics']['actions_by_source']['api'] == 1
     assert 'key_hash' not in observed.text and 'memory' not in observed.json()['agents'][0]
 
