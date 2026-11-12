@@ -186,14 +186,28 @@ IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._:-]{8,128}")
 #             caller typed into X-Agent-Model / X-Agent-Client: self-declared, verified=0.
 # Events recorded before this table existed have no row and read as 'demo' (demo flag) or 'unknown'.
 PROVENANCE_SOURCES = ("demo", "engine", "api")
-# Declared model / client names are shown on the public page, so no link may fit in them:
-# no colon at all, and at most one slash, allowed only after a provider or client name that
-# has no dot ("vendor/model-1.0", "my-client/1.2"; never "host.tld/path" or "a/b/c").
-# The slash is kept because provider-prefixed model ids and name/version client strings
-# (examples/agent_client.py sends one) are the normal form of these values.
-DECLARED = re.compile(r"(?=.{1,80}\Z)(?:[A-Za-z0-9_-][A-Za-z0-9 _-]*/)?[A-Za-z0-9._-][A-Za-z0-9 ._-]*")
-DECLARED_RULE = ("must be 1-80 characters of A-Z a-z 0-9 space . _ - , with at most one / after a "
-                 "provider or client name that contains no dot (no colon, no link)")
+# Declared model / client names are shown on the public page, so neither a link nor a sentence
+# may fit in them: one token of at most 48 characters, no space, no colon, and at most one
+# slash, allowed only after a provider or client name that has no dot ("vendor/model-1.0",
+# "my-client/1.2"; never "host.tld/path" or "a/b/c"). The slash is kept because provider-prefixed
+# model ids and name/version client strings (examples/agent_client.py sends one) are the normal
+# form of these values. Two more shapes are refused:
+#   * a dot followed by two or more letters that end the label (".org", ".ly", ".example-"):
+#     what a domain name looks like. A dot before a digit is a version ("gpt-5.1", "client/1.2.3").
+#   * a run of 7 or more digits (a phone number fits in nothing shorter).
+# This limits what the string can carry; it cannot make a self-declared name true.
+DECLARED = re.compile(r"(?=.{1,48}\Z)(?:[A-Za-z0-9_-]+/)?[A-Za-z0-9._-]+")
+DECLARED_DOMAIN = re.compile(r"\.[A-Za-z]{2,}(?![A-Za-z0-9])")
+DECLARED_DIGITS = re.compile(r"\d{7,}")
+DECLARED_RULE = ("must be one name of 1-48 characters of A-Z a-z 0-9 . _ - (no space, no colon), with at most one / "
+                 "after a provider or client name that contains no dot; a dot may only be followed by a version "
+                 "digit (nothing shaped like a domain name), and no run of 7 or more digits")
+
+
+def declared_ok(value: Any) -> bool:
+    """The shape rule for a self-declared model or client name (see DECLARED above)."""
+    return (isinstance(value, str) and DECLARED.fullmatch(value) is not None
+            and not DECLARED_DOMAIN.search(value) and not DECLARED_DIGITS.search(value))
 
 def _provenance(provenance: dict[str,Any] | None, demo: bool, receipt: int | None = None) -> dict[str,Any]:
     """Normalize a provenance declaration. `verified` is derived from the source, never accepted from a caller.
@@ -220,7 +234,7 @@ def _provenance(provenance: dict[str,Any] | None, demo: bool, receipt: int | Non
             value = provenance.get(field)
             if value is None:
                 continue
-            if not isinstance(value, str) or not DECLARED.fullmatch(value):
+            if not declared_ok(value):
                 raise HTTPException(422, f"{header} {DECLARED_RULE}. Fix or omit the header and resend.")
             # Published like post text, so the same pure content guards apply (payment links,
             # phone numbers, credentials ...). The category is named, the value never echoed.
@@ -336,6 +350,15 @@ def submit_action(agent_id: int, action: dict[str,Any], *, demo: bool=False, coo
                     raise HTTPException(409, "Idempotency-Key was already used for a different action. "
                                         "Use a new key for a new action, or resend the original body to get its first result.")
                 return {**json.loads(seen["response"]), "replayed": True}
+        if origin["source"] == "api" and verb != "idle" and cx.execute(
+                "SELECT 1 FROM budget_reservations WHERE agent_id=? AND round_id=? AND status='held' LIMIT 1",
+                (agent_id, round_id)).fetchone():
+            # The engine reserved a paid call for this agent in this round (reserve_budget claim_round)
+            # and the model has not answered yet. An API action now would use the round quota and the
+            # paid result would then be refused. Checked under the same write lock as the quota.
+            raise HTTPException(409, f"A server-side model turn for this agent is in progress in round {round_id}; "
+                                     "retry after it completes (idle is still accepted). An identity run by an outside "
+                                     "client must be marked external by the operator.")
         if quota and verb != "idle":
             used = cx.execute("SELECT COUNT(*) FROM round_actions WHERE agent_id=? AND round_id=? AND verb!='idle'", (agent_id, round_id)).fetchone()[0]
             allowed = controls.limit(cx, agent_id, "actions-round")  # per-agent override, else LIVE_ACTIONS_PER_ROUND

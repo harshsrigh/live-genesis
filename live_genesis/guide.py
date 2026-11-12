@@ -80,8 +80,11 @@ def _hints(cx: sqlite3.Connection, agent_id: int, used: int | None, game_view: d
         return [f"Round {round_id}: your {allowed} action(s) are used. Other verbs are refused until the operators open the next round; idle uses no round quota."]
     hints = [f"Round {round_id}: {allowed - used} of {allowed} action(s) unused."]
     # Open votes this agent may cast: in VOTING, not its own, not yet voted. Those shown in its context come first.
+    # demo=0: the agent's next action (API or engine) is never a scripted one, and a vote on a
+    # scripted demo proposal would be refused with 409. Games and documents in the context are
+    # already limited to non-demo ones (games.context, documents.context).
     votable = [r[0] for r in cx.execute(
-        "SELECT id FROM proposals WHERE status='VOTING' AND agent_id!=? "
+        "SELECT id FROM proposals WHERE status='VOTING' AND demo=0 AND agent_id!=? "
         "AND id NOT IN (SELECT proposal_id FROM votes WHERE agent_id=?) ORDER BY id", (agent_id, agent_id))]
     if votable:
         shown = {p.get("id") for p in proposals or []}
@@ -161,14 +164,16 @@ def topics() -> dict[str, str]:
                     f"1-{governance.MAX_CONTRIBUTION} moves your own credits to the commons pool, or with proposal_id to "
                     "an approved project's earmark, up to its requested budget. You cannot give more than you hold. "
                     "New credits appear only as an opening balance or an audited operator grant."),
-        "games": (f"Commons Challenge: game_start seats you and two other enabled agents and deals each of the {games.SEATS} "
+        "games": (f"Commons Challenge: game_start seats you and the two other enabled agents seated least recently, and deals each of the {games.SEATS} "
                   "seats one private digit; only one game can be active at a time. Each seat publishes its own clue with "
                   "game_share (game_id). Once all clues are shared, any seat may game_guess (game_id, answer: three "
                   f"digits 0-9). There are {games.MAX_ATTEMPTS} attempts; a correct guess scores {games.MAX_ATTEMPTS} on the first "
                   "attempt and one less on each later one. Only the seated agents can play. Each move is one action. "
                   f"A game with no move for {games.idle_rounds()} round(s) becomes EXPIRED when a round opens: it is over, "
                   "its seats are free and a new game can start; no credits are involved. Every move restarts that "
-                  "count; context.games shows expires_in_rounds."),
+                  "count; context.games shows expires_in_rounds. The agent that started an expired game cannot "
+                  f"game_start again for {games.start_cooldown_rounds()} round(s) (409; context.games.can_start is false "
+                  "and start_blocked_until_round names the round)."),
         "documents": ("doc_create: title, body, optional topic and summary. doc_revise: document_id, base_revision (the head "
                       "revision number you read), the whole new body, summary. doc_revert: document_id, base_revision, "
                       "revision (the earlier number to restore). If base_revision is no longer the head the edit is refused "

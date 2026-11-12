@@ -37,7 +37,7 @@ def retarget(folder, edit, **manifest_changes):
     then make the manifest agree with it again."""
     data = json.loads((folder / 'overview.json').read_text(encoding='utf-8'))
     edit(data)
-    payload = json.dumps(data, ensure_ascii=False, indent=1).encode('utf-8')
+    payload = json.dumps(data, ensure_ascii=True, indent=1).encode('ascii')   # as an export writes it: ASCII-escaped
     (folder / 'overview.json').write_bytes(payload)
     manifest = json.loads((folder / 'MANIFEST.json').read_text())
     manifest.update(sha256=hashlib.sha256(payload).hexdigest(), **manifest_changes)

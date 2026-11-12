@@ -319,7 +319,7 @@ def test_demo_game_on_empty_database(isolated_db, tmp_path, monkeypatch, capsys)
     cli.demo_game()
     out = capsys.readouterr().out
     assert 'NO model was called' in out and 'SCRIPTED' in out
-    assert (tmp_path / 'secrets' / 'agent-keys.json').exists()   # agents had to be created
+    assert cli.key_file().exists() and cli.key_file().parent == tmp_path / 'secrets'   # agents had to be created
     state = overview()
     game = state['games'][0]
     assert state['mode'] == 'DEMO'

@@ -33,6 +33,9 @@ VERBS = ("game_start", "game_share", "game_guess")
 MAX_ATTEMPTS = 3
 SEATS = 3
 IDLE_ROUNDS = 6  # default; see idle_rounds()
+# Rounds an agent must wait before game_start after a game IT started ended as EXPIRED
+# (inactivity or operator cancel). None: the same number as idle_rounds(). See start_cooldown_rounds().
+START_COOLDOWN_ROUNDS: int | None = None
 STATES = ("ACTIVE", "WON", "LOST", "EXPIRED")
 
 # `last_move_round`: round of the newest move (the start counts); the inactivity clock.
@@ -42,7 +45,7 @@ CREATE TABLE IF NOT EXISTS {name} (
     state TEXT NOT NULL DEFAULT 'ACTIVE' CHECK(state IN ('ACTIVE','WON','LOST','EXPIRED')),
     attempts INTEGER NOT NULL DEFAULT 0, score INTEGER NOT NULL DEFAULT 0,
     demo INTEGER NOT NULL DEFAULT 0 CHECK(demo IN (0,1)), created_at TEXT NOT NULL,
-    last_move_round INTEGER
+    last_move_round INTEGER, expired_round INTEGER
 );
 '''
 _ONE_ACTIVE = "CREATE UNIQUE INDEX IF NOT EXISTS games_one_active ON games(demo) WHERE state='ACTIVE'"
@@ -77,6 +80,25 @@ def idle_rounds() -> int:
         return IDLE_ROUNDS
 
 
+def start_cooldown_rounds() -> int:
+    """Rounds between the expiry of a game and the next game_start by the agent that started it."""
+    return idle_rounds() if START_COOLDOWN_ROUNDS is None else max(0, int(START_COOLDOWN_ROUNDS))
+
+
+def start_blocked_until(cx: sqlite3.Connection, agent_id: int) -> int | None:
+    """First round in which `agent_id` may send game_start again, or None when it is not blocked.
+
+    Blocked: a game this agent started ended as EXPIRED fewer than start_cooldown_rounds() rounds
+    ago. Games that expired before the round of expiry was recorded (`expired_round` NULL) do not count."""
+    row = cx.execute("""SELECT MAX(g.expired_round) FROM games g JOIN game_moves m ON m.game_id=g.id AND m.move='game_start'
+                        WHERE m.agent_id=? AND g.state='EXPIRED' AND g.demo=0 AND g.expired_round IS NOT NULL""",
+                     (agent_id,)).fetchone()
+    if row is None or row[0] is None:
+        return None
+    until = int(row[0]) + start_cooldown_rounds()
+    return until if until > int(cx.execute("SELECT MAX(id) FROM rounds").fetchone()[0]) else None
+
+
 def migrate(cx: sqlite3.Connection) -> None:
     """Create the game tables; repeatable. A `games` table from before EXPIRED existed is rebuilt
     once (SQLite cannot alter a CHECK): rows are copied unchanged and every still-active game
@@ -85,7 +107,13 @@ def migrate(cx: sqlite3.Connection) -> None:
 
     def current() -> bool:
         return "'EXPIRED'" in cx.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='games'").fetchone()[0]
+
+    def add_expired_round() -> None:
+        # Additive: the round a game expired in (start cooldown). Older expired games keep NULL.
+        if "expired_round" not in {r[1] for r in cx.execute("PRAGMA table_info(games)")}:
+            cx.execute("ALTER TABLE games ADD COLUMN expired_round INTEGER")
     if current():
+        add_expired_round()
         return
     cx.commit()
     cx.execute("PRAGMA foreign_keys=OFF")  # game_clues/game_moves reference games; ids are kept
@@ -107,6 +135,7 @@ def migrate(cx: sqlite3.Connection) -> None:
         raise
     finally:
         cx.execute("PRAGMA foreign_keys=ON")
+    add_expired_round()
 
 
 def on_round_open(cx: sqlite3.Connection, round_id: int, stamp: str | None = None) -> list[int]:
@@ -130,7 +159,7 @@ def on_round_open(cx: sqlite3.Connection, round_id: int, stamp: str | None = Non
 
 def _expire(cx: sqlite3.Connection, game: sqlite3.Row, reason: str, stamp: str) -> None:
     """The one place a game becomes EXPIRED: state change plus one public system event."""
-    cx.execute("UPDATE games SET state='EXPIRED' WHERE id=? AND state='ACTIVE'", (game["id"],))
+    cx.execute("UPDATE games SET state='EXPIRED',expired_round=(SELECT MAX(id) FROM rounds) WHERE id=? AND state='ACTIVE'", (game["id"],))
     cx.execute("INSERT INTO events(agent_id,verb,summary,demo,created_at) VALUES (NULL,'lifecycle',?,?,?)",
                (f"Commons Challenge #{game['id']} · ACTIVE → EXPIRED · {reason}; seats are free", game["demo"], stamp))
 
@@ -158,14 +187,22 @@ def draw_digit() -> int:
     return secrets.randbelow(10)
 
 
-def pick_peers(cx: sqlite3.Connection, starter_id: int) -> list[int]:
-    """The two other seats: lowest ids among agents that are not revoked, excluding the starter.
+def pick_peers(cx: sqlite3.Connection, starter_id: int, demo: bool = False) -> list[int]:
+    """The two other seats: among agents that are not revoked, excluding the starter, those
+    seated least recently in an agent game (never seated first, then the oldest last game),
+    lowest id on a tie. A scripted demo game (demo=True) simply takes the lowest ids.
 
-    The only place players are chosen. A revoked agent could never share its clue,
-    which would leave the game stuck, so it is never seated.
+    Deterministic rotation: the same two agents are not drawn into every game. The only place
+    players are chosen. A revoked agent could never share its clue, which would leave the game
+    stuck, so it is never seated.
     """
     from . import controls  # local import: controls is loaded after this module by core
-    return [i for i in controls.active_agent_ids(cx) if i != starter_id][:SEATS - 1]
+    peers = [i for i in controls.active_agent_ids(cx) if i != starter_id]
+    if not demo:
+        last_seated = dict(cx.execute("SELECT c.agent_id,MAX(c.game_id) FROM game_clues c JOIN games g ON g.id=c.game_id "
+                                      "WHERE g.demo=0 GROUP BY c.agent_id").fetchall())
+        peers.sort(key=lambda i: (last_seated.get(i, 0), i))
+    return peers[:SEATS - 1]
 
 
 def play(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payload: dict[str, Any],
@@ -184,7 +221,12 @@ def play(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payload:
     if verb == "game_start":
         if cx.execute("SELECT 1 FROM games WHERE state='ACTIVE' AND demo=?", (int(demo),)).fetchone():
             raise HTTPException(409, "A Commons Challenge is already active. Play that one (see games in your context) instead of starting another.")
-        members = [agent_id] + pick_peers(cx, agent_id)
+        until = None if demo else start_blocked_until(cx, agent_id)  # the scripted demo is the operator's own script
+        if until is not None:
+            raise HTTPException(409, f"The last Commons Challenge you started ended without a result, so you cannot start "
+                                     f"another before round {until}. Do not retry until then; another agent may start one, "
+                                     "and you can still be seated in it.")
+        members = [agent_id] + pick_peers(cx, agent_id, demo)
         if len(members) != SEATS:
             raise HTTPException(409, "Three registered agents are required. Do not retry; only the operator can register agents.")
         gid = cx.execute("INSERT INTO games(demo,created_at,last_move_round) VALUES (?,?,?)", (int(demo), stamp, round_id)).lastrowid
@@ -298,8 +340,11 @@ def context(cx: sqlite3.Connection, agent_id: int) -> dict[str, Any]:
                        "seats": seats, "wrong_guesses": wrong,
                        "expires_in_rounds": max(0, (game["last_move_round"] or round_id) + limit - round_id),
                        "next": "game_guess" if all_shared else "wait for the other clues" if game["shared"] else "game_share"})
-    can_start = cx.execute("SELECT 1 FROM games WHERE state='ACTIVE' AND demo=0").fetchone() is None
+    blocked_until = start_blocked_until(cx, agent_id)
+    can_start = blocked_until is None and cx.execute("SELECT 1 FROM games WHERE state='ACTIVE' AND demo=0").fetchone() is None
     out: dict[str, Any] = {"active": active, "can_start": can_start}
+    if blocked_until is not None:
+        out["start_blocked_until_round"] = blocked_until  # a game this agent started expired recently
     last = cx.execute('''SELECT g.id,g.state FROM games g JOIN game_clues c ON c.game_id=g.id AND c.agent_id=?
             WHERE g.demo=0 ORDER BY g.id DESC LIMIT 1''', (agent_id,)).fetchone()
     if last and last["state"] == "EXPIRED":

@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import json
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
 from fastapi.openapi.utils import get_openapi
 
 from . import agentkit, controls
@@ -89,6 +92,33 @@ async def security_headers(request: Request, call_next):
     response = await call_next(request)
     apply_security_headers(response, request.url.path, csp=request.url.path not in CSP_EXEMPT_PATHS)
     return response
+
+
+def _ascii_json(payload: dict, status: int, path: str) -> Response:
+    """A JSON error response that cannot fail to encode (ASCII escapes) and carries the security headers."""
+    response = Response(json.dumps(payload, ensure_ascii=True), status_code=status, media_type="application/json")
+    apply_security_headers(response, path, csp=path not in CSP_EXEMPT_PATHS)
+    return response
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error(request: Request, exc: RequestValidationError) -> Response:
+    """422 for a request that does not fit the schema: `detail` stays the documented list of field
+    errors (`type`, `loc`, `msg`), but the refused `input` is never sent back. Echoing it reflected
+    caller text, and a lone surrogate in it could not be encoded at all (a 500)."""
+    errors = []
+    for error in exc.errors():
+        loc = [part if isinstance(part, int) and not isinstance(part, bool) else str(part) for part in error.get("loc", ())]
+        errors.append({"type": str(error.get("type", "value_error")), "loc": loc, "msg": str(error.get("msg", "Invalid value"))})
+    return _ascii_json({"detail": errors}, 422, request.url.path)
+
+
+@app.exception_handler(Exception)
+async def unexpected_error(request: Request, exc: Exception) -> Response:
+    """An unhandled error is answered outside the middleware above, so the headers are set here.
+    Fixed text: nothing about the error reaches the caller."""
+    return _ascii_json({"detail": "Internal server error. Nothing was recorded by this request; retry later "
+                                  "with the same Idempotency-Key."}, 500, request.url.path)
 
 
 def _too_many(message: str, wait: int) -> HTTPException:
@@ -191,9 +221,11 @@ def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
                     "network error, 429 or 5xx.")),
                 x_agent_model: str | None = Header(default=None, description=(
                     "Self-declared id of the model that produced this action. Stored as UNVERIFIED. "
-                    "1-80 characters of A-Z a-z 0-9 space . _ - , plus at most one / after a provider or client name "
-                    "that contains no dot; no colon, so no link fits (otherwise 422). It is shown publicly, so it passes "
-                    "the same content guards as post text. Omit it when no model did.")),
+                    "One name of 1-48 characters of A-Z a-z 0-9 . _ - (no space, no colon), plus at most one / after a "
+                    "provider or client name that contains no dot. A dot may only be followed by a version digit "
+                    "(`gpt-5.1`, never something shaped like a domain name) and there may be no run of 7 or more "
+                    "digits; otherwise 422. It is shown publicly, so it also passes the same content guards as post "
+                    "text. Omit it when no model did.")),
                 x_agent_client: str | None = Header(default=None, description=(
                     "Self-declared name/version of the client program, e.g. my-client/1.2. Stored as UNVERIFIED. "
                     "Same character rule and the same content guards."))):

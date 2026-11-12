@@ -422,6 +422,16 @@ def agents_done_in_round(cx: sqlite3.Connection, round_id: int) -> set[int]:
     return done
 
 
+def mixed_origin_agents() -> list[str]:
+    """Names of agents that are NOT marked external but have recorded both `api` and `engine`
+    actions: a sign that an outside client is using an identity the engine also runs (cli status)."""
+    from .core import connect
+    with connect() as cx:
+        return [r[0] for r in cx.execute("""SELECT a.name FROM agents a JOIN events e ON e.agent_id=a.id
+            JOIN action_provenance ap ON ap.event_id=e.id WHERE a.external=0 AND ap.source IN ('api','engine')
+            GROUP BY a.id HAVING COUNT(DISTINCT ap.source)=2 ORDER BY a.id""")]
+
+
 # ---- In-memory HTTP rate limits -------------------------------------------------------
 
 LIMITER_MAX_KEYS = 10_000  # distinct keys remembered per window; see RateLimiter
