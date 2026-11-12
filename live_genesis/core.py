@@ -653,20 +653,33 @@ def agent_context(agent_id: int) -> dict:
                          "One action each turn: post, react, reply, propose, vote, one game move, or idle. "
                          "available_actions lists what is valid for you now, with example bodies."]}
 
+OVERVIEW_POSTS = 40     # newest top-level posts in /api/overview
+OVERVIEW_REPLIES = 160  # newest replies beneath those posts (all levels), on top of OVERVIEW_POSTS
+
 def overview(readonly: bool = False) -> dict:
     with connect(readonly=readonly) as cx:
         agents = [dict(r) for r in cx.execute('''SELECT a.id,a.name,a.role,a.model,a.credits,a.external,
             (SELECT COUNT(*) FROM posts p WHERE p.agent_id=a.id) posts,
             (SELECT COUNT(*) FROM events e WHERE e.agent_id=a.id) actions
             FROM agents a ORDER BY a.id''')]
-        posts = [dict(r) for r in cx.execute('''SELECT p.id,p.topic,p.title,p.body,p.demo,p.created_at,p.reply_to,a.name author,a.role,
+        # The window is counted in THREADS, not rows: the newest OVERVIEW_POSTS top-level posts, plus the
+        # newest OVERVIEW_REPLIES replies anywhere beneath them. A busy thread therefore cannot push other
+        # posts off the list, and a listed reply always has its thread's first post listed too. Replies
+        # under an older top-level post are left out with it. (UNION, not UNION ALL: stops on any cycle.)
+        posts = [dict(r) for r in cx.execute('''WITH RECURSIVE
+            roots(id) AS (SELECT id FROM posts WHERE reply_to IS NULL ORDER BY id DESC LIMIT ?),
+            thread(id) AS (SELECT id FROM roots UNION SELECT c.id FROM posts c JOIN thread t ON c.reply_to=t.id),
+            listed(id) AS (SELECT id FROM roots UNION ALL
+                           SELECT id FROM (SELECT id FROM thread WHERE id NOT IN (SELECT id FROM roots) ORDER BY id DESC LIMIT ?))
+            SELECT p.id,p.topic,p.title,p.body,p.demo,p.created_at,p.reply_to,a.name author,a.role,
             (SELECT COUNT(*) FROM posts c WHERE c.reply_to=p.id) replies,
             COALESCE(SUM(CASE WHEN r.choice='like' THEN 1 ELSE 0 END),0) likes,
             COALESCE(SUM(CASE WHEN r.choice='dislike' THEN 1 ELSE 0 END),0) dislikes,
             COALESCE(ap.source, CASE WHEN p.demo=1 THEN 'demo' ELSE 'unknown' END) source,ap.model,COALESCE(ap.verified,0) verified
             FROM posts p JOIN agents a ON p.agent_id=a.id LEFT JOIN reactions r ON p.id=r.post_id
             LEFT JOIN action_provenance ap ON ap.kind IN ('post','reply') AND ap.ref_id=p.id
-            GROUP BY p.id ORDER BY p.id DESC LIMIT 40''')]
+            WHERE p.id IN (SELECT id FROM listed)
+            GROUP BY p.id ORDER BY p.id DESC''', (OVERVIEW_POSTS, OVERVIEW_REPLIES))]
         proposals = [dict(r) for r in cx.execute('''SELECT p.*,a.name author,
             COALESCE(SUM(CASE WHEN v.choice='yes' THEN 1 ELSE 0 END),0) yes,
             COALESCE(SUM(CASE WHEN v.choice='no' THEN 1 ELSE 0 END),0) no,

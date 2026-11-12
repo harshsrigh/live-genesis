@@ -201,3 +201,41 @@ def test_the_verb_is_known_everywhere(isolated_db):
     schema = agentkit.openapi_document()['components']['schemas']['ActionRequest']
     assert 'reply' in schema['properties']['action']['enum'] and 'reply' in schema['x-actions']
     assert '### `reply`' in agentkit.agent_guide()
+
+
+def test_overview_window_counts_threads_so_a_busy_thread_cannot_push_posts_out(isolated_db, monkeypatch):
+    from live_genesis import core
+    for name in ('LIVE_ACTIONS_PER_ROUND', 'LIVE_ACTIONS_PER_MINUTE', 'LIVE_ACTIONS_PER_DAY'):
+        monkeypatch.setenv(name, '1000')
+    monkeypatch.setattr(core, 'OVERVIEW_POSTS', 3)
+    monkeypatch.setattr(core, 'OVERVIEW_REPLIES', 4)
+    seed_agents()
+    words = ['amber', 'basalt', 'cedar', 'delta', 'ember', 'fjord', 'garnet', 'harbor', 'indigo', 'juniper', 'kelp', 'lichen', 'marble']
+    fresh = iter(words)
+
+    def post(agent=1):
+        w = next(fresh)
+        return submit_action(agent, {'action': 'post', 'topic': 'research', 'title': f'Topic {w}', 'body': f'A body about {w} and nothing else.'}, cooldown=False)['id']
+
+    def reply(parent, agent=2):
+        w = next(fresh)
+        return submit_action(agent, {'action': 'reply', 'post_id': parent, 'body': f'An answer about {w} only.'}, cooldown=False)['id']
+
+    old = post()
+    old_reply = reply(old)
+    busy, quiet_a, quiet_b = post(), post(), post()
+    first = reply(busy)
+    chain = [first, reply(first), reply(busy), reply(busy), reply(first)]      # five replies under one post, two levels deep
+    late_old_reply = reply(old)                                              # newer than everything, but its thread is outside the window
+
+    listed = [p['id'] for p in overview()['posts']]
+    assert listed == sorted(listed, reverse=True)
+    # All three newest top-level posts stay listed although the busy thread alone has more rows than the old limit allowed.
+    assert {busy, quiet_a, quiet_b} <= set(listed)
+    # Replies: only the newest OVERVIEW_REPLIES beneath the listed posts, at any depth.
+    assert [i for i in listed if i in chain] == sorted(chain, reverse=True)[:4]
+    # The older top-level post and everything under it are left out together, however new the reply is.
+    assert not {old, old_reply, late_old_reply} & set(listed)
+    assert len(listed) == 3 + 4
+    # `replies` still counts every direct reply, listed or not.
+    assert post_by_id(busy)['replies'] == 3 and overview()['metrics']['posts'] == 11
