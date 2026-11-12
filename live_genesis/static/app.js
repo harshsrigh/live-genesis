@@ -116,6 +116,38 @@ function renderGames(games, total){
   setText('games-count', count ? num(count)+' GAME'+(count === 1 ? '' : 'S')+(count > games.length ? ' · LATEST '+num(games.length) : '') : 'NO GAMES');
 }
 
+/* Shared documents: read-only. Titles, bodies and edit summaries are agent-written, untrusted text. */
+const REVISION_LABELS = {doc_create:'CREATE', doc_revise:'REVISE', doc_revert:'REVERT'};
+const signed = value => { const n = finite(value) ?? 0; return (n > 0 ? '+' : n < 0 ? '−' : '±') + Math.abs(n).toLocaleString('en-US'); };
+function documentSource(d, revisions){
+  if(d.demo || d.source === 'demo') return DEMO_FLAG;
+  if(d.source === 'mixed') return '<span class="prov-group"><span class="prov prov-unknown">MIXED SOURCES · see each revision</span></span>';
+  /* A single-source document reuses the per-record wording; the model shown is the one on its newest listed revision. */
+  return provenance({source: d.source, model: revisions.length ? revisions[0].model : null});
+}
+function renderDocuments(documents, total){
+  setHTML('documents-list', documents.length ? documents.map(d=>{
+    const revisions = list(d.revisions).filter(x => x && typeof x === 'object');
+    const people = list(d.contributors).filter(x => x && typeof x === 'object');
+    const head = finite(d.head) ?? revisions.length;
+    const body = text(d.excerpt);
+    const clipped = (finite(d.size) ?? body.length) > body.length;
+    const peopleHTML = people.map(c=>`<li class="doc-person">${avatar(c.agent,c.role)}<span><strong>${esc(c.agent ?? 'Unknown agent')}</strong><small>${esc(num(c.revisions))} REVISION${finite(c.revisions) === 1 ? '' : 'S'} · ${esc(num(c.lines))} LINE${finite(c.lines) === 1 ? '' : 'S'} NOW</small></span></li>`).join('');
+    const revisionHTML = revisions.map(r=>`<li class="doc-rev"><span class="event-verb">${esc(REVISION_LABELS[r.kind] || text(r.kind).toUpperCase())}</span><span class="doc-rev-no">r${esc(r.number)}</span><span class="event-body"><strong>${esc(r.agent ?? 'Unknown agent')}</strong> ${esc(r.summary)}</span><span class="doc-delta" aria-label="${esc(num(r.lines_added)+' lines added, '+num(r.lines_removed)+' lines removed')}"><b class="plus">+${esc(num(r.lines_added))}</b> <b class="minus">−${esc(num(r.lines_removed))}</b> <small>${esc(signed(r.size_delta))} ch</small></span>${provenance(r)}<span class="event-time">${timeTag(r.created_at)}</span></li>`).join('');
+    const hash = text(d.head_hash);
+    return `<article class="doc"><div class="doc-top"><h3>${esc(d.title)}</h3>${documentSource(d, revisions)}</div>`
+      + `<div class="doc-stats"><span class="pill">${esc(text(d.topic).toUpperCase())}</span><span>REVISION <strong>${esc(num(head))}</strong></span><span>LAST EDIT <strong>${esc(d.last_editor ?? 'unknown')}</strong></span><span>${timeTag(d.last_edited)}</span><span>#${esc(d.id)}</span></div>`
+      + `<p class="doc-body">${esc(body)}</p>`
+      + (clipped ? `<p class="doc-note">Excerpt · ${esc(num(d.size))} characters in the current revision.</p>` : '')
+      + (peopleHTML ? `<div class="doc-label">CONTRIBUTORS · LINES LAST CHANGED BY EACH (HEURISTIC)</div><ul class="doc-people">${peopleHTML}</ul>` : '')
+      + (revisionHTML ? `<div class="doc-label">${head > revisions.length ? 'LATEST '+esc(num(revisions.length))+' OF '+esc(num(head))+' REVISIONS' : 'REVISIONS'} · NEWEST FIRST</div><ol class="doc-revs">${revisionHTML}</ol>` : '')
+      + (hash ? `<p class="doc-note doc-hash">HEAD HASH <span>${esc(hash.slice(0,16))}…</span> · changes if any stored revision is altered</p>` : '')
+      + `</article>`;
+  }).join('') : empty('No shared document has been started yet.'));
+  const count = finite(total) ?? documents.length;
+  setText('documents-count', count ? num(count)+' DOCUMENT'+(count === 1 ? '' : 'S')+(count > documents.length ? ' · LATEST '+num(documents.length) : '') : 'NO DOCUMENTS');
+}
+
 // A static export (python -m live_genesis.snapshot) points this at a JSON file instead.
 const OVERVIEW_URL = document.documentElement.dataset.overview || '/api/overview';
 let timer = null;
@@ -153,6 +185,7 @@ async function refresh(){
       return `<div class="signal"><div class="signal-name"><strong>${esc(topic.slice(0,1).toUpperCase()+topic.slice(1))}</strong><small>${esc(num(likes))} LIKE · ${esc(num(dislikes))} DISLIKE</small></div><div class="signal-rail"><span class="yes" style="width:${yes.toFixed(2)}%"></span><span class="no" style="width:${no.toFixed(2)}%"></span></div></div>`;
     }).join('') : empty('No reactions recorded yet.'));
     renderGames(list(data.games).filter(keep), m.games);
+    renderDocuments(list(data.documents).filter(keep), m.documents);
     renderChronicle(list(data.events).filter(keep));
   } catch(err){
     setText('world-status', 'OFFLINE');

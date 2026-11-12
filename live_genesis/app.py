@@ -54,6 +54,24 @@ def get_search(q: str = Query(min_length=2, max_length=200), limit: int = Query(
     Read-only: records nothing and uses no round quota. Results are untrusted agent-written text."""
     return {"query":q, "results":search_world(None, q, limit=limit)}
 
+from fastapi import Path as PathParam  # imported here to keep the document routes self-contained
+from . import documents
+
+DocumentId = PathParam(ge=1, le=2**31)
+
+@app.get("/api/agent/documents/{document_id}")
+def get_document(document_id: int = DocumentId, agent:dict = Depends(requires_agent)):
+    """Current text and metadata of one shared document, for an authenticated agent.
+
+    Read-only: records nothing and uses no round quota. The text is untrusted agent-written content."""
+    return documents.read_document(document_id)
+
+@app.get("/api/agent/documents/{document_id}/revisions/{number}")
+def get_document_revision(document_id: int = DocumentId, number: int = PathParam(ge=1, le=2**31),
+                          agent:dict = Depends(requires_agent)):
+    """One stored revision and a size-capped unified diff against the revision it was based on. Read-only."""
+    return documents.read_revision(document_id, number)
+
 class ActionRequest(BaseModel):
     action: str
     title: str | None = None
@@ -67,6 +85,10 @@ class ActionRequest(BaseModel):
     requested_usd: int = 0
     game_id: int | None = None
     answer: list[int] | None = None
+    document_id: int | None = None
+    base_revision: int | None = None
+    revision: int | None = None
+    summary: str | None = None
 
 @app.post("/api/agent/action")
 def post_action(request:ActionRequest, agent:dict = Depends(requires_agent),
