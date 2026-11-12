@@ -280,11 +280,11 @@ def test_scripted_demo_never_mentions_the_figure_and_snapshot_includes_the_block
             assert not any(guide.MENTION.search(r[0]) for r in cx.execute(f'SELECT {column} FROM {table}')), table
     out = tmp_path / 'site'
     snapshot.build(out)
-    data = json.loads((out / 'overview.json').read_text())
+    data = json.loads((out / 'overview.json').read_text(encoding='utf-8'))
     assert data['guide'] == {**overview()['guide']} and data['guide']['nature'] == guide.NATURE
-    html = (out / 'index.html').read_text()
+    html = (out / 'index.html').read_text(encoding='utf-8')
     for element_id in ('guide', 'guide-title', 'guide-mode', 'guide-nature', 'guide-mentions'):
         assert f'id="{element_id}"' in html, element_id
     assert 'SCRIPTED SYSTEM VOICE' in html and 'href="#guide"' in html
-    script = (out / 'static' / 'app.js').read_text()
+    script = (out / 'static' / 'app.js').read_text(encoding='utf-8')
     assert 'renderGuide(data.guide)' in script and 'textContent' in script

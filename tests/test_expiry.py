@@ -409,7 +409,7 @@ def test_demo_commands_and_snapshot_still_work_and_demo_records_stay_demo(isolat
     assert not any('LAPSED' in e['summary'] or 'EXPIRED from' in e['summary'] for e in state['events'])
     info = snapshot.build(tmp_path / 'site')
     assert info['demo_only'] is True and (tmp_path / 'site' / 'overview.json').is_file()
-    guide_text = (tmp_path / 'site' / 'agent-guide.md').read_text()
+    guide_text = (tmp_path / 'site' / 'agent-guide.md').read_text(encoding='utf-8')
     assert 'LAPSED' in guide_text and 'EXPIRED' in guide_text
     # If an operator keeps opening rounds on the scripted world, the scripted project lapses as a DEMO record.
     for _ in range(governance.report_rounds()):
@@ -437,6 +437,6 @@ def test_agent_facing_texts_state_the_limits_from_code(isolated_db, monkeypatch)
     assert 'LAPSED' in governance.STATUSES and 'Statuses: ' + ', '.join(governance.STATUSES) in kit
     assert 'allocation_lapsed' in ledger.TRANSFER_REASONS and 'EXPIRED' in games.STATES
     assert 'expires' in engine.CONSTITUTION and 'lapses' in engine.CONSTITUTION
-    script = (snapshot.STATIC / 'app.js').read_text()
+    script = (snapshot.STATIC / 'app.js').read_text(encoding='utf-8')
     assert "LAPSED:" in script and "allocation_lapsed:" in script and "state === 'EXPIRED'" in script
-    assert '.status-lapsed' in (snapshot.STATIC / 'style.css').read_text()
+    assert '.status-lapsed' in (snapshot.STATIC / 'style.css').read_text(encoding='utf-8')

@@ -18,7 +18,7 @@ def test_fonts_resolve_offline_with_licenses():
         for font in fonts:
             path = STATIC / font
             assert path.read_bytes()[:4] == magic, font
-            assert 'SIL OPEN FONT LICENSE' in path.with_name(path.stem + '-OFL.txt').read_text(), font
+            assert 'SIL OPEN FONT LICENSE' in path.with_name(path.stem + '-OFL.txt').read_text(encoding='utf-8'), font
 
 
 def test_archive_fonts_are_small_latin_subsets_and_every_font_file_is_used():

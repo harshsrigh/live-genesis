@@ -175,7 +175,7 @@ def test_export_is_ascii_and_the_page_data_is_unchanged(isolated_db, tmp_path, c
     # The same data written with raw non-ASCII bytes (and a matching hash) is not accepted.
     raw = json.dumps(data, ensure_ascii=False, indent=1).encode('utf-8')
     (out / 'overview.json').write_bytes(raw)
-    (out / 'MANIFEST.json').write_text(json.dumps({**json.loads((out / 'MANIFEST.json').read_text()), 'sha256': hashlib.sha256(raw).hexdigest()}))
+    (out / 'MANIFEST.json').write_text(json.dumps({**json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8')), 'sha256': hashlib.sha256(raw).hexdigest()}))
     with pytest.raises(RuntimeError, match='non-ASCII byte'):
         snapshot.check_published(out)
 
@@ -187,7 +187,7 @@ def test_old_rows_with_hidden_characters_cannot_be_exported_approved_or_checked(
     out = tmp_path / 'published'
     snapshot.export_published(out)
     snapshot.approve_published(out, confirmed=True)
-    good_data, good_manifest = (out / 'overview.json').read_bytes(), (out / 'MANIFEST.json').read_text()
+    good_data, good_manifest = (out / 'overview.json').read_bytes(), (out / 'MANIFEST.json').read_text(encoding='utf-8')
     old_row(f'Looks harmless.{hidden}')
     with pytest.raises(RuntimeError, match=r'(?s)Export refused.*posts id 2, field body: contains an invisible') as err:
         snapshot.export_published(tmp_path / 'second')
@@ -474,7 +474,7 @@ def approved(isolated_db, tmp_path):
 def rewrite(folder, text):
     payload = text.encode('ascii')
     (folder / 'overview.json').write_bytes(payload)
-    manifest = json.loads((folder / 'MANIFEST.json').read_text())
+    manifest = json.loads((folder / 'MANIFEST.json').read_text(encoding='utf-8'))
     (folder / 'MANIFEST.json').write_text(json.dumps({**manifest, 'sha256': hashlib.sha256(payload).hexdigest()}))
 
 
@@ -483,7 +483,7 @@ def rewrite(folder, text):
     ('"extra": 1e999,', 'number out of range'), ('"mode": "LIVE",', 'duplicate key'),
 ])
 def test_check_refuses_non_json_literals_and_duplicate_keys(approved, tmp_path, insert, reason):
-    text = (approved / 'overview.json').read_text()
+    text = (approved / 'overview.json').read_text(encoding='utf-8')
     assert snapshot.check_published(approved)['reviewed'] is True
     rewrite(approved, text.replace('{', '{\n ' + insert, 1))
     for call in (lambda: snapshot.check_published(approved), lambda: snapshot.approve_published(approved, confirmed=True),
@@ -496,7 +496,7 @@ def test_check_refuses_non_json_literals_and_duplicate_keys(approved, tmp_path, 
 
 
 def test_check_refuses_a_nested_duplicate_key_and_a_wrong_shape(approved):
-    text = (approved / 'overview.json').read_text()
+    text = (approved / 'overview.json').read_text(encoding='utf-8')
     rewrite(approved, text.replace('"metrics": {', '"metrics": {\n  "citizens": 10,', 1))
     with pytest.raises(RuntimeError, match='duplicate key'):
         snapshot.check_published(approved)
@@ -546,14 +546,14 @@ def test_two_databases_initialised_in_turn_keep_both_key_sets(isolated_db, tmp_p
     cli.init()
     first_file = cli.key_file()
     assert first_file.name == 'agent-keys.live-demo.json' and str(first_file) in capsys.readouterr().out
-    first_keys = json.loads(first_file.read_text())
+    first_keys = json.loads(first_file.read_text(encoding='utf-8'))
     use_db(monkeypatch, second)
     cli.init()
     second_file = cli.key_file()
     printed = capsys.readouterr().out
     assert second_file.name == 'agent-keys.live-real.json' and str(second_file) in printed and 'copied to' not in printed
-    second_keys = json.loads(second_file.read_text())
-    assert json.loads(first_file.read_text()) == first_keys                  # untouched by the second init
+    second_keys = json.loads(second_file.read_text(encoding='utf-8'))
+    assert json.loads(first_file.read_text(encoding='utf-8')) == first_keys                  # untouched by the second init
     assert set(first_keys) == set(second_keys) and len(first_keys) == 10
     assert all(first_keys[name] != second_keys[name] for name in first_keys)
     assert sorted(p.name for p in first_file.parent.iterdir()) == ['agent-keys.live-demo.json', 'agent-keys.live-real.json']
@@ -564,7 +564,7 @@ def test_two_databases_initialised_in_turn_keep_both_key_sets(isolated_db, tmp_p
         assert authenticate(own['Astra'])['name'] == 'Astra' and authenticate(own['Solace'])['name'] == 'Solace'
         assert refusal(lambda: authenticate(foreign['Astra']))[0] == 401
     cli.init()                                                               # again on an initialised database: nothing changes
-    assert json.loads(second_file.read_text()) == second_keys and 'copied to' not in capsys.readouterr().out
+    assert json.loads(second_file.read_text(encoding='utf-8')) == second_keys and 'copied to' not in capsys.readouterr().out
 
 
 def test_a_key_file_of_another_database_is_backed_up_before_it_is_overwritten(isolated_db, tmp_path, monkeypatch, capsys):
@@ -573,7 +573,7 @@ def test_a_key_file_of_another_database_is_backed_up_before_it_is_overwritten(is
     use_db(monkeypatch, first)
     cli.init()
     shared = cli.key_file()
-    first_keys = json.loads(shared.read_text())
+    first_keys = json.loads(shared.read_text(encoding='utf-8'))
     capsys.readouterr()
     use_db(monkeypatch, second)
     cli.init()
@@ -581,10 +581,10 @@ def test_a_key_file_of_another_database_is_backed_up_before_it_is_overwritten(is
     assert cli.key_file() == shared and 'copied to' in printed
     backups = [p for p in shared.parent.iterdir() if p != shared]
     assert len(backups) == 1 and str(backups[0]) in printed and backups[0].name.startswith('agent-keys.world.backup-')
-    assert json.loads(backups[0].read_text()) == first_keys                  # the first database's keys survive
+    assert json.loads(backups[0].read_text(encoding='utf-8')) == first_keys                  # the first database's keys survive
     if os.name == 'posix':
         assert stat.S_IMODE(backups[0].stat().st_mode) == 0o600 and stat.S_IMODE(shared.stat().st_mode) == 0o600
-    second_keys = json.loads(shared.read_text())
+    second_keys = json.loads(shared.read_text(encoding='utf-8'))
     assert authenticate(second_keys['Astra'])['id'] == 1
     use_db(monkeypatch, first)
     assert authenticate(first_keys['Astra'])['id'] == 1
@@ -593,9 +593,9 @@ def test_a_key_file_of_another_database_is_backed_up_before_it_is_overwritten(is
     run_cli(monkeypatch, 'rotate-key', 1)
     printed = capsys.readouterr().out
     assert 'copied to' in printed and len([p for p in shared.parent.iterdir() if p != shared]) == 2
-    rotated = json.loads(shared.read_text())
+    rotated = json.loads(shared.read_text(encoding='utf-8'))
     assert authenticate(rotated['Astra'])['id'] == 1 and rotated['Moss'] == second_keys['Moss']
-    kept = [json.loads(p.read_text()) for p in shared.parent.iterdir() if p != shared]
+    kept = [json.loads(p.read_text(encoding='utf-8')) for p in shared.parent.iterdir() if p != shared]
     assert second_keys in kept and first_keys in kept
     # An ordinary rotation (the file holds this database's own key) makes no copy.
     run_cli(monkeypatch, 'rotate-key', 1)

@@ -23,12 +23,12 @@ def test_export_is_self_contained_and_labelled(isolated_db, tmp_path, monkeypatc
     info = snapshot.build(out)
     assert info['demo_only'] is True
     assert hashlib.sha256(isolated_db.read_bytes()).hexdigest() == before  # database untouched
-    data = json.loads((out / 'overview.json').read_text())
+    data = json.loads((out / 'overview.json').read_text(encoding='utf-8'))
     assert data['mode'] == 'DEMO' and data['snapshot']['generated_at'] and data['games']
     assert all(p['demo'] == 1 for p in data['posts'])
-    text = (out / 'overview.json').read_text()
+    text = (out / 'overview.json').read_text(encoding='utf-8')
     assert 'key_hash' not in text and 'live_' not in text
-    html = (out / 'index.html').read_text()
+    html = (out / 'index.html').read_text(encoding='utf-8')
     assert 'data-overview="overview.json"' in html
     assert html.count('http-equiv="Content-Security-Policy"') == 1 and "script-src 'self'" in html
     # Relative paths only, so it works under a sub-path such as /live-genesis/ .
@@ -43,7 +43,7 @@ def test_export_is_self_contained_and_labelled(isolated_db, tmp_path, monkeypatc
     assert not re.search(r'"static/[^"?]+"', html)
     for name, digest in refs:
         assert hashlib.sha256((out / 'static' / name).read_bytes()).hexdigest().startswith(digest)
-    script = (out / 'static' / 'app.js').read_text()
+    script = (out / 'static' / 'app.js').read_text(encoding='utf-8')
     assert 'dataset.overview' in script and 'STATIC SNAPSHOT' in script and 'api/agent' not in script
 
 
@@ -56,7 +56,7 @@ def test_refuses_non_demo_data_unless_allowed(isolated_db, tmp_path, monkeypatch
     assert not (tmp_path / 'site').exists()
     info = snapshot.build(tmp_path / 'site', allow_non_demo=True)
     assert info['demo_only'] is False
-    assert json.loads((tmp_path / 'site' / 'overview.json').read_text())['mode'] == 'MIXED'
+    assert json.loads((tmp_path / 'site' / 'overview.json').read_text(encoding='utf-8'))['mode'] == 'MIXED'
 
 
 def test_refuses_empty_live_world_and_non_empty_folder(isolated_db, tmp_path, monkeypatch):
@@ -67,7 +67,7 @@ def test_refuses_empty_live_world_and_non_empty_folder(isolated_db, tmp_path, mo
     busy = tmp_path / 'busy'; busy.mkdir(); (busy / 'keep.txt').write_text('x')
     with pytest.raises(RuntimeError, match='empty'):
         snapshot.build(busy)
-    assert (busy / 'keep.txt').read_text() == 'x'
+    assert (busy / 'keep.txt').read_text(encoding='utf-8') == 'x'
 
 
 # ---- onboarding kit for agent developers (llms.txt, agent-guide.md, openapi.json) ---------
@@ -93,10 +93,10 @@ def test_export_contains_the_agent_kit(isolated_db, tmp_path, monkeypatch):
     assert info['api_base'] is None
     for name in KIT + ('agent_client.py', 'static/agents.txt'):
         assert (out / name).is_file() and (out / name).stat().st_size > 200, name
-    assert (out / 'llms.txt').read_text() == agentkit.llms_txt()
-    assert (out / 'agent-guide.md').read_text() == agentkit.agent_guide()
+    assert (out / 'llms.txt').read_text(encoding='utf-8') == agentkit.llms_txt()
+    assert (out / 'agent-guide.md').read_text(encoding='utf-8') == agentkit.agent_guide()
     assert (out / 'agent_client.py').read_bytes() == agentkit.REFERENCE_CLIENT.read_bytes()
-    document = json.loads((out / 'openapi.json').read_text())
+    document = json.loads((out / 'openapi.json').read_text(encoding='utf-8'))
     assert document == agentkit.openapi_document() and '/api/agent/action' in document['paths']
 
     def refs(node):
@@ -116,7 +116,7 @@ def test_export_contains_the_agent_kit(isolated_db, tmp_path, monkeypatch):
     # Every link in the two markdown files is relative and points at a file of the export,
     # so the kit works under a sub-path such as /live-genesis/ .
     for name in ('llms.txt', 'agent-guide.md'):
-        targets = re.findall(r'\]\(([^)]+)\)', (out / name).read_text())
+        targets = re.findall(r'\]\(([^)]+)\)', (out / name).read_text(encoding='utf-8'))
         assert targets, name
         for target in targets:
             assert not re.match(r'[a-z]+:|/', target) and (out / target).is_file(), (name, target)
@@ -126,7 +126,7 @@ def test_page_refers_to_the_kit_in_head_only_and_visible_text_is_unchanged(isola
     demo_world(tmp_path, monkeypatch)
     out = tmp_path / 'site'
     snapshot.build(out)
-    html = (out / 'index.html').read_text()
+    html = (out / 'index.html').read_text(encoding='utf-8')
     head = html[:html.index('</head>')]
     for link in snapshot.KIT_LINKS:
         assert head.count(link) == 1 and link not in body_of(html)
@@ -154,17 +154,17 @@ def test_kit_states_no_address_no_key_and_no_enrolment(isolated_db, tmp_path, mo
     out = tmp_path / 'site'
     snapshot.build(out)
     for name in KIT:
-        text = (out / name).read_text()
+        text = (out / name).read_text(encoding='utf-8')
         assert agentkit.API_BASE_PLACEHOLDER in text and 'not publicly hosted yet' in text, name
         assert not re.search(r'https?://', text), name
         assert not re.search(r'sign[ -]?up|register here', text, re.I), name
         assert not EMAIL.search(text), name
-    assert 'servers' not in json.loads((out / 'openapi.json').read_text())
+    assert 'servers' not in json.loads((out / 'openapi.json').read_text(encoding='utf-8'))
     for path in out.rglob('*'):
         if path.is_file() and path.suffix in ('.txt', '.md', '.json', '.py', '.html', '.js'):
             assert not KEY_SHAPED.search(path.read_text(encoding='utf-8')), path.name
     for name in ('llms.txt', 'agent-guide.md'):
-        text = (out / name).read_text()
+        text = (out / name).read_text(encoding='utf-8')
         assert 'issued manually by the operator' in text and 'offers no way to obtain a key' in text, name
         assert 'Operator contact' not in text, name
 
@@ -180,11 +180,11 @@ def test_api_base_and_operator_contact_appear_only_when_given(isolated_db, tmp_p
     monkeypatch.setattr('sys.argv', ['snapshot', str(out), '--api-base', 'https://api.example.org/'])
     snapshot.main()
     for name in KIT:
-        text = (out / name).read_text()
+        text = (out / name).read_text(encoding='utf-8')
         assert 'https://api.example.org' in text and agentkit.API_BASE_PLACEHOLDER not in text, name
         assert 'not publicly hosted' not in text, name
-    assert json.loads((out / 'openapi.json').read_text())['servers'][0]['url'] == 'https://api.example.org'
+    assert json.loads((out / 'openapi.json').read_text(encoding='utf-8'))['servers'][0]['url'] == 'https://api.example.org'
     for name in ('llms.txt', 'agent-guide.md'):
-        assert 'Operator contact: operator@example.org' in (out / name).read_text()
-    assert 'operator@example.org' not in (out / 'index.html').read_text()
-    assert visible_text((out / 'index.html').read_text()) == visible_text(STATIC_PAGE.read_text(encoding='utf-8'))
+        assert 'Operator contact: operator@example.org' in (out / name).read_text(encoding='utf-8')
+    assert 'operator@example.org' not in (out / 'index.html').read_text(encoding='utf-8')
+    assert visible_text((out / 'index.html').read_text(encoding='utf-8')) == visible_text(STATIC_PAGE.read_text(encoding='utf-8'))

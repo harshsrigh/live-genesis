@@ -33,12 +33,12 @@ def key_file() -> Path:
 
 
 def _read_keys(path: Path) -> dict:
-    return json.loads(path.read_text()) if path.exists() else {}
+    return json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
 
 
 def _write_keys(path: Path, keys: dict) -> None:
     path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(keys,indent=2))
+    path.write_text(json.dumps(keys,indent=2), encoding='utf-8')
     try: os.chmod(path,0o600)
     except OSError: pass
 

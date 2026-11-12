@@ -39,7 +39,7 @@ def retarget(folder, edit, **manifest_changes):
     edit(data)
     payload = json.dumps(data, ensure_ascii=True, indent=1).encode('ascii')   # as an export writes it: ASCII-escaped
     (folder / 'overview.json').write_bytes(payload)
-    manifest = json.loads((folder / 'MANIFEST.json').read_text())
+    manifest = json.loads((folder / 'MANIFEST.json').read_text(encoding='utf-8'))
     manifest.update(sha256=hashlib.sha256(payload).hexdigest(), **manifest_changes)
     (folder / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1))
 
@@ -54,6 +54,16 @@ def keys_named(node, name):
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def symlinks_work(folder):
+    probe = folder / 'link-probe'
+    try:
+        probe.symlink_to(folder, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        return False
+    probe.unlink()
+    return True
 
 
 def test_export_refuses_scripted_demo_only_database(isolated_db, tmp_path):
@@ -71,7 +81,7 @@ def test_export_from_mixed_database(isolated_db, tmp_path, monkeypatch):
     manifest = snapshot.export_published(out)
     assert sha(isolated_db) == before                                   # read-only
     assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']
-    assert manifest == json.loads((out / 'MANIFEST.json').read_text())
+    assert manifest == json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8'))
     assert manifest['schema'] == snapshot.SCHEMA and manifest['sha256'] == sha(out / 'overview.json')
     assert manifest['reviewed'] is False and manifest['reviewed_at'] is None and manifest['mode'] == 'MIXED'
     assert re.fullmatch(r'\d{4}-\d\d-\d\dT[\d:.]+(\+00:00|Z)', manifest['exported_at'])
@@ -92,7 +102,7 @@ def test_export_with_model_actions_exposes_nothing_private(isolated_db, tmp_path
     manifest = snapshot.export_published(out)
     assert manifest['mode'] == 'LIVE'
     assert manifest['actions_by_source'] == {'demo': 0, 'api': 0, 'engine': 2, 'unknown': 0}
-    text = (out / 'overview.json').read_text(encoding='utf-8') + (out / 'MANIFEST.json').read_text()
+    text = (out / 'overview.json').read_text(encoding='utf-8') + (out / 'MANIFEST.json').read_text(encoding='utf-8')
     assert 'key_hash' not in text and not KEY_SHAPED.search(text) and 'fake-key' not in text
     with connect() as cx:  # the note exists in the database and stays there
         assert cx.execute('SELECT COUNT(*) FROM memory_notes WHERE note LIKE ?', ('%' + PRIVATE_NOTE + '%',)).fetchone()[0] > 0
@@ -161,8 +171,11 @@ def test_folder_holds_exactly_its_three_regular_files(isolated_db, tmp_path, mon
     outside = tmp_path / 'outside.json'
     outside.write_bytes((out / 'overview.json').read_bytes())
     # Any extra entry fails the check, the approval and the render.
-    for make in (lambda: (out / 'notes.txt').write_text('x'), lambda: (out / 'sub').mkdir(),
-                 lambda: (out / 'link.json').symlink_to(outside)):
+    links = symlinks_work(tmp_path)   # Windows without the privilege cannot create links; the other checks still run
+    makers = [lambda: (out / 'notes.txt').write_text('x'), lambda: (out / 'sub').mkdir()]
+    if links:
+        makers.append(lambda: (out / 'link.json').symlink_to(outside))
+    for make in makers:
         make()
         for call in (lambda: snapshot.check_published(out), lambda: snapshot.approve_published(out, confirmed=True),
                      lambda: snapshot.build_from_data(tmp_path / 'site', out)):
@@ -174,10 +187,11 @@ def test_folder_holds_exactly_its_three_regular_files(isolated_db, tmp_path, mon
                 entry.rmdir() if entry.is_dir() and not entry.is_symlink() else entry.unlink()
         assert snapshot.check_published(out)['reviewed'] is True
     # A symlink in place of the data file is refused even though its content hashes correctly.
-    (out / 'overview.json').unlink()
-    (out / 'overview.json').symlink_to(outside)
-    with pytest.raises(RuntimeError, match='must be regular files'):
-        snapshot.check_published(out)
+    if links:
+        (out / 'overview.json').unlink()
+        (out / 'overview.json').symlink_to(outside)
+        with pytest.raises(RuntimeError, match='must be regular files'):
+            snapshot.check_published(out)
     # --replace clears stale extras (and the symlink) and leaves exactly the three files.
     (out / 'notes.txt').write_text('stale'); (out / 'sub').mkdir(); (out / 'sub' / 'old.json').write_text('{}')
     snapshot.export_published(out, replace=True)
@@ -185,6 +199,8 @@ def test_folder_holds_exactly_its_three_regular_files(isolated_db, tmp_path, mon
     assert not (out / 'overview.json').is_symlink() and outside.exists()   # the link was removed, not its target
     snapshot.check_published(out, require_reviewed=False)
     # A symlinked folder is refused as a whole.
+    if not links:
+        pytest.skip('symbolic links cannot be created here; the link checks were not run (the others passed)')
     alias = tmp_path / 'alias'; alias.symlink_to(out, target_is_directory=True)
     with pytest.raises(RuntimeError, match='not a plain folder'):
         snapshot.check_published(alias, require_reviewed=False)
@@ -200,7 +216,7 @@ def test_approval_is_explicit_and_bound_to_the_hash(isolated_db, tmp_path, monke
         snapshot.check_published(out)
     with pytest.raises(RuntimeError, match='--i-have-read-it'):
         snapshot.approve_published(out)
-    assert json.loads((out / 'MANIFEST.json').read_text())['reviewed'] is False
+    assert json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8'))['reviewed'] is False
     approved = snapshot.approve_published(out, confirmed=True)
     assert approved['reviewed'] is True and approved['reviewed_at']
     assert snapshot.check_published(out) == approved
@@ -232,10 +248,10 @@ def test_hand_edited_manifest_cannot_carry_guarded_text_past_the_check(isolated_
     with pytest.raises(RuntimeError) as err:
         snapshot.approve_published(out, confirmed=True)
     assert f'posts id {post_id}, field body: looks like an email address' in str(err.value) and secret not in str(err.value)
-    assert json.loads((out / 'MANIFEST.json').read_text())['reviewed'] is False
+    assert json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8'))['reviewed'] is False
     # Hand-approved: the CI check and the renderer both refuse, and nothing is rendered.
     retarget(out, plant, reviewed=True, reviewed_at='2026-01-01T00:00:00+00:00')
-    assert json.loads((out / 'MANIFEST.json').read_text())['sha256'] == sha(out / 'overview.json')
+    assert json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8'))['sha256'] == sha(out / 'overview.json')
     for call in (lambda: snapshot.check_published(out), lambda: snapshot.build_from_data(tmp_path / 'site', out)):
         with pytest.raises(RuntimeError) as err:
             call()
@@ -252,7 +268,7 @@ def test_manifest_counts_must_match_the_data(isolated_db, tmp_path, monkeypatch)
     out = tmp_path / 'published'
     honest = snapshot.export_published(out)
     snapshot.approve_published(out, confirmed=True)
-    good = (out / 'MANIFEST.json').read_text()
+    good = (out / 'MANIFEST.json').read_text(encoding='utf-8')
     for field, value in (('actions_by_source', {**honest['actions_by_source'], 'engine': 0, 'demo': 999}),
                          ('records', {**honest['records'], 'posts': 0}), ('actions_by_source', None)):
         (out / 'MANIFEST.json').write_text(json.dumps({**json.loads(good), field: value}))
@@ -276,7 +292,7 @@ def test_approve_refuses_tampered_unreviewed_data_and_missing_files(isolated_db,
     (out / 'overview.json').write_bytes((out / 'overview.json').read_bytes() + b'\n')
     with pytest.raises(RuntimeError, match='does not match the sha256'):
         snapshot.approve_published(out, confirmed=True)
-    assert json.loads((out / 'MANIFEST.json').read_text())['reviewed'] is False
+    assert json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8'))['reviewed'] is False
     (out / 'MANIFEST.json').unlink()
     with pytest.raises(RuntimeError, match='missing or unreadable'):
         snapshot.check_published(out)
@@ -381,10 +397,10 @@ def test_page_labels_and_link_wording():
 
 
 def test_published_folder_is_committable_but_private_files_stay_ignored():
-    rules = [line.strip() for line in (REPO / '.gitignore').read_text().splitlines() if line.strip() and not line.startswith('#')]
+    rules = [line.strip() for line in (REPO / '.gitignore').read_text(encoding='utf-8').splitlines() if line.strip() and not line.startswith('#')]
     assert not any('published' in rule for rule in rules)
     assert {'.env', '*.db', '*.sqlite', 'secrets/*', 'data/*'} <= set(rules)
-    assert 'published/* -text' in (REPO / '.gitattributes').read_text()
+    assert 'published/* -text' in (REPO / '.gitattributes').read_text(encoding='utf-8')
     assert snapshot.PUBLISHED == REPO / 'published'
 
 

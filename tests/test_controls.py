@@ -164,15 +164,15 @@ def test_cli_rotate_and_revoke(isolated_db,monkeypatch,capsys,tmp_path):
     assert cli.key_file()==key_path  # conftest points the CLI away from the repository
     run_cli(monkeypatch,'rotate-key','1')
     out=capsys.readouterr().out
-    new=json.loads(key_path.read_text())['Astra']
+    new=json.loads(key_path.read_text(encoding='utf-8'))['Astra']
     assert new!=old and new not in out and 'live_' not in out  # not printed unless asked
     assert authenticate(new)['id']==1 and status_of(lambda: authenticate(old))==401
     run_cli(monkeypatch,'rotate-key','1','--show-key')
-    shown=json.loads(key_path.read_text())['Astra']
+    shown=json.loads(key_path.read_text(encoding='utf-8'))['Astra']
     assert capsys.readouterr().out.count(shown)==1
     run_cli(monkeypatch,'revoke-key','1')
     out=capsys.readouterr().out
-    assert 'live_' not in out and 'Astra' not in json.loads(key_path.read_text())
+    assert 'live_' not in out and 'Astra' not in json.loads(key_path.read_text(encoding='utf-8'))
     assert status_of(lambda: authenticate(shown))==401
     with pytest.raises(SystemExit):
         run_cli(monkeypatch,'rotate-key','999')

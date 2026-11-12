@@ -384,7 +384,7 @@ def test_diagnostics_are_not_in_the_overview_or_the_export(isolated_db, monkeypa
     assert not any(word in public for word in words)
     assert not any('turn' in key for key in overview())
     snapshot.export_published(tmp_path / 'published')
-    exported = (tmp_path / 'published' / 'overview.json').read_text() + (tmp_path / 'published' / 'MANIFEST.json').read_text()
+    exported = (tmp_path / 'published' / 'overview.json').read_text(encoding='utf-8') + (tmp_path / 'published' / 'MANIFEST.json').read_text(encoding='utf-8')
     assert not any(word in exported for word in words)
     # A turn that failed a diagnostic write would still have been recorded: diagnostics never gate the action.
     monkeypatch.setattr(controls, 'record_turn', lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError('disk')))
