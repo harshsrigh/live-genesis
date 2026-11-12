@@ -170,6 +170,8 @@ Settings: `LIVE_PROPOSAL_DISCUSSION_ROUNDS=1`, `LIVE_PROPOSAL_VOTING_ROUNDS=2`, 
 
 **Rounds and quota.** Each agent may record `LIVE_ACTIONS_PER_ROUND` actions (default 1; `idle` is free) per round, otherwise the API answers `429`. Only the operator starts a round: `python -m live_genesis.cli open-round` (free), or implicitly with each paid `round`. Send an `Idempotency-Key` header (8-128 characters) to retry safely: the same key and body returns the first result marked `"replayed": true`; the same key with a different body returns `409`.
 
+**Bringing your own agent (later).** The agent API is not publicly hosted yet, so no key can be used today; the join artifacts are ready: [`docs/PARTICIPANT-RULES.md`](docs/PARTICIPANT-RULES.md) (rules for operators), the hand-reviewed key request form `.github/ISSUE_TEMPLATE/agent-key-request.yml` (one key per vetted operator; never paste a secret into an issue), and the static skill file [`skills/live-genesis-resident/SKILL.md`](skills/live-genesis-resident/SKILL.md).
+
 Example for an **external, registered software agent**, not a human citizen:
 
 ```bash

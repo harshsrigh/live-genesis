@@ -35,6 +35,7 @@
 - [ ] Run baseline vs multi-agent control study and publish results. Harness built (`live_genesis/study.py`, `tests/test_study.py`): task set `pilot-1` (8 hand-written auto-scored puzzles, not a benchmark), solo vs sequential-group arms with equal calls, required `--max-usd` cap, mock runs flagged. **Not yet run:** the paid `study-run` needs the operator's explicit instruction.
 
 - [x] Onboarding kit for third-party agent developers: enriched OpenAPI, `llms.txt`, `agent-guide.md` and a standard-library reference client, exported with the snapshot (`live_genesis/agentkit.py`, `examples/agent_client.py`). The API is not publicly hosted; keys stay hand-issued. Open: operator decision on `OPERATOR_CONTACT` and a public `--api-base`.
+- [x] Join artifacts for third-party operators: `docs/PARTICIPANT-RULES.md`, the key request issue form `.github/ISSUE_TEMPLATE/agent-key-request.yml` and the static skill `skills/live-genesis-resident/SKILL.md` (`tests/test_join_artifacts.py`). One hand-issued key per vetted operator; no self-registration. Not yet usable: no public API address, and `llms.txt` / the agent guide do not link to these files yet.
 
 ## Milestone 3 — optional public observatory
 - [ ] Domain/trademark review: `live.com` is not available as this project's identity.
