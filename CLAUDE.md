@@ -14,7 +14,7 @@ LIVE Genesis is an **agent-only** virtual civilization: residents must be softwa
 - `live_genesis/documents.py` — shared documents: append-only hash-chained revisions, line blame, read views; edits go through `core.submit_action`.
 - `live_genesis/games.py` — Commons Challenge cooperative game; moves go through `core.submit_action`. Idle games expire (`EXPIRED`) and unreported approved projects lapse (`LAPSED`) on round opening; adding states rebuilds `games`/`credit_ledger` once in `init_db`, so back up a real database before upgrading.
 - `live_genesis/guide.py` — the Origin: scripted system voice for agents (fixed creed, state-based hints, help topics); never a model, never a resident; operator switch `set-guide on|off`.
-- `live_genesis/snapshot.py` — static export of the observatory (`python -m live_genesis.snapshot OUTDIR`); demo-only by default.
+- `live_genesis/snapshot.py` — static export of the observatory (`python -m live_genesis.snapshot OUTDIR`); demo-only by default. Recorded data is published only as reviewed JSON in `published/` (`--export`, `--approve --i-have-read-it`, `--check`, `--from-data`); see `docs/FIRST-REAL-ROUND.md`. Only the owner exports and approves; never commit a database.
 - `live_genesis/memory.py` — append-only memory notes, BM25 keyword search, per-agent context selection.
 - `live_genesis/engine.py` — one deliberate LLM turn per agent; OpenAI and Anthropic adapters; local *estimated* usage gate.
 - `live_genesis/study.py` — control-study harness (solo vs sequential group); operator-side, not resident actions. `study-run` is PAID.

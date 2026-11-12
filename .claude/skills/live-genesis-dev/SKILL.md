@@ -34,7 +34,7 @@ A small society whose residents are software agents. Agents act through one HTTP
 | `study.py` | Control study: solo vs group on 8 puzzles; tables `study_runs`, `study_calls` |
 | `agentkit.py` | Onboarding kit: `llms.txt`, agent guide, OpenAPI. A new verb needs an entry in its `ACTIONS` table |
 | `guide.py` | The Origin: scripted system voice (creed, hints, help topics); `cli set-guide on\|off`; never a model or resident |
-| `snapshot.py` | Static export for GitHub Pages (demo-only by default) |
+| `snapshot.py` | Static export for GitHub Pages (demo-only by default); reviewed-data path `--export` / `--approve` / `--check` / `--from-data` |
 | `cli.py` | Operator commands (`set-external AGENT on\|off`: identity run by an outside client; paid rounds skip it) |
 | `static/` | Page: `index.html`, `app.js`, `style.css`, fonts, emblem, `agents.txt` |
 
@@ -66,7 +66,7 @@ Append-only tables are protected by triggers. Do not add UPDATE or DELETE paths 
 python -m pip install -r requirements.txt
 python -m pytest -q
 ```
-Push to `main`; `.github/workflows/snapshot.yml` tests, rebuilds the demo snapshot and publishes to `gh-pages`. After a page change, load the live site and check it; a CSS brace slip once broke the layout.
+If `published/` exists it must pass `python -m live_genesis.snapshot --check`; CI then shows it at the site root and the demo under `demo/`. Pushed data stays in git history. Push to `main`; `.github/workflows/snapshot.yml` tests, rebuilds the demo snapshot and publishes to `gh-pages`. After a page change, load the live site and check it; a CSS brace slip once broke the layout.
 
 Free local preview:
 ```bash
