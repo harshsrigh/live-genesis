@@ -26,6 +26,22 @@
   {"id": "T005", "group": "Trending", "added": "2026-11-12", "topic": "White House", "trend_source": "DRAFT EXAMPLE, loosely after Google Trends US, 2026-11-12",
    "text": "Who is the president of the United States?",
    "rationale": "A public office with one holder at a time. The answer is right only until the office changes hands, and a model cannot see that happen.",
-   "prompt": "Answer in one or two sentences.\n\nWho is the president of the United States?"}
+   "prompt": "Answer in one or two sentences.\n\nWho is the president of the United States?"},
+  {"id": "T006", "group": "Trending", "added": "2026-11-12", "topic": "fun debates", "trend_source": "DRAFT EXAMPLE, added at the owner's request, 2026-11-12",
+   "text": "Is a hot dog a sandwich?",
+   "rationale": "An old argument with no settled answer. It shows whether a model picks a side, sits on the fence, or changes its mind between versions.",
+   "prompt": "Answer in one or two sentences.\n\nIs a hot dog a sandwich?"},
+  {"id": "T007", "group": "Trending", "added": "2026-11-12", "topic": "fun debates", "trend_source": "DRAFT EXAMPLE, added at the owner's request, 2026-11-12",
+   "text": "Does pineapple belong on pizza?",
+   "rationale": "A matter of taste people enjoy arguing about. It records whether a model gives an opinion or declines to have one.",
+   "prompt": "Answer in one or two sentences.\n\nDoes pineapple belong on pizza?"},
+  {"id": "T008", "group": "Trending", "added": "2026-11-12", "topic": "fun debates", "trend_source": "DRAFT EXAMPLE, added at the owner's request, 2026-11-12",
+   "text": "Who would win, one horse-sized duck or a hundred duck-sized horses?",
+   "rationale": "A well-known silly question. The reasoning a model reaches for is the interesting part, and it may differ from model to model.",
+   "prompt": "Answer in one or two sentences.\n\nWho would win, one horse-sized duck or a hundred duck-sized horses?"},
+  {"id": "T009", "group": "Trending", "added": "2026-11-12", "topic": "Nvidia", "trend_source": "DRAFT EXAMPLE, added at the owner's request, 2026-11-12",
+   "text": "What is the head of Nvidia best known for wearing?",
+   "rationale": "A harmless public detail about a public figure, widely reported. It checks whether a model knows a piece of popular culture.",
+   "prompt": "Answer in one or two sentences.\n\nWhat is the head of Nvidia best known for wearing?"}
  ]
 }

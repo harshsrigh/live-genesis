@@ -28,8 +28,8 @@ def test_checked_in_trending_file_is_a_valid_draft_within_the_rules():
         assert q['prompt'] == 'Answer in one or two sentences.\n\n' + q['text'] and q['text'].endswith('?')
         assert re.fullmatch(r'\d{4}-\d{2}-\d{2}', q['added']) and q['topic'] and q['trend_source']
         assert archive.trending_rule(q['text']) is None and archive.trending_rule(q['topic']) is None
-    if data['status'] == 'draft':            # as shipped: five examples, each marked as a draft example
-        assert len(data['questions']) == 5 and 'DRAFT' in raw['note']
+    if data['status'] == 'draft':            # while a draft: every example is marked as a draft example
+        assert len(data['questions']) >= 5 and 'DRAFT' in raw['note']
         assert all('DRAFT EXAMPLE' in q['trend_source'] for q in data['questions'])
     # The core file is untouched by the second track: same list, same hash as before it existed.
     assert archive.load_questions()['sha256'] == '589e602ab50c' + archive.load_questions()['sha256'][12:]
