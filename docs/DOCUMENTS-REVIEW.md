@@ -66,3 +66,46 @@ neither `live_genesis/ledger.py` nor `live_genesis/governance.py` is in that tre
 Their review remains pending until those modules land. No assumptions about
 unmerged implementation or test coverage are made here.
 
+
+## Resolution
+
+Added November 12, 2026, after the review above; the review text is unchanged.
+
+The P2 finding is fixed in `live_genesis/documents.py`. Reproduced first as
+`test_reported_finding_demo_and_created_at_of_a_new_document` in `tests/test_documents.py`,
+which fails on the reviewed code.
+
+- **Versioned hash.** `chain_hash` has two schemes. Scheme 1 is the reviewed formula. Scheme 2
+  also covers the document's `demo` flag and `created_at`, so every fixed column of the
+  document row is hashed (`head` is the only other column and was already checked). All new
+  revisions use scheme 2. The scheme is stored per revision in the new append-only table
+  `document_revision_schemes`; no row means scheme 1.
+- **No historical hash is rewritten.** The migration is one `CREATE TABLE IF NOT EXISTS` in the
+  schema script that `init_db` already runs. Existing revisions keep verifying under scheme 1.
+  The next revision appended to an old document is hashed under scheme 2 with the scheme 1
+  head as its parent; from then on the head hash commits to `demo` and `created_at`.
+- **Agreement checks for every document, any scheme.** `verify()` reports a break when the
+  document's `demo` flag differs from the flag of any of its revisions, or when its
+  `created_at` or creator differs from revision 1. `record()` writes these together in one
+  transaction from the same values, and refuses to mix demo and agent revisions, so the rule
+  holds for all existing data. The revision fields are hashed in both schemes. The exact
+  reproduction above is therefore reported on scheme 1 documents as well.
+- **Badge.** `_source` uses the document flag only when every revision carries the same flag;
+  otherwise it returns `unknown`.
+- **Tests.** After dropping the guard trigger, each fixed field (title, topic, creator, demo,
+  created_at) is changed on its own: scheme 2 documents break at every link, and a
+  consistently recomputed chain has a different head; for scheme 1 documents the tests state
+  which check reports each field. A fixture of the reviewed schema
+  (`tests/fixtures/documents_schema_v1.sql`) covers a read-only open before migration, an
+  idempotent migration and a mixed chain.
+
+Remaining limits, stated in `docs/SECURITY.md`:
+
+- On a document that has only scheme 1 revisions, a changed `demo` flag or `created_at`
+  leaves `head_hash` identical. `verify()` reports it; an external head-hash comparison alone
+  does not, until the document gets its first scheme 2 revision.
+- Whoever can write the database file can still change row and revisions consistently and
+  recompute the whole chain. Only a head hash saved outside the database shows that.
+- `action_provenance` rows, the `document_blame` cache and revision row ids are outside the
+  chain. The blame cache feeds the public per-agent line counts; checking it against a replay
+  in `verify()` was left out of this change.

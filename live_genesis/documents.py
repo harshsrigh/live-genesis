@@ -5,7 +5,18 @@ FULL body (no patches, no operational transforms), who wrote it, which revision 
 on, a short edit summary, line counts versus its base, and two hashes:
 
     content_hash = SHA-256 of the body
-    chain_hash   = SHA-256 of the previous revision's chain_hash + this revision's fields
+    chain_hash   = SHA-256 of the previous revision's chain_hash + the document's fixed fields
+                   + this revision's fields
+
+Two hash schemes exist (`chain_hash()`); `document_revision_schemes` says which one a revision uses:
+    scheme 1  document id, title, topic, creator + the revision's fields. Every revision written
+              before scheme 2 existed. These hashes are never rewritten and keep verifying as scheme 1.
+    scheme 2  scheme 1 plus the document's `demo` flag and `created_at`, i.e. every fixed column of
+              the document row. Every revision written now, including the next revision of a
+              scheme 1 document (its parent is the scheme 1 head, so a chain upgrades forward).
+`verify()` also checks, whatever the scheme, that the document row agrees with its revisions:
+a document is demo exactly when every one of its revisions is, and its `created_at` and creator
+are those of revision 1 (record() writes them together, in one transaction, from the same values).
 
 Nothing here is called directly by a client. `core.submit_action` owns the transaction, quota,
 idempotency, cooldown, event and provenance row and calls `record()` inside it (the same hook
@@ -16,6 +27,9 @@ Honest limits, repeated in docs/SECURITY.md:
   someone who cannot rewrite the whole chain. Anyone with write access to the SQLite file can
   drop the triggers, change a revision and recompute every later hash; that is caught only by
   comparing with a head hash kept elsewhere (`head_hash` in /api/overview or a static snapshot).
+* Outside the chain, so not checked at all: `action_provenance` rows (the api / engine label and
+  the model name of a revision), the `document_blame` cache behind the per-agent line counts,
+  and a revision's row id. Whether a revision is demo IS in the chain.
 * Line "blame" and the per-agent line counts are a HEURISTIC FOR ATTRIBUTION (who last changed
   each line, by a line diff). They are not a measure of contribution value: moving or reflowing
   text reassigns lines, and one decisive word counts the same as a rewritten line.
@@ -85,6 +99,16 @@ CREATE TABLE IF NOT EXISTS document_blame (
     document_id INTEGER PRIMARY KEY REFERENCES documents(id),
     revision INTEGER NOT NULL, authors TEXT NOT NULL
 );
+-- Hash scheme of a revision's chain_hash. NO ROW = scheme 1: every revision written before this
+-- table existed. This is the whole migration (init_db runs this script): nothing stored is rewritten.
+CREATE TABLE IF NOT EXISTS document_revision_schemes (
+    revision_id INTEGER PRIMARY KEY REFERENCES document_revisions(id),
+    scheme INTEGER NOT NULL CHECK(scheme >= 2)
+);
+CREATE TRIGGER IF NOT EXISTS document_revision_schemes_no_update BEFORE UPDATE ON document_revision_schemes
+    BEGIN SELECT RAISE(ABORT, 'document_revision_schemes is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS document_revision_schemes_no_delete BEFORE DELETE ON document_revision_schemes
+    BEGIN SELECT RAISE(ABORT, 'document_revision_schemes is append-only'); END;
 '''
 
 
@@ -136,14 +160,26 @@ def content_hash(body: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def chain_hash(previous: str, document: Any, revision: Any) -> str:
+SCHEME = 2               # hash scheme of every revision written now
+SCHEMES = (1, 2)         # schemes verify() can recompute
+_SCHEME_2_TAG = "live-genesis-document-chain-2"  # first hashed field; a scheme 1 input starts with '' or a hex digest
+
+
+def chain_hash(previous: str, document: Any, revision: Any, scheme: int = SCHEME) -> str:
     """Hash linking one revision to everything before it. `previous` is '' for revision 1.
 
-    Covers the document's fixed fields too, so a changed title or topic breaks every link."""
+    Covers the document's fixed fields too, so changing one breaks every link of that scheme:
+    scheme 1 covers id, title, topic and creator; scheme 2 also the document's demo flag and
+    created_at (all fixed columns of the row). `head` is the only other column; verify() checks it.
+    """
+    if scheme not in SCHEMES:
+        raise ValueError(f"unknown document hash scheme {scheme}")
     fields = [previous, document["id"], document["title"], document["topic"], document["created_by"],
               revision["number"], revision["agent_id"], revision["base"], revision["kind"], revision["reverted_to"],
               revision["summary"], revision["size_delta"], revision["lines_added"], revision["lines_removed"],
               int(revision["demo"]), revision["created_at"], revision["content_hash"]]
+    if scheme == 2:
+        fields = [_SCHEME_2_TAG, *fields[:5], int(document["demo"]), document["created_at"], *fields[5:]]
     return hashlib.sha256(json.dumps(fields, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
@@ -317,7 +353,11 @@ def record(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payloa
         "INSERT INTO document_revisions(document_id,number,agent_id,base,kind,reverted_to,body,summary,size_delta,"
         "lines_added,lines_removed,demo,created_at,content_hash,chain_hash) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (doc_id, revision["number"], agent_id, head, verb, reverted_to, body, summary, revision["size_delta"], added, removed,
-         int(demo), stamp, revision["content_hash"], chain_hash(previous_hash, document, revision))).lastrowid
+         int(demo), stamp, revision["content_hash"], chain_hash(previous_hash, document, revision, SCHEME))).lastrowid
+    # A scheme 1 head is a valid parent: the first revision appended after the upgrade starts scheme 2.
+    # OR IGNORE: a row can already be there only if revisions were deleted outside this code and
+    # their row id is reused; a leftover row naming another scheme then shows up as a break in verify().
+    cx.execute("INSERT OR IGNORE INTO document_revision_schemes(revision_id,scheme) VALUES (?,?)", (revision_id, SCHEME))
     cx.execute("UPDATE documents SET head=? WHERE id=?", (revision["number"], doc_id))
     cx.execute("INSERT INTO document_blame(document_id,revision,authors) VALUES (?,?,?) "
                "ON CONFLICT(document_id) DO UPDATE SET revision=excluded.revision,authors=excluded.authors",
@@ -333,13 +373,45 @@ def record(cx: sqlite3.Connection, agent_id: int, action: dict[str, Any], payloa
 
 # ---------------------------------------------------------------- verification
 
+def _scheme_rows(cx: sqlite3.Connection) -> dict[int, int]:
+    """revision row id -> stored hash scheme. Empty on a database not yet migrated (all scheme 1)."""
+    if not cx.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='document_revision_schemes'").fetchone():
+        return {}
+    return {r[0]: r[1] for r in cx.execute("SELECT revision_id,scheme FROM document_revision_schemes")}
+
+
+def scheme_counts(cx: sqlite3.Connection | None = None) -> dict[str, int]:
+    """Stored revisions per hash scheme, e.g. {"v1": 4, "v2": 9}. Read-only; says nothing about breaks."""
+    if cx is None:
+        from .core import connect
+        with connect() as own:
+            return scheme_counts(own)
+    out = {f"v{n}": 0 for n in SCHEMES}
+    if _has_tables(cx):
+        schemes = _scheme_rows(cx)
+        for (revision_id,) in cx.execute("SELECT id FROM document_revisions"):
+            key = f"v{schemes.get(revision_id, 1)}"
+            out[key] = out.get(key, 0) + 1
+    return out
+
+
 def verify(document_id: int | None = None, *, cx: sqlite3.Connection | None = None) -> list[dict[str, Any]]:
     """Recompute every hash and return the breaks found ([] = history is internally consistent).
 
     Each break is {"document_id", "revision", "problem"}. Checks: revision numbers run 1..head
     without gaps, each base is the previous number, each content_hash matches its body, each
-    chain_hash matches the previous link plus the stored fields, and documents.head is the last
-    revision. It cannot detect a history whose whole chain was recomputed after tampering, nor
+    chain_hash matches the previous link plus the stored fields under the revision's own hash
+    scheme (no scheme row = scheme 1), a chain never goes back to an older scheme, and
+    documents.head is the last revision.
+
+    For every document, whatever its scheme, the document row must also agree with its revisions,
+    which is how record() writes them: the document's demo flag equals the demo flag of EVERY
+    revision (demo and agent revisions cannot mix), and its created_at and creator equal those of
+    revision 1 (same transaction, same values). The revision fields are hashed in both schemes,
+    so these checks catch a changed demo flag or created_at on a scheme 1 document, whose own
+    hashes do not cover the two columns.
+
+    It cannot detect a history whose whole chain was recomputed after tampering, nor
     removed trailing revisions with a matching head: compare `head_hash` with a copy kept
     outside this database for that.
     """
@@ -350,19 +422,32 @@ def verify(document_id: int | None = None, *, cx: sqlite3.Connection | None = No
     breaks: list[dict[str, Any]] = []
     if not _has_tables(cx):
         return breaks
+    schemes = _scheme_rows(cx)
     where, args = ("WHERE id=?", (document_id,)) if document_id is not None else ("", ())
     for doc in cx.execute(f"SELECT * FROM documents {where} ORDER BY id", args).fetchall():
-        previous, expected = "", 1
+        previous, expected, newest = "", 1, 1
         for rev in cx.execute("SELECT * FROM document_revisions WHERE document_id=? ORDER BY number", (doc["id"],)):
             problems = []
+            scheme = schemes.get(rev["id"], 1)
             if rev["number"] != expected or rev["base"] != rev["number"] - 1:
                 problems.append("revision numbering is not continuous")
             if content_hash(rev["body"]) != rev["content_hash"]:
                 problems.append("body does not match content_hash")
-            if chain_hash(previous, doc, rev) != rev["chain_hash"]:
+            if scheme not in SCHEMES:
+                problems.append(f"unknown hash scheme {scheme}: this version cannot check the link")
+            elif chain_hash(previous, doc, rev, scheme) != rev["chain_hash"]:
                 problems.append("chain_hash does not match the previous link and stored fields")
+            if scheme < newest:
+                problems.append(f"hash scheme goes back from {newest} to {scheme}")
+            if rev["demo"] != doc["demo"]:
+                problems.append("demo flag of the document and of this revision differ")
+            if expected == 1:  # the first stored revision: written with the document row
+                if rev["created_at"] != doc["created_at"]:
+                    problems.append("document created_at differs from its first revision")
+                if rev["agent_id"] != doc["created_by"]:
+                    problems.append("document creator differs from the author of its first revision")
             breaks += [{"document_id": doc["id"], "revision": rev["number"], "problem": p} for p in problems]
-            previous, expected = rev["chain_hash"], rev["number"] + 1
+            previous, expected, newest = rev["chain_hash"], rev["number"] + 1, max(newest, scheme)
         if doc["head"] != expected - 1:
             breaks.append({"document_id": doc["id"], "revision": doc["head"], "problem": "head does not match the last stored revision"})
     return breaks
@@ -395,7 +480,15 @@ _HEADERS = '''SELECT r.number,r.kind,a.name agent,a.role,r.base,r.reverted_to,r.
 
 
 def _source(cx: sqlite3.Connection, document_id: int, demo: Any) -> str:
-    """demo / engine / api / unknown, or 'mixed' when revisions came from more than one origin."""
+    """demo / engine / api / unknown, or 'mixed' when revisions came from more than one origin.
+
+    The document's demo flag is used only when every revision carries the same flag (the rule
+    verify() checks; the revision flags are in the hash chain). If they disagree the row was
+    changed outside this code, so no origin is claimed: 'unknown', never 'demo' or an agent label.
+    """
+    flags = {r[0] for r in cx.execute("SELECT DISTINCT demo FROM document_revisions WHERE document_id=?", (document_id,))}
+    if flags != {int(bool(demo))}:
+        return "unknown"
     if demo:
         return "demo"
     sources = {r[0] for r in cx.execute(

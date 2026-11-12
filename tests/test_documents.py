@@ -1,6 +1,7 @@
 """Shared documents with attributable, hash-chained revision history. Offline; no model calls."""
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from live_genesis import cli, controls, documents, engine, guards, memory, snapshot
 from live_genesis.app import app
-from live_genesis.core import (agent_context, connect, open_round, overview, reserve_budget, seed_agents,
+from live_genesis.core import (agent_context, connect, init_db, open_round, overview, reserve_budget, seed_agents,
                                settle_reservation, submit_action)
 from live_genesis.observatory import app as observatory_app
 
@@ -264,7 +265,9 @@ def test_revisions_are_append_only_and_documents_keep_their_identity(isolated_db
 
 
 def tamper(statement, *args):
+    """Raw SQL as someone with write access to the database file: guards dropped, foreign keys off."""
     with connect() as cx:
+        cx.execute('PRAGMA foreign_keys=OFF')   # a deleted revision may leave its hash scheme row behind
         cx.execute('DROP TRIGGER IF EXISTS document_revisions_no_update')
         cx.execute('DROP TRIGGER IF EXISTS document_revisions_no_delete')
         cx.execute('DROP TRIGGER IF EXISTS documents_fixed_fields')
@@ -287,7 +290,7 @@ def test_verify_detects_tampering_through_raw_sql(isolated_db):
 @pytest.mark.parametrize('statement,revision', [
     ("UPDATE document_revisions SET summary='Rewritten summary' WHERE number=2", 2),
     ('UPDATE document_revisions SET agent_id=1 WHERE number=3', 3),
-    ("UPDATE document_revisions SET created_at='2020-01-01T00:00:00+00:00' WHERE number=1", 1),
+    ("UPDATE document_revisions SET created_at='2020-01-01T00:00:00+00:00' WHERE number=2", 2),
     ('UPDATE document_revisions SET lines_added=40 WHERE number=2', 2),
 ])
 def test_verify_detects_changed_metadata(isolated_db, statement, revision):
@@ -324,6 +327,180 @@ def test_a_fully_recomputed_chain_passes_verify_but_changes_the_head_hash(isolat
             cx.execute('UPDATE document_revisions SET chain_hash=? WHERE id=?', (previous, rev['id']))
     assert documents.verify() == []
     assert overview()['documents'][0]['head_hash'] != published
+
+
+# ---- hash schemes: the document row's origin fields (docs/DOCUMENTS-REVIEW.md) ---------
+
+V1_FIXTURE = Path(__file__).parent / 'fixtures' / 'documents_schema_v1.sql'
+V1_HEADS = {1: '137974c2', 2: 'e5acd96a'}   # first 8 characters of each head_hash stored in the fixture
+FIXED_FIELDS = [('title', 'Forged title'), ('topic', 'science'), ('created_by', 5), ('demo', 1),
+                ('created_at', '1900-01-01T00:00:00+00:00')]
+
+
+def old_database(path):
+    """Put the document tables back to what a database written before hash scheme 2 holds:
+    the old schema and two documents whose stored hashes are real scheme 1 hashes."""
+    seed_agents()
+    raw = sqlite3.connect(path)   # plain connection: foreign keys off, triggers go with their tables
+    raw.executescript('DROP TABLE document_revision_schemes; DROP TABLE document_blame; '
+                      'DROP TABLE document_revisions; DROP TABLE documents;')
+    raw.executescript(V1_FIXTURE.read_text(encoding='utf-8'))
+    raw.commit()
+    raw.close()
+
+
+def heads():
+    with connect() as cx:
+        return {r[0]: r[1] for r in cx.execute('SELECT document_id,chain_hash FROM document_revisions r '
+                                               'JOIN documents d ON d.id=r.document_id AND d.head=r.number')}
+
+
+def problems(doc=None):
+    return [(b['revision'], b['problem']) for b in documents.verify(doc)]
+
+
+def recompute(doc):
+    """What a database-file writer can do: store a fresh, internally valid chain for one document."""
+    with connect() as cx:
+        cx.execute('DROP TRIGGER IF EXISTS document_revisions_no_update')
+        schemes = documents._scheme_rows(cx)
+        record, previous = cx.execute('SELECT * FROM documents WHERE id=?', (doc,)).fetchone(), ''
+        for rev in cx.execute('SELECT * FROM document_revisions WHERE document_id=? ORDER BY number', (doc,)).fetchall():
+            previous = documents.chain_hash(previous, record, rev, schemes.get(rev['id'], 1))
+            cx.execute('UPDATE document_revisions SET chain_hash=? WHERE id=?', (previous, rev['id']))
+
+
+CHAIN = 'chain_hash does not match the previous link and stored fields'
+DEMO = 'demo flag of the document and of this revision differ'
+CREATED = 'document created_at differs from its first revision'
+CREATOR = 'document creator differs from the author of its first revision'
+
+
+def test_reported_finding_demo_and_created_at_of_a_new_document(isolated_db):
+    """The reproduction in docs/DOCUMENTS-REVIEW.md: drop the guard, flip demo, move created_at."""
+    seed_agents()
+    doc = create(1, provenance={'source': 'api', 'model': 'declared-model', 'client': 'pytest'})['document_id']
+    assert overview()['documents'][0]['source'] == 'api' and documents.scheme_counts() == {'v1': 0, 'v2': 1}
+    tamper("UPDATE documents SET demo=1, created_at='1900-01-01T00:00:00Z' WHERE id=?", doc)
+    assert problems() == [(1, CHAIN), (1, DEMO), (1, CREATED)]
+    assert overview()['documents'][0]['source'] == 'unknown'   # the unchecked flag no longer makes it read 'demo'
+
+
+@pytest.mark.parametrize('field,value', FIXED_FIELDS)
+def test_scheme_2_each_fixed_field_breaks_every_link_or_changes_the_head(isolated_db, field, value):
+    doc, *_ = three_revisions()
+    published = heads()[doc]
+    assert documents.scheme_counts() == {'v1': 0, 'v2': 3}
+    tamper(f'UPDATE documents SET {field}=? WHERE id=?', value, doc)
+    found = problems(doc)
+    assert [n for n, problem in found if problem == CHAIN] == [1, 2, 3]   # the hash itself covers the field
+    assert heads()[doc] == published                                    # nothing was recomputed yet
+    # Covering the tracks: make the revisions agree with the forged row and recompute the whole chain.
+    if field == 'demo':
+        tamper('UPDATE document_revisions SET demo=? WHERE document_id=?', value, doc)
+    if field == 'created_at':
+        tamper('UPDATE document_revisions SET created_at=? WHERE document_id=? AND number=1', value, doc)
+    if field == 'created_by':
+        tamper('UPDATE document_revisions SET agent_id=? WHERE document_id=? AND number=1', value, doc)
+    recompute(doc)
+    assert documents.verify() == []                                     # internally consistent again ...
+    assert heads()[doc] != published                                    # ... but not the head saved elsewhere
+
+
+def test_scheme_1_database_reads_before_migration_and_migrates_in_place(isolated_db):
+    old_database(isolated_db)
+    with connect(readonly=True) as cx:                                  # an observatory opened before any writer upgraded
+        assert not cx.execute("SELECT 1 FROM sqlite_master WHERE name='document_revision_schemes'").fetchone()
+        assert documents.verify(cx=cx) == [] and documents.scheme_counts(cx) == {'v1': 4, 'v2': 0}
+        assert [(d['id'], d['source'], d['head_hash'][:8]) for d in documents.public_documents(cx)] == [
+            (2, 'demo', V1_HEADS[2]), (1, 'unknown', V1_HEADS[1])]
+    assert [d['id'] for d in overview(readonly=True)['documents']] == [2, 1]
+    assert documents.read_document(1)['body'] == 'alpha\nbeta revised\ngamma\ndelta'
+    before = sqlite3.connect(isolated_db).execute('SELECT * FROM documents').fetchall(), \
+        sqlite3.connect(isolated_db).execute('SELECT * FROM document_revisions').fetchall()
+    init_db()
+    init_db()                                                           # idempotent
+    raw = sqlite3.connect(isolated_db)
+    assert (raw.execute('SELECT * FROM documents').fetchall(), raw.execute('SELECT * FROM document_revisions').fetchall()) == before
+    assert raw.execute('SELECT COUNT(*) FROM document_revision_schemes').fetchone()[0] == 0   # no row = scheme 1
+    raw.close()
+    assert documents.verify() == [] and documents.scheme_counts() == {'v1': 4, 'v2': 0}
+    assert {k: v[:8] for k, v in heads().items()} == V1_HEADS           # historical hashes untouched
+
+
+@pytest.mark.parametrize('field,value', FIXED_FIELDS)
+def test_scheme_1_what_is_detected_and_by_which_check(isolated_db, field, value):
+    """Scheme 1 hashes cover title, topic and creator. They do NOT cover demo and created_at:
+    for those the stored hashes still match and only the row/revision agreement check reports a break."""
+    old_database(isolated_db)
+    init_db()
+    tamper(f'UPDATE documents SET {field}=? WHERE id=1', value)
+    found = problems(1)
+    assert {k: v[:8] for k, v in heads().items()} == V1_HEADS
+    assert problems(2) == []
+    if field in ('title', 'topic'):
+        assert found == [(1, CHAIN), (2, CHAIN)]
+    elif field == 'created_by':
+        assert found == [(1, CHAIN), (1, CREATOR), (2, CHAIN)]
+    elif field == 'demo':
+        assert found == [(1, DEMO), (2, DEMO)]                          # no hash mismatch: not covered by scheme 1
+        assert documents.read_document(1)['source'] == 'unknown'
+    else:
+        assert found == [(1, CREATED)]                                  # no hash mismatch: not covered by scheme 1
+    # Making the revisions agree with a forged demo flag or created_at changes hashed revision fields.
+    if field == 'demo':
+        tamper('UPDATE document_revisions SET demo=1 WHERE document_id=1')
+        assert problems(1) == [(1, CHAIN), (2, CHAIN)]
+    if field == 'created_at':
+        tamper('UPDATE document_revisions SET created_at=? WHERE document_id=1 AND number=1', value)
+        assert problems(1) == [(1, CHAIN)]
+    if field == 'created_by':
+        tamper('UPDATE document_revisions SET agent_id=? WHERE document_id=1 AND number=1', value)
+    recompute(1)                                                        # the remaining limit, as for every scheme
+    assert documents.verify() == [] and heads()[1][:8] != V1_HEADS[1]
+
+
+def test_mixed_chain_upgrades_forward_without_touching_history(isolated_db):
+    old_database(isolated_db)
+    init_db()
+    result = revise(3, 1, 2, 'alpha\nbeta revised\ngamma\ndelta\nepsilon', 'Added epsilon after the upgrade')
+    submit_action(2, {'action': 'doc_revise', 'document_id': 2, 'base_revision': 2, 'body': 'one\ntwo\nthree\nfour\nfive',
+                      'summary': 'Scripted edit after the upgrade'}, demo=True, cooldown=False, quota=False)
+    assert documents.verify() == [] and documents.scheme_counts() == {'v1': 4, 'v2': 2}
+    with connect() as cx:
+        doc = cx.execute('SELECT * FROM documents WHERE id=1').fetchone()
+        revs = cx.execute('SELECT * FROM document_revisions WHERE document_id=1 ORDER BY number').fetchall()
+        assert dict(cx.execute('SELECT revision_id,scheme FROM document_revision_schemes').fetchall()) == {result['revision_id']: 2, 6: 2}
+        for statement in ('UPDATE document_revision_schemes SET scheme=3', 'DELETE FROM document_revision_schemes'):
+            with pytest.raises(sqlite3.DatabaseError):
+                cx.execute(statement)
+    assert [r['chain_hash'][:8] for r in revs[:2]] == [documents.chain_hash('', doc, revs[0], 1)[:8], V1_HEADS[1]]
+    assert revs[2]['chain_hash'] == documents.chain_hash(revs[1]['chain_hash'], doc, revs[2], 2)   # parent is the scheme 1 head
+    assert revs[2]['chain_hash'] != documents.chain_hash(revs[1]['chain_hash'], doc, revs[2], 1)
+    assert documents.read_document(2)['source'] == 'demo'
+    published = heads()
+    # From the first scheme 2 revision on, the head hash itself commits to demo and created_at.
+    tamper("UPDATE documents SET created_at='1900-01-01T00:00:00+00:00' WHERE id=1")
+    assert problems(1) == [(1, CREATED), (3, CHAIN)]
+    tamper('UPDATE documents SET demo=0 WHERE id=2')
+    assert problems(2) == [(1, DEMO), (2, DEMO), (3, CHAIN), (3, DEMO)]
+    assert heads() == published
+
+
+def test_scheme_rows_cannot_be_used_to_skip_a_check(isolated_db):
+    doc, *_ = three_revisions()
+    with connect() as cx:
+        cx.execute('DROP TRIGGER document_revision_schemes_no_delete')
+        cx.execute('DROP TRIGGER document_revision_schemes_no_update')
+        cx.execute('DELETE FROM document_revision_schemes WHERE revision_id=2')   # "this one is scheme 1"
+    assert problems(doc) == [(2, CHAIN), (2, 'hash scheme goes back from 2 to 1')]
+    with connect() as cx:
+        cx.execute('INSERT INTO document_revision_schemes VALUES (2,2)')
+        cx.execute('UPDATE document_revision_schemes SET scheme=9 WHERE revision_id=3')
+    assert problems(doc) == [(3, 'unknown hash scheme 9: this version cannot check the link')]
+    assert documents.scheme_counts() == {'v1': 0, 'v2': 2, 'v9': 1}
+    with pytest.raises(ValueError):
+        documents.chain_hash('', {}, {}, 9)
 
 
 # ---- diff counts, blame and contributions ---------------------------------------------
@@ -694,6 +871,7 @@ def test_cli_commands(isolated_db, monkeypatch, capsys):
     cli.main()
     out = capsys.readouterr().out
     assert 'NO model was called' in out and '"breaks": []' in out and 'No break found' in out
+    assert json.loads(out[out.rindex('{\n  "documents"'):out.rindex('}') + 1])['hash_schemes'] == {'v1': 0, 'v2': 4}
     tamper("UPDATE document_revisions SET body='forged' WHERE number=1")
     cli.main()
     assert 'HISTORY BREAKS FOUND' in capsys.readouterr().out

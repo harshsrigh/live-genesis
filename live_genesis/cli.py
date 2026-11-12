@@ -380,8 +380,9 @@ def main():
     if args.command=="verify-documents":
         from . import documents
         breaks=documents.verify()
-        print(json.dumps({"documents":overview()["metrics"]["documents"],"breaks":breaks},indent=2))
-        print("HISTORY BREAKS FOUND: stored revisions do not match their hashes." if breaks else "No break found. This check is internal: it cannot notice a history whose whole hash chain was recomputed; compare head hashes with a copy kept outside this database.")
+        # hash_schemes: stored revisions per scheme. A v1 hash does not cover the document's demo flag and created_at; verify() checks both against the revisions.
+        print(json.dumps({"documents":overview()["metrics"]["documents"],"hash_schemes":documents.scheme_counts(),"breaks":breaks},indent=2))
+        print("HISTORY BREAKS FOUND: stored documents or revisions do not match their hashes or each other." if breaks else "No break found. This check is internal: it cannot notice a history whose whole hash chain was recomputed; compare head hashes with a copy kept outside this database.")
     if args.command=="round":
         if not 1<=args.agents<=10: parser.error("--agents must be between 1 and 10")
         load_provider_credentials()  # the only place .env provider API keys enter a process
