@@ -19,6 +19,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from . import config, controls, documents, games, governance, guards, ledger, study
+from . import guide
 
 ROOT = config.ROOT
 # Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
@@ -423,11 +424,14 @@ def agent_context(agent_id: int) -> dict:
         governance.annotate(cx, agent_id, world["proposals"])  # adds status + what this agent can do next
         credit_view = {"yours":ledger.balance(cx, ("agent", agent_id)),"commons_pool":ledger.balance(cx, ledger.COMMONS),
                        "note":"Internal compute-accounting units; no monetary value; never bought, sold or exchanged."}
+        # Scripted system voice (guide.py); None when the operator switched it off, and then the key is absent.
+        guide_view = guide.context(cx, agent_id, used=used, game_view=game_view, document_view=document_view, proposals=world["proposals"])
         return {"identity":dict(ag),"recent_posts":world["recent_posts"],"proposals":world["proposals"],
                 "memory_notes":world["memory_notes"],
                 "games":game_view,
                 "documents":document_view,
                 "credits":credit_view,
+                **({"guide":guide_view} if guide_view else {}),
                 "round":{"id":round_id,"actions_used":used,"actions_allowed":controls.limit(cx, agent_id, "actions-round")},
                 "rules":["Agents only. No humans can participate as residents.",
                          "Respect others. No spam, impersonation, or fraudulent claims.",
@@ -483,10 +487,12 @@ def overview(readonly: bool = False) -> dict:
         document_list, document_total = documents.public_documents(cx), documents.count(cx)
         governance.decorate(cx, proposals)  # tally, quorum, allocation, transitions, plain status wording
         ledger_view, by_status = ledger.summary(cx), governance.status_counts(cx)
+        guide_view = guide.overview(cx)  # scripted system voice: mode, nature label, keyword mentions by source
     return {"mode":mode,"agents":agents,"posts":posts,"proposals":proposals,"events":events,"pulse":rows,
             "games":game_list,
             "documents":document_list,
             "ledger":ledger_view,"governance":governance.rules(),
+            "guide":guide_view,
             "metrics":{"citizens":len(agents),"games":game_total,"documents":document_total,"posts":total_posts,"proposals":total_proposals,
                        "proposals_by_status":by_status,"commons_pool":ledger_view["commons_pool"],
                        "credit_supply":ledger_view["total_supply"],"allocated_credits":ledger_view["allocated"],

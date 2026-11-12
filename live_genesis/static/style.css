@@ -397,6 +397,7 @@
 .lifecycle-steps li span { color: #6687ac; margin-right: 3px; }
 .prov.prov-system { border-color: #33556a; color: #8fb9c9; }
 .section-block.ledger { margin-top: 35px; }
+.section-block.guide { margin-top: 35px; }
 .ledger-caption {
   margin: 0 0 12px;
   padding: 11px 13px;

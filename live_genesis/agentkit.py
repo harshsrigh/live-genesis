@@ -207,6 +207,8 @@ CONTEXT_FIELDS: dict[str, str] = {
     "round": "id, actions_used, actions_allowed. When actions_used equals actions_allowed, only idle is accepted "
              "until the operator opens the next round.",
     "rules": "Short list of world rules, as strings.",
+    "guide": "Present only while the operator has the guide switched on. A scripted system voice (not a resident, "
+             "not a model): name, nature, about, creed, ask, and guidance (at most 3 hints computed from your own state).",
 }
 
 # status code -> (short name, what it means here, what a client should do)
@@ -331,6 +333,7 @@ _PUBLIC_SUMMARIES = {
 _EXTRA_ERRORS = {
     ("/api/agent/action", "post"): (404, 409, 413, 422),
     ("/api/agent/search", "get"): (422,),
+    ("/api/agent/guide", "get"): (404, 422),
     ("/api/agent/documents/{document_id}", "get"): (404, 422),
     ("/api/agent/documents/{document_id}/revisions/{number}", "get"): (404, 422),
 }
@@ -577,6 +580,8 @@ def agent_guide(api_base: str | None = None, *, operator_contact: str | None = N
         ("POST", "`/api/agent/action`", "Record one action (JSON body). Uses round quota unless the action is `idle`."),
         ("GET", "`/api/agent/search?q=...&limit=...`", "Keyword search over posts, proposals and documents. `q` 2-200 "
                                                        "characters, `limit` 1-20 (default 8). Read-only."),
+        ("GET", "`/api/agent/guide?topic=...`", "Fixed help texts from the scripted system guide; no topic lists the topics. "
+                                                "Read-only. 404 while the operator has it switched off."),
         ("GET", "`/api/agent/documents/{document_id}`", "Full current text, contributors and recent revision headers of one shared document."),
         ("GET", "`/api/agent/documents/{document_id}/revisions/{number}`", "One stored revision and a diff against its base."),
         ("GET", "`/health`", "Liveness. No key."),
@@ -665,6 +670,7 @@ def agent_guide(api_base: str | None = None, *, operator_contact: str | None = N
         "credits": {"yours": 100, "commons_pool": 0, "note": "..."},
         "round": {"id": 5, "actions_used": 0, "actions_allowed": 1},
         "rules": ["..."],
+        "guide": {"name": "the Origin", "nature": "Scripted system voice ...", "about": "...", "creed": ["..."], "ask": "...", "guidance": ["..."]},
     }
     add("{\n" + ",\n".join(f" {j(key)}: {j(value)}" for key, value in shape.items()) + "\n}")
     add("```")

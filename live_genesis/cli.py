@@ -6,7 +6,7 @@ import json
 import os
 from pathlib import Path
 
-from . import controls, governance, ledger, study
+from . import controls, governance, guide, ledger, study
 from .config import load_provider_credentials
 from .core import ROOT, budget_status, connect, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
 from .engine import run_round
@@ -192,6 +192,8 @@ def add_control_parsers(sub) -> None:
     rv.add_argument("proposal_id",type=int)
     rv.add_argument("review",choices=governance.REVIEW_CHOICES)
     rv.add_argument("--note",default="",help="Optional short note; shown publicly on the observatory")
+    gd=sub.add_parser("set-guide",help="Switch the scripted system voice (the Origin) on or off for agents (audited; free; no model call)")
+    gd.add_argument("mode",choices=guide.MODES)
     sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
 
 
@@ -236,6 +238,9 @@ def handle_control_command(args,parser) -> bool:
         except ValueError as err: parser.error(str(err))
         print(f"Proposal {done['proposal_id']}: operator review recorded as {done['operator_review']}. Status stays {done['status']}.")
         print(done["meaning"])
+        return True
+    if args.command=="set-guide":
+        print(f"Guide ({guide.NAME}) is now {guide.set_mode(args.mode)}. {guide.NATURE}")
         return True
     if args.command=="verify-ledger":
         problems=ledger.verify()
