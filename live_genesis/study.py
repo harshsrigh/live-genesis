@@ -52,7 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config, controls
+from . import config, controls, providers
 from . import core  # attributes are used at call time only (core imports this module for SCHEMA)
 
 TASK_SET_VERSION = "pilot-1"
@@ -515,14 +515,15 @@ def plan(n: int = DEFAULT_N, *, max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKE
 
 def suggested_cap(worst_case_usd: float) -> str:
     """The worst case rounded UP to the next cent, as text for the command line."""
-    return f"{math.ceil(worst_case_usd * 100 - 1e-9) / 100:.2f}"
+    return f"{max(math.ceil(worst_case_usd * 100 - 1e-9), 1) / 100:.2f}"  # at least 0.01: --max-usd must be positive (zero local rates)
 
 
 def provider_and_model(model: str | None = None) -> tuple[str, str]:
     provider = os.getenv("LIVE_PROVIDER", "openai").strip().lower()
-    if provider not in DEFAULT_MODELS:
-        raise StudyRefused("LIVE_PROVIDER must be openai or anthropic")
-    chosen = (model or os.getenv("LIVE_MODEL") or DEFAULT_MODELS[provider]).strip()
+    if provider not in providers.NAMES:
+        raise StudyRefused(providers.UNKNOWN_PROVIDER)
+    # openai-compatible has no default model: LIVE_MODEL or --model must name it.
+    chosen = (model or os.getenv("LIVE_MODEL") or DEFAULT_MODELS.get(provider, "")).strip()
     if not chosen or len(chosen) > 100:
         raise StudyRefused("Invalid model name")
     return provider, chosen
@@ -602,9 +603,11 @@ def run_study(*, max_usd: float, n: int = DEFAULT_N, seed: int | None = None, mo
     from . import engine  # lazy: see module docstring
     # Same order of gates as engine.run_round.
     provider, model = provider_and_model(model)
-    required_key = "OPENAI_API_KEY" if provider == "openai" else "ANTHROPIC_API_KEY"
-    if not os.getenv(required_key):
-        raise StudyRefused(f"{required_key} missing. For a free plumbing check, run: python -m live_genesis.cli study-dry-run")
+    try:
+        providers.check_ready(provider)  # settings usable, key where one is needed; sends nothing
+    except providers.ProviderConfigError as err:
+        hint = " For a free plumbing check, run: python -m live_genesis.cli study-dry-run" if str(err).endswith("missing") else ""
+        raise StudyRefused(f"{err}.{hint}") from None
     if os.getenv("LIVE_ALLOW_PAID_CALLS") != "YES":
         raise StudyRefused("Explicit opt-in required for paid calls: set LIVE_ALLOW_PAID_CALLS=YES")
     if isinstance(max_usd, bool) or not isinstance(max_usd, (int, float)) or not math.isfinite(max_usd) or max_usd <= 0:

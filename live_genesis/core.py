@@ -615,10 +615,13 @@ def reserve_budget(agent_id: int | None, model: str, amount_usd: float, limit_us
     for a disabled agent or (count_call=True) an exhausted inference-hour quota.
     The price rates are stored on the reservation and used again at settlement.
     """
-    if isinstance(amount_usd, bool) or not isinstance(amount_usd, (int, float)) or not 0 < amount_usd < float("inf"):
+    if isinstance(amount_usd, bool) or not isinstance(amount_usd, (int, float)) or not 0 <= amount_usd < float("inf"):
         raise ValueError("Reservation must be positive")
     ceiling = controls.effective_ceiling(limit_usd)
     input_rate, output_rate = controls.reservation_rates(input_rate, output_rate)
+    # A $0 hold exists only for a call priced at zero rates (a local model; see controls.budget_config).
+    if amount_usd == 0 and (input_rate or output_rate):
+        raise ValueError("Reservation must be positive")
     with connect() as cx:
         cx.execute("BEGIN IMMEDIATE")  # write lock: serializes concurrent reservers
         pending = controls.unconfirmed_ids(cx)
