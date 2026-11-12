@@ -722,10 +722,11 @@ def test_a_database_from_before_named_endpoints_migrates_in_place(ready, tmp_pat
     core.init_db()                                  # idempotent
     with core.connect() as cx:
         columns = [r[1] for r in cx.execute('PRAGMA table_info(archive_answers)')]
-        assert columns[-len(archive.CALL_COLUMNS):] == list(archive.CALL_COLUMNS)
+        # The endpoint columns, then (since repeat samples) the sample index: 1 on every row from before it.
+        assert columns[-len(archive.CALL_COLUMNS) - 1:] == [*archive.CALL_COLUMNS, 'sample']
         assert [tuple(r)[:len(before_rows[0])] for r in cx.execute('SELECT * FROM archive_answers')] == before_rows     # nothing rewritten
-        assert [tuple(r)[len(before_rows[0]):] for r in cx.execute('SELECT * FROM archive_answers')] == [(None,) * len(archive.CALL_COLUMNS)]
-        assert [tuple(r) for r in cx.execute('SELECT * FROM archive_runs')] == before_runs
+        assert [tuple(r)[len(before_rows[0]):] for r in cx.execute('SELECT * FROM archive_answers')] == [(None,) * len(archive.CALL_COLUMNS) + (1,)]
+        assert [tuple(r) for r in cx.execute('SELECT * FROM archive_runs')] == [row + (1,) for row in before_runs]      # + samples
         assert cx.execute('SELECT COUNT(*) FROM archive_run_answerers').fetchone()[0] == 0
         assert {'archive_run_answerers_no_update', 'archive_run_answerers_no_delete'} <= {r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert archive.public_payload() == before
