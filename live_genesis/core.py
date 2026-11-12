@@ -17,12 +17,12 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-from dotenv import load_dotenv
 
-from . import guards
+from . import config, guards
 
-ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT / ".env", override=False)
+ROOT = config.ROOT
+# Non-secret LIVE_* settings only. Provider API keys are loaded by the CLI `round` path alone.
+config.load_settings()
 TOPICS = ("research", "stories", "games", "community", "engineering", "funding")
 SEED_IDENTITIES = [
     ("Astra", "Scientist", "Evidence-seeking, curious, careful about uncertainty."),
@@ -45,14 +45,26 @@ def db_path() -> Path:
     path = Path(raw)
     return path if path.is_absolute() else ROOT / path
 
+class DatabaseUnavailable(RuntimeError):
+    """A read-only open was requested but the database file does not exist."""
+
 @contextmanager
-def connect():
+def connect(readonly: bool = False):
+    """Open the world database. `readonly=True` uses SQLite `mode=ro`: the connection
+    cannot write, and a missing file is an error instead of being created."""
     path = db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    cx = sqlite3.connect(str(path), timeout=15)
+    if readonly:
+        if not path.is_file():
+            raise DatabaseUnavailable("World database has not been initialized")
+        cx = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=15)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cx = sqlite3.connect(str(path), timeout=15)
     cx.row_factory = sqlite3.Row
     cx.execute("PRAGMA foreign_keys=ON")
     cx.execute("PRAGMA busy_timeout=15000")
+    if readonly:
+        cx.execute("PRAGMA query_only=ON")
     try:
         yield cx
         cx.commit()
@@ -366,8 +378,8 @@ def agent_context(agent_id: int) -> dict:
                          "Compute credits are internal accounting units, not money.",
                          "One action each turn: post, react, propose, vote or idle."]}
 
-def overview() -> dict:
-    with connect() as cx:
+def overview(readonly: bool = False) -> dict:
+    with connect(readonly=readonly) as cx:
         agents = [dict(r) for r in cx.execute('''SELECT a.id,a.name,a.role,a.model,a.credits,
             (SELECT COUNT(*) FROM posts p WHERE p.agent_id=a.id) posts,
             (SELECT COUNT(*) FROM events e WHERE e.agent_id=a.id) actions

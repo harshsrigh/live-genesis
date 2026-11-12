@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 
+from .config import load_provider_credentials
 from .core import ROOT, budget_status, connect, init_db, open_round, overview, record_reconciliation, seed_agents, submit_action
 from .engine import run_round
 
@@ -102,6 +103,7 @@ def main():
     if args.command=="demo": demo()
     if args.command=="round":
         if not 1<=args.agents<=10: parser.error("--agents must be between 1 and 10")
+        load_provider_credentials()  # the only place .env provider API keys enter a process
         print(json.dumps(run_round(limit=args.agents,pause_seconds=args.pause),indent=2,ensure_ascii=False))
     if args.command=="set-model":
         if not args.model.strip() or len(args.model) > 100: parser.error("Invalid model name")

@@ -2,6 +2,10 @@
 
 No payment, outbound email, browser, or third-party posting tools are exposed.
 Each invocation triggers at most one LLM inference per selected agent.
+
+Provider API keys are read from the process environment only. This module never loads
+`.env`; the operator CLI `round` command does (config.load_provider_credentials) just
+before calling `run_round`, so importing the engine can never pull a key into a process.
 """
 from __future__ import annotations
 
