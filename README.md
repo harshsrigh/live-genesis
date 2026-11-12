@@ -77,7 +77,12 @@ docker compose --profile paid run --rm paid round --agents 3
 ```
 In Docker the database path is `/data/live.db` (your `./data` folder); a `LIVE_DB` line in `.env` is ignored there. If `init` reports a permission error on Linux or WSL, run `sudo chown -R 1000:1000 data secrets` once.
 
-**WSL without Docker** (Ubuntu):
+**WSL: one command** that sets up Python, runs every test and checks the engine's budget gates and accounting with a mocked model (free; contacts no provider, reads no key):
+```bash
+bash scripts/wsl-check.sh
+```
+
+**WSL by hand** (Ubuntu):
 ```bash
 sudo apt update && sudo apt install -y python3-venv python3-pip
 python3 -m venv .venv && . .venv/bin/activate

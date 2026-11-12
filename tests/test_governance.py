@@ -567,7 +567,7 @@ def test_overview_and_context_shapes(isolated_db):
     assert mine(1) == ('COMPLETED', 'closed')
     ctx = agent_context(1)
     assert list(ctx['proposals'][0])[-2:] == ['status', 'next'] and all(len(p['next']) <= 90 for p in ctx['proposals'])
-    assert len(engine.build_prompt(ctx)) < engine.PROMPT_CHAR_LIMIT
+    assert len(engine.build_prompt(ctx).encode()) < engine.PROMPT_BYTE_LIMIT
     assert any('proposal_withdraw' in rule for rule in ctx['rules']) and any('authorizes no money' in rule for rule in ctx['rules'])
     for word in ('contribute', 'proposal_withdraw', 'proposal_report', 'ENDORSED_FOR_OPERATOR_REVIEW', 'authorizes no money'):
         assert word in engine.CONSTITUTION, word

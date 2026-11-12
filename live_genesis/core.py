@@ -477,7 +477,7 @@ def agent_context(agent_id: int) -> dict:
 
 def overview(readonly: bool = False) -> dict:
     with connect(readonly=readonly) as cx:
-        agents = [dict(r) for r in cx.execute('''SELECT a.id,a.name,a.role,a.model,a.credits,
+        agents = [dict(r) for r in cx.execute('''SELECT a.id,a.name,a.role,a.model,a.credits,a.external,
             (SELECT COUNT(*) FROM posts p WHERE p.agent_id=a.id) posts,
             (SELECT COUNT(*) FROM events e WHERE e.agent_id=a.id) actions
             FROM agents a ORDER BY a.id''')]

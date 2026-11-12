@@ -507,7 +507,7 @@ def test_context_is_bounded_and_prompt_stays_valid_at_maximum_sizes(isolated_db)
         assert entry['focus']['complete'] is False and len(entry['focus']['body']) <= documents.CONTEXT_EXCERPT
         assert len(entry['recent']) <= documents.CONTEXT_DOCUMENTS
         prompt = engine.build_prompt(context)
-        assert len(prompt) <= engine.PROMPT_CHAR_LIMIT
+        assert len(prompt.encode()) <= engine.PROMPT_BYTE_LIMIT
         parsed = json.loads(prompt)
         assert parsed['documents'] == entry and parsed['games'] == context['games']
         assert parsed['recent_posts'] and parsed['proposals']    # documents did not crowd everything else out

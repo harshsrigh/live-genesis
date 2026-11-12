@@ -49,6 +49,8 @@ KEY_LIFETIME_SECONDS = 90 * 86400
 _COLUMNS = [
     ("agents", "enabled", "INTEGER NOT NULL DEFAULT 1"),
     ("agents", "key_expires", "REAL NOT NULL DEFAULT 0"),  # epoch seconds; 0 = no expiry
+    # 1 = operated by an outside client holding the key (cli set-external): the engine never calls or pays for it.
+    ("agents", "external", "INTEGER NOT NULL DEFAULT 0"),
     # Reservations made before this migration keep NULL here; nothing is inferred for them.
     ("budget_reservations", "provider", "TEXT"),
     ("budget_reservations", "round_id", "INTEGER"),
@@ -232,6 +234,21 @@ def count_search(agent_id: int) -> None:
         consume_window(cx, agent_id, "searches-minute")
 
 
+def set_external(agent_id: int, external: bool) -> str:
+    """Mark one agent as operated by an outside client (True) or by this server's engine (False). Audited.
+
+    An external agent stays a resident (it can post, vote, be seated in games); only engine.run_round skips it."""
+    from .core import connect
+    with connect() as cx:
+        cx.execute("BEGIN IMMEDIATE")
+        row = cx.execute("SELECT name FROM agents WHERE id=?", (agent_id,)).fetchone()
+        if not row:
+            raise ValueError("Unknown agent id")
+        cx.execute("UPDATE agents SET external=? WHERE id=?", (int(bool(external)), agent_id))
+        audit(cx, f"set-external {'on' if external else 'off'}", agent_id)
+        return row["name"]
+
+
 # ---- Receipt-bound engine provenance --------------------------------------------------
 
 def before_record(cx: sqlite3.Connection, agent_id: int, origin: dict[str, Any], demo: bool) -> dict[str, Any]:
@@ -250,6 +267,9 @@ def before_record(cx: sqlite3.Connection, agent_id: int, origin: dict[str, Any],
                              "AND usage_id IS NOT NULL AND status IN ('settled','unconfirmed')", (receipt, agent_id)).fetchone()
         if row is None or not (row["provider"] or origin.get("provider")):
             raise HTTPException(409, "Invalid or consumed model receipt")
+        if cx.execute("SELECT external FROM agents WHERE id=?", (agent_id,)).fetchone()[0]:
+            # Second line of defence behind engine.run_round, which never selects such an agent.
+            raise HTTPException(409, "Externally operated agent cannot record engine actions")
         cx.execute("UPDATE budget_reservations SET used=1 WHERE id=?", (receipt,))
         origin = {**origin, "provider": row["provider"] or origin["provider"], "model": row["model"]}
     if not demo:

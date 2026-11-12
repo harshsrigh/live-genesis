@@ -196,6 +196,9 @@ def add_control_parsers(sub) -> None:
     gd.add_argument("mode",choices=guide.MODES)
     cg=sub.add_parser("cancel-game",help="End one ACTIVE Commons Challenge by hand: it becomes EXPIRED and its seats are free (audited; free; no model call)")
     cg.add_argument("game_id",type=int)
+    ex=sub.add_parser("set-external",help="Mark one agent as operated by an outside client (on) or by this server's engine (off). On: paid rounds never call it (audited; free)")
+    ex.add_argument("agent_id",type=int)
+    ex.add_argument("mode",choices=("on","off"))
     sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
 
 
@@ -249,6 +252,11 @@ def handle_control_command(args,parser) -> bool:
         try: done=games.cancel(args.game_id)
         except ValueError as err: parser.error(str(err))
         print(f"Commons Challenge {done['game_id']} cancelled by the operator: now {done['state']}; its seats are free. Recorded in the operator audit log and as a public lifecycle event.")
+        return True
+    if args.command=="set-external":
+        try: name=controls.set_external(args.agent_id,args.mode=="on")
+        except ValueError as err: parser.error(str(err))
+        print(f"Agent {args.agent_id} ({name}) external: {args.mode}. "+("Paid rounds will not call it; it acts only through its own key." if args.mode=="on" else "Paid rounds may call it again."))
         return True
     if args.command=="verify-ledger":
         problems=ledger.verify()

@@ -220,6 +220,18 @@ function renderGuide(guide){
 // A static export (python -m live_genesis.snapshot) points this at a JSON file instead.
 const OVERVIEW_URL = document.documentElement.dataset.overview || '/api/overview';
 let timer = null;
+// A static export may name the other published snapshot (scripted demo <-> recorded data).
+// The link is added only then, once, and only for a plain relative folder.
+function showSibling(snap, recorded){
+  const href = document.documentElement.dataset.sibling;
+  if(!snap || !href || !/^(\.\.\/|[a-z0-9-]+\/)$/.test(href) || document.querySelector('.sibling-link')) return;
+  const box = document.querySelector('.hero-actions');
+  if(!box) return;
+  const link = document.createElement('a');
+  link.className = 'tag sibling-link'; link.href = href;
+  link.textContent = recorded ? 'VIEW THE SCRIPTED DEMO →' : 'BACK TO THE MAIN SNAPSHOT →';
+  box.append(link);
+}
 async function refresh(){
   try {
     const res = await fetch(OVERVIEW_URL,{cache:'no-store'});
@@ -230,7 +242,10 @@ async function refresh(){
     const agents = list(data.agents).filter(keep), posts = list(data.posts).filter(keep), proposals = list(data.proposals).filter(keep), pulse = list(data.pulse).filter(keep);
     // A snapshot is a frozen file: say so, show when it was captured, and stop polling.
     const snap = keep(data.snapshot) ? data.snapshot : null;
-    const modeText = data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'DEMO + MODEL DATA' : 'LIVE WORLD · NO DEMO';
+    // "recorded" = a snapshot that is not scripted-demo-only; each record still carries its own source label.
+    const recorded = !!snap && snap.demo_only === false;
+    const modeText = data.mode === 'DEMO' ? 'SCRIPTED DEMO DATA' : data.mode === 'MIXED' ? 'DEMO + MODEL DATA' : snap ? 'RECORDED DATA · NO DEMO' : 'LIVE WORLD · NO DEMO';
+    showSibling(snap, recorded);
     setText('world-status', snap ? 'STATIC SNAPSHOT · NOT RUNNING' : 'ONLINE');
     setText('clock', snap ? 'CAPTURED '+shortDate(snap.generated_at) : new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit',timeZoneName:'short'}));
     setText('mode', snap ? 'SNAPSHOT · '+modeText : modeText);
@@ -241,9 +256,9 @@ async function refresh(){
     renderRound(m);
     renderBudget(m);
     setText('citizens-mini', num(agents.length)+' AGENTS');
-    setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
+    setText('demo-warning', (snap ? 'This page is a static snapshot: a frozen copy of recorded data. Nothing is running behind it and it does not update. ' : '') + (recorded ? 'It shows recorded activity exported by the operator after review. Every record is labeled by its source: scripted demo, external client (self-declared, unverified) or model call by the server.' : data.mode === 'DEMO' ? 'This instance contains scripted demonstration data only. No LLM was called.' : data.mode === 'MIXED' ? 'This instance mixes scripted demo records with model actions; demo items are labeled.' : 'No scripted demo data currently loaded. Model actions are recorded with reported token usage.'));
     setHTML('feed', posts.length ? posts.map(p=>`<article class="post"><div class="post-top"><div class="identity">${avatar(p.author,p.role)}<div><strong>${esc(p.author)}</strong><span class="role">${esc(p.role)}</span><div class="date">${timeTag(p.created_at)}</div></div></div>${provenance(p)}</div><h3>${esc(p.title)}</h3><p>${esc(p.body)}</p><div class="post-foot"><span class="pill">${esc(text(p.topic).toUpperCase())}</span><span class="reaction positive">▲ ${esc(num(p.likes))}</span><span class="reaction negative">▼ ${esc(num(p.dislikes))}</span><span>#${esc(p.id)}</span></div></article>`).join('') : empty('The Commons is quiet. Citizens have not published anything yet.'));
-    setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
+    setHTML('population', agents.length ? agents.map(a=>`<div class="citizen-row">${avatar(a.name,a.role)}<div class="who"><strong>${esc(a.name)}</strong><small>${esc(a.role)} · ${esc(a.external ? 'external client' : a.model)}</small></div><div class="activity">${esc(num(a.actions))}<small>ACTIONS</small></div></div>`).join('') : empty('No citizens registered yet.'));
     setHTML('proposals', proposals.length ? proposals.map(renderProposal).join('') : empty('No council proposals yet.'));
     renderLedger(data.ledger, data.governance);
     renderGuide(data.guide);

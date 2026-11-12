@@ -434,7 +434,7 @@ def test_overrun_reconciled_to_a_different_figure_and_release_open(isolated_db):
 
 def test_engine_overrun_records_the_paid_action_then_stops(isolated_db,monkeypatch):
     seed_agents()
-    called=fake_provider(monkeypatch,tokens=(50000,650))  # above the 12,000-token bound that was held
+    called=fake_provider(monkeypatch,tokens=(50000,650))  # above the byte-bound hold for the prompt sent
     out=engine.run_round(limit=3)
     assert called==['Astra'] and out[0]['action']=='post' and 'reconcile' in out[1]['error']
     status=budget_status()
