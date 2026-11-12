@@ -42,7 +42,7 @@ from .web import CONTENT_SECURITY_POLICY
 
 STATIC = Path(__file__).resolve().parent / "static"
 PUBLISHED = Path(__file__).resolve().parent.parent / "published"   # reviewed data, committed by the owner
-SCHEMA = "live-genesis-published/2"   # /2: the folder also holds archive.json
+SCHEMA = "live-genesis-published/3"   # /2: the folder also holds archive.json; /3: archive.json carries the trending track
 DATA_FILE, ARCHIVE_FILE, MANIFEST_FILE = "overview.json", "archive.json", "MANIFEST.json"
 FILES = (DATA_FILE, ARCHIVE_FILE, MANIFEST_FILE)
 SOURCES = ("demo", "api", "engine", "unknown")
@@ -325,8 +325,11 @@ def _counts(data: dict) -> tuple[dict, dict]:
 
 def _archive_counts(answers: dict) -> dict:
     by_source = {name: sum(1 for a in answers["answers"] if a.get("source") == name) for name in archive.SOURCES}
+    trending = answers["trending"]
     return {"file": ARCHIVE_FILE, "answers_by_source": by_source, "runs": len(answers["runs"]),
-            "questions": len(answers["questions"]), "question_set": answers["question_set"], "set_hash": answers["set_hash"]}
+            "questions": len(answers["questions"]), "question_set": answers["question_set"], "set_hash": answers["set_hash"],
+            "trending": {"questions": len(trending["questions"]), "question_set": trending["question_set"],
+                         "set_hash": trending["set_hash"], "version": trending["version"]}}
 
 
 def _archive_problem(answers: object) -> str | None:
@@ -339,8 +342,13 @@ def _archive_problem(answers: object) -> str | None:
         return "it holds mock answers, which are never published"
     if any(a["source"] == "demo" for a in answers["answers"]) or any(run["demo"] for run in answers["runs"]):
         return "it holds scripted demo answers; the demo is published without review"
-    if answers["answers"] and not answers["locked"]:
+    if answers["answers"] and not answers["locked"] and not answers["trending"]["locked"]:
         return "it holds answers but the question list is not locked"
+    for track, ids in (("core", {q["id"] for q in answers["questions"]}), ("trending", {q["id"] for q in answers["trending"]["questions"]})):
+        holder = answers if track == "core" else answers["trending"]
+        if not holder["locked"] and (any(a["question"] in ids for a in answers["answers"]) or any(run["asked"][track] for run in answers["runs"])):
+            return ("it holds answers but the question list is not locked" if track == "core"
+                    else "it holds answers to trending questions that are not locked")
     return None
 
 

@@ -31,6 +31,27 @@ def question_file(tmp_path, monkeypatch, status='locked', edit=None):
     return path
 
 
+TREND = [('What is the newest iPhone?', 'new phones', '2026-05-18'), ('What is the price of gold today?', 'gold price', '2026-07-20'),
+         ('Who is the president of the United States?', 'White House', '2026-09-21'),
+         ('Which company is the most valuable in the world right now?', 'AI stocks', '2026-09-21')]
+
+
+def trending_file(tmp_path, monkeypatch, count=0, status='locked', edit=None):
+    """A trending question file with the first `count` questions of TREND. The `ready` fixture
+    uses an empty one, so the core tests do not depend on the checked-in drafts the owner edits."""
+    data = {'question_set': 'trending', 'status': status,
+            'groups': [{'name': 'Trending', 'why': 'Taken from what people were searching for.'}],
+            'questions': [{'id': f'T{n:03d}', 'group': 'Trending', 'text': text, 'rationale': f'Why question {n} is worth asking.',
+                           'prompt': 'Answer in one or two sentences.\n\n' + text, 'added': added, 'topic': topic,
+                           'trend_source': f'Google Trends US, {added}'} for n, (text, topic, added) in enumerate(TREND[:count], 1)]}
+    if edit:
+        edit(data)
+    path = tmp_path / 'trending.json'
+    path.write_text(json.dumps(data), encoding='utf-8')
+    monkeypatch.setattr(archive, 'TRENDING_FILE', path)
+    return path
+
+
 def fake(reply, calls=None):
     """A stand-in for engine.infer. `reply` is text, a Completion, an exception, or a function of
     (model, prompt, call number)."""
@@ -59,6 +80,7 @@ def ready(isolated_db, tmp_path, monkeypatch):
     monkeypatch.setenv('LIVE_ARCHIVE_MODELS', MODELS)
     monkeypatch.delenv('LIVE_ARCHIVE_MAX_OUTPUT_TOKENS', raising=False)
     question_file(tmp_path, monkeypatch)
+    trending_file(tmp_path, monkeypatch)
     return isolated_db
 
 
@@ -136,7 +158,7 @@ def test_hash_ignores_layout_and_status_but_not_wording(tmp_path, monkeypatch):
     base = archive.load_questions()['sha256']
     path = question_file(tmp_path, monkeypatch, status='locked')
     assert archive.load_questions()['sha256'] == base
-    path.write_text(json.dumps(json.loads(path.read_text()), indent=4) + '\r\n')
+    path.write_text(json.dumps(json.loads(path.read_text(encoding='utf-8')), indent=4) + '\r\n')
     assert archive.load_questions()['sha256'] == base
     question_file(tmp_path, monkeypatch, edit=lambda d: d['questions'][0].update(prompt=d['questions'][0]['prompt'] + ' Please.'))
     assert archive.load_questions()['sha256'] != base
@@ -395,7 +417,7 @@ def test_replaced_infer_and_dry_run_are_mock_and_never_public(ready, monkeypatch
     assert archive.run_archive(max_usd=1)['run'] == 1
     out = tmp_path / 'published'
     snapshot.export_published(out)
-    exported = (out / 'archive.json').read_text()
+    exported = (out / 'archive.json').read_text(encoding='utf-8')
     assert 'MOCKED-REPLY' not in exported and 'DRY-RUN' not in exported and '"mock"' not in exported
     # Even a payload that smuggles a mock row in is not rendered.
     payload = archive.public_payload()
@@ -403,7 +425,8 @@ def test_replaced_infer_and_dry_run_are_mock_and_never_public(ready, monkeypatch
     assert not any('SMUGGLED-MOCK' in page for page in archive_pages.render_site(payload).values())
 
 
-def test_dry_run_needs_no_key_no_optin_and_no_models(isolated_db, monkeypatch):
+def test_dry_run_needs_no_key_no_optin_and_no_models(isolated_db, tmp_path, monkeypatch):
+    trending_file(tmp_path, monkeypatch)
     monkeypatch.setenv('LIVE_ALLOW_PAID_CALLS', 'NO')
     monkeypatch.delenv('LIVE_ARCHIVE_MODELS', raising=False)
     monkeypatch.setattr(engine, 'infer', fake(AssertionError('a dry run calls no model')))
@@ -417,7 +440,8 @@ def test_dry_run_needs_no_key_no_optin_and_no_models(isolated_db, monkeypatch):
 def test_demo_archive_is_scripted_dated_monthly_and_separate(ready, monkeypatch):
     monkeypatch.setattr(engine, 'infer', fake(AssertionError('the demo calls no model')))
     done = archive.demo_archive()
-    assert done == {'runs': 8, 'answerers': ['model-a', 'model-b', 'model-c'], 'answers': 8 * 20 * 3 - 2}
+    assert done == {'runs': 8, 'answerers': ['model-a', 'model-b', 'model-c'], 'answers': 8 * 20 * 3 - 2 + (6 + 4 + 2) * 3,
+                    'trending_questions': 3}
     runs = rows('SELECT number,kind,status,started_at FROM archive_runs ORDER BY number')
     assert [r['started_at'][:7] for r in runs] == [f'2026-{m:02d}' for m in range(4, 12)]
     assert {(r['kind'], r['status']) for r in runs} == {('demo', 'complete')}
@@ -463,8 +487,8 @@ def test_demo_archive_is_refused_after_real_world_activity(isolated_db):
 def hostile_payload():
     payload = archive.empty_payload()
     payload.update(answerers=['model-a', 'model-b'], demo_only=False, locked=True, locked_at='2026-11-01T00:00:00+00:00',
-                   runs=[{'number': 1, 'date': '2026-10-03T09:00:00+00:00', 'demo': False},
-                         {'number': 2, 'date': '2026-11-02T09:00:00+00:00', 'demo': False}])
+                   runs=[{'number': 1, 'date': '2026-10-03T09:00:00+00:00', 'demo': False, 'asked': {'core': 20, 'trending': 0}},
+                         {'number': 2, 'date': '2026-11-02T09:00:00+00:00', 'demo': False, 'asked': {'core': 20, 'trending': 0}}])
     payload['questions'][0].update(text=HOSTILE, rationale=HOSTILE, prompt=HOSTILE)
     payload['groups'][0].update(why=HOSTILE)
     answer = dict(question='Q01', reason='', created_at='2026-11-02T09:00:00+00:00')
@@ -533,7 +557,9 @@ def test_pages_for_the_demo_archive(ready):
     archive.demo_archive()
     payload = archive.public_payload()
     pages = archive_pages.render_site(payload)
-    assert set(pages) == {'index.html'} | {f'q/Q{n:02d}.html' for n in range(1, 21)}
+    core_ids, trend_ids = [f'Q{n:02d}' for n in range(1, 21)], ['T001', 'T002', 'T003']
+    assert set(pages) == ({'index.html', 'trending.html'} | {f'q/{i}.html' for i in core_ids} | {f't/{i}.html' for i in trend_ids}
+                          | {f'card/{i}.html' for i in core_ids + trend_ids})
     index, date = pages['index.html'], pages['q/Q11.html']
     for page in pages.values():
         assert_page_is_safe(page)
@@ -578,7 +604,7 @@ def test_archive_stylesheet_uses_tokens_local_fonts_and_no_gradient():
     assert css.count('#ffffff') == 2                                       # the ground, and text on dark panels
     rules = css.split(':root', 1)[1].split('}', 1)[1]                     # everything after the token block
     assert not re.findall(r'#[0-9a-fA-F]{3,8}\b', rules) and 'var(--changed)' in rules and 'var(--same)' in rules
-    mark = (STATIC / 'archive-mark.svg').read_text()
+    mark = (STATIC / 'archive-mark.svg').read_text(encoding='utf-8')
     assert mark.count('<rect') == 3 and mark.count('#c9cdf0') == 2 and mark.count('#312e81') == 1 and '<script' not in mark
     assert archive_pages.MAX_COLUMNS == 18 and all(f'.grid.n-{n} ' in css for n in range(1, 19))
 
@@ -591,7 +617,7 @@ def test_snapshot_holds_the_archive_pages_and_links_them(ready, tmp_path, monkey
     info = snapshot.build(out)
     assert info['demo_only'] is True
     assert (out / 'archive' / 'index.html').is_file() and len(list((out / 'archive' / 'q').glob('Q*.html'))) == 20
-    assert json.loads((out / 'archive.json').read_text())['answers_by_source'] == {'engine': 0, 'api': 0, 'demo': 478}
+    assert json.loads((out / 'archive.json').read_text(encoding='utf-8'))['answers_by_source'] == {'engine': 0, 'api': 0, 'demo': 514}
     home = (out / 'index.html').read_text(encoding='utf-8')
     assert home.count('href="archive/index.html"') == 1 and 'Answers over time</a>' in home
     for name in ('archive.css', 'archive-mark.svg', 'fonts/inter.woff2', 'fonts/bricolage-grotesque.woff2', 'fonts/jetbrains-mono.woff2'):
@@ -668,7 +694,7 @@ def retarget_archive(folder, edit):
     edit(data)
     payload = json.dumps(data, ensure_ascii=True, indent=1).encode('ascii')
     (folder / 'archive.json').write_bytes(payload)
-    manifest = json.loads((folder / 'MANIFEST.json').read_text())
+    manifest = json.loads((folder / 'MANIFEST.json').read_text(encoding='utf-8'))
     manifest['archive'] = {**snapshot._archive_counts(data), 'sha256': hashlib.sha256(payload).hexdigest()}
     (folder / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1))
 
@@ -680,10 +706,12 @@ def test_export_round_trip_with_archive_json(ready, tmp_path, monkeypatch):
     assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']
     raw = (out / 'archive.json').read_bytes()
     assert raw.isascii() and b'Caf\\u00e9' in raw
-    assert manifest['schema'] == 'live-genesis-published/2'
+    assert manifest['schema'] == 'live-genesis-published/3'
     assert manifest['archive'] == {'file': 'archive.json', 'sha256': hashlib.sha256(raw).hexdigest(), 'runs': 1, 'questions': 20,
                                    'answers_by_source': {'engine': 40, 'api': 0, 'demo': 0, 'mock': 0},
-                                   'question_set': 'basic-1', 'set_hash': archive.load_questions()['sha256']}
+                                   'question_set': 'basic-1', 'set_hash': archive.load_questions()['sha256'],
+                                   'trending': {'questions': 0, 'question_set': 'trending', 'version': 0,
+                                                'set_hash': archive.load_questions(track='trending')['sha256']}}
     exported = json.loads(raw)
     assert exported == json.loads(json.dumps(archive.public_payload()))          # exactly the public payload
     assert not any(key in json.dumps(exported) for key in ('reservation', 'estimated_usd', 'input_tokens', 'normalised'))
@@ -737,9 +765,14 @@ def test_published_archive_tamper_guard_and_mock_are_refused(ready, tmp_path, mo
     (out / 'archive.json').unlink()
     refused('archive.json is missing')
     outside = tmp_path / 'outside.json'; outside.write_bytes(good['archive.json'])
-    (out / 'archive.json').unlink(); (out / 'archive.json').symlink_to(outside)
-    refused('archive.json is missing or unreadable')
-    assert outside.read_bytes() == good['archive.json'] and not (out / 'archive.json').is_symlink()
+    (out / 'archive.json').unlink()
+    try:
+        (out / 'archive.json').symlink_to(outside)
+    except (OSError, NotImplementedError):   # Windows without the privilege: the remaining checks still run
+        pass
+    else:
+        refused('archive.json is missing or unreadable')
+        assert outside.read_bytes() == good['archive.json'] and not (out / 'archive.json').is_symlink()
     # 3. A hand edit with the manifest made to agree again still meets the content guards ...
     retarget_archive(out, lambda d: d['answers'][0].update(text='Write to someone@example.org'))
     refused('Content guards matched:\n  archive answers id 1, field text: looks like an email address')

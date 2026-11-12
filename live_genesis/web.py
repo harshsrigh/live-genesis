@@ -196,10 +196,26 @@ def archive_index():
     return _archive_page(archive_pages.render_index)
 
 
-def archive_question(name: str):
-    if not name.endswith(".html") or not archive.QUESTION_ID.fullmatch(name[:-5]):
+def archive_trending():
+    return _archive_page(archive_pages.render_trending)
+
+
+def _archive_item(name: str, pattern, render) -> HTMLResponse | JSONResponse:
+    if not name.endswith(".html") or not pattern.fullmatch(name[:-5]):
         return JSONResponse({"detail": "No such archive page"}, status_code=404)
-    return _archive_page(lambda payload: archive_pages.render_question(payload, name[:-5]))
+    return _archive_page(lambda payload: render(payload, name[:-5]))
+
+
+def archive_question(name: str):
+    return _archive_item(name, archive.QUESTION_ID, archive_pages.render_question)
+
+
+def archive_trending_question(name: str):
+    return _archive_item(name, archive.TRENDING_ID, archive_pages.render_question)
+
+
+def archive_card(name: str):
+    return _archive_item(name, archive.ANY_QUESTION_ID, archive_pages.render_card)
 
 
 def add_public_routes(application: FastAPI, *, readonly: bool = False) -> None:
@@ -215,5 +231,8 @@ def add_public_routes(application: FastAPI, *, readonly: bool = False) -> None:
     for path in ("/archive", "/archive/"):
         application.add_api_route(path, archive_redirect, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/index.html", archive_index, methods=methods, include_in_schema=False)
+    application.add_api_route("/archive/trending.html", archive_trending, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/q/{name}", archive_question, methods=methods, include_in_schema=False)
+    application.add_api_route("/archive/t/{name}", archive_trending_question, methods=methods, include_in_schema=False)
+    application.add_api_route("/archive/card/{name}", archive_card, methods=methods, include_in_schema=False)
     application.add_api_route("/api/overview", get_overview_readonly if readonly else get_overview, methods=methods)

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss xmlns:atom="http://www.w3.org/2005/Atom" xmlns:ht="https://trends.google.com/trending/rss" version="2.0">
+  <channel>
+    <title>Daily Search Trends</title>
+    <description>Recent searches</description>
+    <link>https://trends.google.com/trending?geo=US</link>
+    <item>
+      <title>chip stocks</title>
+      <ht:approx_traffic>2000+</ht:approx_traffic>
+      <description></description>
+      <link>https://trends.google.com/trending/rss?geo=US</link>
+      <pubDate>Thu, 12 Nov 2026 06:10:00 -0800</pubDate>
+      <ht:picture>https://example.invalid/picture.jpg</ht:picture>
+      <ht:news_item>
+        <ht:news_item_title>Chip makers slide after a weak forecast</ht:news_item_title>
+        <ht:news_item_url>https://example.invalid/one</ht:news_item_url>
+        <ht:news_item_source>Example Wire</ht:news_item_source>
+      </ht:news_item>
+      <ht:news_item>
+        <ht:news_item_title>What the sell-off means for AI &amp; data centres</ht:news_item_title>
+        <ht:news_item_url>https://example.invalid/two</ht:news_item_url>
+      </ht:news_item>
+      <ht:news_item>
+        <ht:news_item_title>A third headline that is not printed</ht:news_item_title>
+      </ht:news_item>
+    </item>
+    <item>
+      <title>golf broadcast</title>
+      <ht:approx_traffic>500+</ht:approx_traffic>
+      <ht:news_item>
+        <ht:news_item_title>Network announces its new lead golf announcer</ht:news_item_title>
+      </ht:news_item>
+    </item>
+    <item>
+      <title>white house</title>
+      <ht:approx_traffic>200+</ht:approx_traffic>
+    </item>
+    <item>
+      <title>Chip Stocks</title>
+      <ht:approx_traffic>100+</ht:approx_traffic>
+    </item>
+  </channel>
+</rss>
