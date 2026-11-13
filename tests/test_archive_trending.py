@@ -32,7 +32,7 @@ def test_checked_in_trending_file_is_a_valid_draft_within_the_rules():
         assert len(data['questions']) >= 5 and 'DRAFT' in raw['note']
         assert all('DRAFT EXAMPLE' in q['trend_source'] for q in data['questions'])
     # The core file is untouched by the second track: same list, same hash as before it existed.
-    assert archive.load_questions()['sha256'] == '589e602ab50c' + archive.load_questions()['sha256'][12:]
+    assert archive.load_questions()['sha256'] == 'a41c6c9273e1' + archive.load_questions()['sha256'][12:]
 
 
 @pytest.mark.parametrize('text,rule', [

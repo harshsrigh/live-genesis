@@ -35,7 +35,7 @@ The agent society (LIVE Genesis) stays in the repository and keeps working, but 
 | Part | State |
 |---|---|
 | Core archive: question file, lock, runs, append-only answers, `changed` flag, script-free pages, logo | Merged. Question list is a draft of 20 |
-| Trending track: growing list, `archive-lock --set trending`, `archive-trends` (prints candidates, writes nothing), `archive/trending.html` | Merged. 16 draft questions; none locked |
+| Trending track: growing list, `archive-lock --set trending`, `archive-trends` (prints candidates, writes nothing), `archive/trending.html` | Merged. 12 draft questions; none locked |
 | Share cards: `archive/card/<ID>.html`, 9:16 | Merged. `scripts/capture-cards.mjs` writes them as PNG files (needs the operator's own Playwright) |
 | Named endpoints: several services in one run, each with its own base URL, key variable and rates; pricing basis per answer; reported model name and local model digest stored | Merged. **Not tested against any real server** |
 | Per-model failure isolation: a failed call on a zero-priced endpoint skips that model, the run goes on (`complete_with_gaps`); a priced endpoint keeps stop-and-reconcile | Merged |
@@ -85,7 +85,7 @@ Not decided: which accounts, how often to post, and whether to post before there
 ## Steps
 
 **Owner**
-1. Read and edit the 20 core draft questions and the 16 trending draft questions. This is the one step that cannot be redone later. *Open.*
+1. Read and edit the 20 core draft questions and the 12 trending draft questions. This is the one step that cannot be redone later. *Open.*
 2. Lock them with `archive-lock` and `archive-lock --set trending`. *Open.*
 3. Choose the models to track (see open decision 1): read `docs/FREE-MODELS.md`, and for each hosted service its current terms. Report the hardware and Ollama state of the WSL machine. *Open.*
 4. Approve the first real run and its ceiling, in so many words. *Open.*

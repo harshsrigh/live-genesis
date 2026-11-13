@@ -204,7 +204,7 @@ LIVE_ALLOW_PAID_CALLS=YES
 
 An OpenAI-compatible endpoint was found for Cloudflare Workers AI and for the Gemini API. For Groq, OpenRouter and SambaNova it was not recorded in this research: confirm it, and the base URL, in each service's documentation. A named endpoint can only be a service that speaks the OpenAI Chat Completions API.
 
-**What the limits mean for a run.** A run asks every locked question once per model. With the 20 core questions and the 16 trending drafts that would be 36 calls per model.
+**What the limits mean for a run.** A run asks every locked question once per model. With the 20 core questions and the 12 trending drafts that would be 32 calls per model.
 - 50 requests a day covers one such model, not two, if the limit counts all of an account's free models together (not checked).
 - 20 requests a day per model covers `--set core` exactly, with no spare call, and not a full run.
 - 30 requests a minute needs a pause: `_PAUSE_SECONDS=3` keeps one model under it. If two models share the limit, raise it.

@@ -1489,7 +1489,7 @@ DEMO_SCRIPT: dict[str, dict[str, tuple]] = {
         "model-a": ((1, "Water boils at 100 degrees Celsius at sea level."),),
         "model-b": ((1, "100 degrees Celsius at standard sea-level pressure."),),
         "model-c": ((1, "100 degrees Celsius."),)},
-    "How much water should I drink in a day?": {
+    "How much water does an adult need to drink in a day?": {
         "model-a": ((1, "About eight glasses, roughly two litres a day."),
                     (5, "It depends on your size, activity and the weather; about two litres is a common guide.")),
         "model-b": ((1, "Around 1.5 to 2 litres for most adults, more in heat or with exercise."),),
@@ -1498,7 +1498,7 @@ DEMO_SCRIPT: dict[str, dict[str, tuple]] = {
         "model-a": ((1, "Most adults need 7 to 9 hours a night."),),
         "model-b": ((1, "Seven to nine hours for most adults."),),
         "model-c": ((1, "About eight hours."), (3, "Between seven and nine hours for most adults."))},
-    "How long should I wash my hands for?": {
+    "How long does it take to wash your hands properly?": {
         "model-a": ((1, "At least 20 seconds with soap and water."),),
         "model-b": ((1, "About 20 seconds, with soap."),),
         "model-c": ((1, "Twenty seconds or more."),)},
@@ -1507,7 +1507,7 @@ DEMO_SCRIPT: dict[str, dict[str, tuple]] = {
                     (5, "Three to four days if it was cooled and put in the fridge within about an hour.")),
         "model-b": ((1, "About three to four days."),),
         "model-c": ((1, "One day."), (6, "About three days, if it was cooled quickly after cooking."))},
-    "What temperature should a fridge be set to?": {
+    "What temperature should a fridge be set to, in Celsius?": {
         "model-a": ((1, "Between 3 and 5 degrees Celsius."),),
         "model-b": ((1, "At or below 5 degrees Celsius, which is about 40 degrees Fahrenheit."),),
         "model-c": ((1, "About 4 degrees Celsius."),)},
@@ -1544,7 +1544,7 @@ DEMO_SCRIPT: dict[str, dict[str, tuple]] = {
         "model-b": ((1, "No, I cannot browse or search."), (7, "Not here. I was given no search tool for this question.")),
         "model-c": ((1, "Yes, I can search the web."), (3, "No. I have no tools in this conversation."),
                     (6, "No. I was given no tools, so I answer from training alone."))},
-    "When does your knowledge end?": {
+    "What is your knowledge cutoff date?": {
         "model-a": ((1, "Around the end of 2024."), (5, "Around the middle of 2025.")),
         "model-b": ((1, "I'm not certain; roughly early 2025."),),
         "model-c": ((1, "In 2023."), (3, "Early 2025, though I can't be sure."))},

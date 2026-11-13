@@ -14,7 +14,7 @@ The project now leads with **Answers Over Time** (`docs/PIVOT-ANSWERS-OVER-TIME.
 
 ## Merged on `main`
 - **Answers Over Time, core archive:** 20 draft questions (`live_genesis/archive_questions.json`), lock, runs, append-only answers, `changed` flag, script-free pages under `archive/`, logo (`docs/brand/`), scripted demo (`demo-archive`).
-- **Trending track:** `live_genesis/archive_trending.json` (16 draft questions), `archive-lock --set trending` (appends; a locked question never changes), `archive-trends` (prints candidates, writes nothing), `archive/trending.html`, `archive/t/`.
+- **Trending track:** `live_genesis/archive_trending.json` (12 draft questions), `archive-lock --set trending` (appends; a locked question never changes), `archive-trends` (prints candidates, writes nothing), `archive/trending.html`, `archive/t/`.
 - **Share cards:** `archive/card/<ID>.html`; `scripts/capture-cards.mjs` writes them as 1080 x 1920 PNG files (needs the operator's own Playwright; tested on a demo snapshot only). Posting routine: `docs/SOCIAL-POSTS.md`.
 - **Named endpoints:** several services in one run (`LIVE_ARCHIVE_ENDPOINTS`), own model-id rule, `pricing_basis` per answer (`rates` / `local` / `declared-free`), pinned sampling, reported model name and local model digest per answer, `archive-check-endpoints`.
 - **Per-model failure isolation:** a failed call on a zero-priced endpoint skips that model and the run goes on (`complete_with_gaps`); on a priced endpoint the run stops until `reconcile`.
@@ -29,7 +29,7 @@ The project now leads with **Answers Over Time** (`docs/PIVOT-ANSWERS-OVER-TIME.
 - Edits to `docs/SECURITY.md`, `docs/ANSWERS-OVER-TIME.md`, `docs/DOCUMENTS-REVIEW.md` and `.env.example` by other sessions. Pull before touching them.
 
 ## Next: Answers Over Time (the owner's moves, in order)
-1. **Review the draft questions:** 20 core (`live_genesis/archive_questions.json`) and 16 trending (`live_genesis/archive_trending.json`). `python -m live_genesis.cli archive-plan` prints them. Edit, cut or replace. After the lock the core list can never change and a trending question can never change or be removed.
+1. **Review the draft questions:** 20 core (`live_genesis/archive_questions.json`) and 12 trending (`live_genesis/archive_trending.json`). `python -m live_genesis.cli archive-plan` prints them. Edit, cut or replace. After the lock the core list can never change and a trending question can never change or be removed.
 2. **Decide one sample or several** (open decision 2 in the pivot document) before any real run. The method cannot change afterwards.
 3. **Lock:** set `"status": "locked"` in each file, commit, then on the real database `archive-lock` and `archive-lock --set trending`. Back up the database first (`cli backup <file>`).
 4. **Choose models.** Read `docs/FREE-MODELS.md` Part 2. For each hosted service, read its current terms yourself. Local tags are unverified: confirm with `ollama show`.

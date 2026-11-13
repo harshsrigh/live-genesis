@@ -14,7 +14,7 @@ Built:
 - [x] Agent kit documents the outside-client route `POST /api/agent/archive-answer` in `llms.txt` and the agent guide (`tests/test_agentkit.py`).
 
 Next, in order (the first six are the owner's):
-- [ ] Owner reviews the 20 core and 16 trending draft questions. Cannot be redone after the lock.
+- [ ] Owner reviews the 20 core and 12 trending draft questions. Cannot be redone after the lock.
 - [ ] Owner decides one sample or several per question and run, before the first real run. A planned option (`LIVE_ARCHIVE_SAMPLES`) is being built on another branch and is not merged.
 - [ ] Owner locks both lists (`archive-lock`, `archive-lock --set trending`).
 - [ ] Owner chooses the models and reads each hosted service's current terms; reports the WSL machine's hardware and Ollama state.
