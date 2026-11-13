@@ -275,7 +275,15 @@ def add_control_parsers(sub) -> None:
     tl=sub.add_parser("task-list",help="List the open tasks as JSON, with response counts (free; read-only)")
     tl.add_argument("--all",action="store_true",help="Also list closed tasks")
     sub.add_parser("verify-ledger",help="Check the credit ledger against cached balances and its own invariants (free; read-only)")
-
+    sh=sub.add_parser("scrub-hidden",help="Report invisible/control characters in rows stored before the character rule: counts per table and field, never text (free; read-only without --apply)",
+        description="Rows stored before the character rule may hold invisible, control or text-direction characters. Without --apply this only "
+                    "REPORTS them (table, field, row count, row ids; never text). With --apply it rewrites the unprotected display fields "
+                    "(post and proposal title/body, event summary, memory note, agent memory, declared model/client) without those characters, "
+                    "in one transaction, with one operator-audit row. Append-only and hash-chained tables (document revisions, credit ledger, "
+                    "archive answers, audit rows) are NEVER rewritten: their rows are listed as left, and the hidden characters are removed "
+                    "whenever such a row is read for a page, the overview, the export or a prompt. "
+                    "BACK UP FIRST: `python -m live_genesis.cli backup <new file>`; --apply cannot be undone.")
+    sh.add_argument("--apply",action="store_true",help="Rewrite the unprotected display fields (audited; cannot be undone: run `backup` first)")
 
 def handle_control_command(args,parser) -> bool:
     if args.command in ("rotate-key","revoke-key"):
@@ -352,6 +360,14 @@ def handle_control_command(args,parser) -> bool:
     if args.command=="verify-ledger":
         problems=ledger.verify()
         print("\n".join(problems) if problems else "Credit ledger consistent: balances follow from the entries, cached copies match, supply equals opening entries plus operator grants.")
+        return True
+    if args.command=="scrub-hidden":
+        report=controls.scrub_hidden(apply=args.apply)
+        print(json.dumps(report,indent=2,ensure_ascii=True))
+        if not report["found"]: print("No hidden character found in any stored text.")
+        elif args.apply: print(f"Rewrote {report['values_changed']} value(s); left {report['values_left']} (protected or not a display field: stripped on read instead). Recorded in the operator audit log.")
+        else: print(f"Report only; nothing was changed. --apply would rewrite {report['values_would_change']} value(s) and leave {report['values_left']}. "
+                    "Back up first: python -m live_genesis.cli backup <new file>")
         return True
     if args.command=="backup":
         try: saved=controls.backup(args.destination)
@@ -441,8 +457,9 @@ def main():
     if args.command=="verify-documents":
         from . import documents
         breaks=documents.verify()
-        print(json.dumps({"documents":overview()["metrics"]["documents"],"breaks":breaks},indent=2))
-        print("HISTORY BREAKS FOUND: stored revisions do not match their hashes." if breaks else "No break found. This check is internal: it cannot notice a history whose whole hash chain was recomputed; compare head hashes with a copy kept outside this database.")
+        # hash_schemes: stored revisions per scheme. A v1 hash does not cover the document's demo flag and created_at; verify() checks both against the revisions.
+        print(json.dumps({"documents":overview()["metrics"]["documents"],"hash_schemes":documents.scheme_counts(),"breaks":breaks},indent=2))
+        print("HISTORY BREAKS FOUND: stored documents or revisions do not match their hashes or each other." if breaks else "No break found. This check is internal: it cannot notice a history whose whole hash chain was recomputed; compare head hashes with a copy kept outside this database.")
     if args.command=="round":
         agents,only=_round_selection(args,parser)  # validates --agents / --only; contacts nothing
         load_provider_credentials()  # the only place .env provider API keys enter a process

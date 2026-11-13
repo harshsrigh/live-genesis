@@ -66,6 +66,9 @@ h1, h2, p, pre { margin: 0; }
 .sq-same { background: var(--same); }
 .sq-changed { background: var(--changed); }
 .sq-none { border: 2px dashed var(--muted); }
+/* Unsettled (a run with several samples that did not agree): pale like "same", with a solid outline. It reads
+   without colour too: filled pale, filled dark, dashed and empty, pale with a solid ring. */
+.sq-unsettled { background: var(--same); border: 2px solid var(--accent); }
 .strip { display: flex; flex-wrap: wrap; gap: 4px; }
 .strip-row { display: flex; gap: 14px; align-items: center; }
 .strip-name { flex: none; width: 82px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
@@ -144,6 +147,12 @@ h1, h2, p, pre { margin: 0; }
 .cell-changed .cell-meta { color: var(--on-dark-soft); }
 .changed-tag { align-self: flex-start; background: var(--on-dark); color: var(--changed); border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 700; }
 .cell-none { border: 2px dashed var(--muted); color: var(--muted); font-size: 14px; justify-content: center; }
+.cell-unsettled { background: var(--ground); border: 2px solid var(--accent); padding: 12px 14px; }
+.cell-unsettled .cell-text { color: var(--ink-soft); }
+.cell-unsettled .cell-meta { color: var(--muted); }
+.unsettled-tag { align-self: flex-start; border: 1px solid var(--accent); color: var(--accent); border-radius: 4px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+.cell-others { padding: 8px 0 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 1.4; color: var(--ink-soft); }
+.cell-others .mono { font-size: 11px; font-weight: 700; color: var(--accent); white-space: nowrap; margin-right: 4px; }
 .cell-none .cell-meta { color: var(--muted); }
 
 .side-block { display: flex; flex-direction: column; gap: 10px; }

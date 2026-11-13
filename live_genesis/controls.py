@@ -731,6 +731,8 @@ class RateLimiter:
     Two instances guard /api/agent/* (see app.requires_agent):
     * `api_limiter`: requests per AUTHENTICATED agent id, counted after authentication.
     * `auth_failure_limiter`: FAILED authentications per client address.
+    A third, `public_limiter`, counts every other request except /health per client address
+    (web.limit_public_requests, both web apps).
     """
 
     def __init__(self, maximum: int | None = None, seconds: int = 60, clock: Callable[[], float] | None = None,
@@ -788,6 +790,9 @@ class RateLimiter:
 
 api_limiter = RateLimiter()  # keyed on the authenticated agent id
 auth_failure_limiter = RateLimiter(variable="LIVE_AUTH_FAILURES_PER_MINUTE", default=10)  # keyed on the client address
+# Every request outside /api/agent/* and /health, in both web apps, keyed on the client address
+# (web.limit_public_requests). Generous: one page view is about a dozen requests (page, script, styles, fonts, overview).
+public_limiter = RateLimiter(variable="LIVE_PUBLIC_REQUESTS_PER_MINUTE", default=300)
 
 
 def trusted_proxies() -> frozenset[str]:
@@ -827,6 +832,105 @@ def client_address(peer: str | None, forwarded: list[str] | None = None) -> str:
         except ValueError:
             return peer_text
     return peer_text
+
+
+# ---- Hidden characters in rows stored before the character rule (cli scrub-hidden) -----
+# guards.check_characters refuses invisible, control and text-direction characters on WRITE. Rows stored
+# before that rule may still hold them. Two answers, per table:
+#   * every read path that reaches a page, /api/overview, the export or a prompt strips them
+#     (guards.clean_for_reading in core.overview, core.agent_context and the search results), whatever
+#     the table, and without touching the row;
+#   * `scrub-hidden --apply` REWRITES the row only for the display fields listed in SCRUB_FIELDS, and
+#     only when no trigger of the table forbids the update. Append-only and hash-chained tables
+#     (document revisions, the credit ledger, archive answers, audit rows ...) are never rewritten: their
+#     hashes cover the stored bytes, so a rewrite would read as tampering.
+SCRUB_FIELDS: dict[str, tuple[str, ...]] = {
+    "posts": ("title", "body"),
+    "proposals": ("title", "body"),
+    "events": ("summary",),
+    "memory_notes": ("note",),
+    "agents": ("memory",),
+    "action_provenance": ("model", "client"),
+}
+SCRUB_EMPTY = "(empty after hidden characters were removed)"
+SCRUB_IDS_SHOWN = 20
+_UPDATE_TRIGGER = re.compile(r"\bBEFORE\s+UPDATE(?:\s+OF\s+([\w\s,]+?))?\s+ON\s", re.IGNORECASE)
+SCRUB_WHY_PROTECTED = ("left: an append-only or hash-protected table (a trigger forbids the update; a rewrite would "
+                       "break its history). Hidden characters are removed when the row is read")
+SCRUB_WHY_UNLISTED = ("left: not a display field this command rewrites. Hidden characters are removed when the row "
+                      "is read for a page, the overview, the export or a prompt")
+
+
+def _update_protected(cx: sqlite3.Connection, table: str) -> set[str] | None:
+    """Columns of `table` that a BEFORE UPDATE trigger guards: a set of column names, or None when a
+    trigger guards the whole row. Any such trigger counts, whatever it checks: this command never
+    argues with one."""
+    columns: set[str] = set()
+    for (sql,) in cx.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?", (table,)):
+        found = _UPDATE_TRIGGER.search(sql or "")
+        if found:
+            if found.group(1) is None:
+                return None
+            columns |= {name.strip().lower() for name in found.group(1).split(",")}
+    return columns
+
+
+def scrub_hidden(apply: bool = False) -> dict[str, Any]:
+    """Count (and with apply=True remove, where allowed) the characters guards.check_characters refuses
+    in text already stored. Scans every text value of every table. Reports table, field, row count and
+    row ids only: never text. See the comment above for which rows may be rewritten and why.
+
+    apply=True rewrites in ONE transaction and appends one operator_audit row; a report alone changes
+    nothing and is not audited."""
+    from . import guards
+    from .core import connect
+    found: list[dict[str, Any]] = []
+    changed = left = 0
+    with connect() as cx:
+        if apply:
+            cx.execute("BEGIN IMMEDIATE")
+        tables = [r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        for table in tables:
+            guarded = _update_protected(cx, table)
+            for column in [r[1] for r in cx.execute(f'PRAGMA table_info("{table}")')]:
+                try:
+                    rows = cx.execute(f'SELECT rowid,"{column}" FROM "{table}" WHERE typeof("{column}")=\'text\' ORDER BY rowid').fetchall()
+                except sqlite3.OperationalError:
+                    continue  # a table without rowid: none in this schema; nothing here is rewritten blind
+                hits = [(r[0], r[1]) for r in rows if guards.has_forbidden_character(r[1], multiline=True)]
+                if not hits:
+                    continue
+                protected = guarded is None or column.lower() in guarded
+                listed = column in SCRUB_FIELDS.get(table, ())
+                entry: dict[str, Any] = {"table": table, "field": column, "rows": len(hits),
+                                         "row_ids": [h[0] for h in hits[:SCRUB_IDS_SHOWN]]}
+                if len(hits) > SCRUB_IDS_SHOWN:
+                    entry["row_ids_truncated"] = True
+                if protected:
+                    entry.update(action="left", why=SCRUB_WHY_PROTECTED)
+                elif not listed:
+                    entry.update(action="left", why=SCRUB_WHY_UNLISTED)
+                elif apply:
+                    for rowid, text in hits:
+                        clean = guards.strip_forbidden_characters(text, multiline=True)
+                        cx.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?', (clean if clean.strip() else SCRUB_EMPTY, rowid))
+                    entry.update(action="changed", why="rewritten without the hidden characters (an unprotected display field)")
+                else:
+                    entry.update(action="would change", why="an unprotected display field: --apply rewrites it without the hidden characters")
+                if entry["action"] == "changed":
+                    changed += len(hits)
+                elif entry["action"] == "left":
+                    left += len(hits)
+                found.append(entry)
+        if apply:
+            audit(cx, f"scrub-hidden apply: {changed} value(s) rewritten, {left} left")
+    return {"applied": bool(apply), "found": found, "values_changed": changed, "values_left": left,
+            "values_would_change": sum(e["rows"] for e in found if e["action"] == "would change"),
+            "note": ("Counts and row ids only; no text is printed. Rows that are left are still shown and fed to prompts "
+                     "WITHOUT their hidden characters: the public overview, the pages, the export and each agent's context "
+                     "strip them on read. A changed post, proposal or note keeps its id, author and date. "
+                     "Not covered by the read-side stripping: the agent routes GET /api/agent/documents/* "
+                     "(see docs/SECURITY.md).")}
 
 
 # ---- Backup ---------------------------------------------------------------------------

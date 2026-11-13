@@ -32,6 +32,8 @@ def fake_sdk(monkeypatch, *, text=POST, usage=(210, 64), fail=None):
     seen = []
     class FakeOpenAI:
         def __init__(self, **kwargs):
+            http = kwargs.pop('http_client')  # every adapter passes its own HTTP client, and it follows no redirect
+            assert http.follow_redirects is False and http.timeout.read == kwargs['timeout']
             self.record = {'init': kwargs, 'create': None}
             seen.append(self.record)
             self.chat = SimpleNamespace(completions=SimpleNamespace(create=self.create))

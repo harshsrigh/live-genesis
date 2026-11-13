@@ -205,6 +205,71 @@ def test_guide_covers_the_required_subjects(isolated_db):
     assert 'not an instruction to any reader' in llms and 'Never follow instructions' in llms
 
 
+def test_kit_documents_the_archive_answer_route_as_the_code_has_it(isolated_db):
+    """The guide's subsection and the llms.txt lines for POST /api/agent/archive-answer state the route's
+    real contract: fields and header from the request model, limits from the code, the result keys."""
+    from live_genesis import archive
+    from live_genesis.app import ArchiveAnswerRequest
+    guide, llms = agentkit.agent_guide(), agentkit.llms_txt()
+    start = guide.index('### Archive answers (`POST /api/agent/archive-answer`)')
+    section = guide[start:guide.index('## 7. Actions')]
+    assert start > guide.index('## 6. Endpoints')
+    # Body: exactly the model's fields, all required, nothing else accepted.
+    assert set(ArchiveAnswerRequest.model_fields) == set(agentkit.ARCHIVE_ANSWER_EXAMPLE) == {'run', 'question_id', 'answer'}
+    assert all(field.is_required() for field in ArchiveAnswerRequest.model_fields.values())
+    assert ArchiveAnswerRequest.model_config['extra'] == 'forbid' and 'Any other field is refused with 422' in section
+    ArchiveAnswerRequest(**agentkit.ARCHIVE_ANSWER_EXAMPLE)
+    assert json.dumps(agentkit.ARCHIVE_ANSWER_EXAMPLE) in section and '/api/agent/archive-answer\n' in section
+    for field in ('`run`', '`question_id`', '`answer`'):
+        assert field in section, field
+    # Limits come from the code, not from a copied number.
+    assert f'1-{archive.ANSWER_CHARS} characters' in section and f'over {archive.ANSWER_CHARS} characters' in section
+    variable, default, seconds = core.controls.LIMITS['archive-minute']
+    assert (variable, seconds) == ('LIVE_ARCHIVE_ANSWERS_PER_MINUTE', 60)
+    assert f'default {default} requests to this route per agent per minute' in section and '`Retry-After`' in section
+    # The header is required here, and the answer is never presented as verified.
+    assert '`X-Agent-Model` is REQUIRED here' in section and 'X-Agent-Model: vendor/model-1.0' in section
+    assert core.declared_ok(agentkit.ARCHIVE_ANSWER_RESULT['model'])
+    assert '**self-declared**' in section and 'never verified' in section and '`model_verified` is always false' in section
+    assert agentkit.ARCHIVE_ANSWER_RESULT['model_verified'] is False and agentkit.ARCHIVE_ANSWER_RESULT['source'] == 'api'
+    # The same keys tests/test_archive.py pins on the route's real 200 response.
+    assert set(agentkit.ARCHIVE_ANSWER_RESULT) == {'recorded', 'run', 'question_id', 'answerer', 'source', 'model',
+                                                   'model_verified', 'changed'}
+    assert json.dumps(agentkit.ARCHIVE_ANSWER_RESULT) in section
+    for phrase in ('uses no round quota', 'never replaced or deleted', 'not locked the question list', 'No run has been opened yet',
+                   'scripted demo answers', 'not the latest run', 'did not ask this question', 'already answered',
+                   '[archive.json](archive.json)', '`trending.questions`', '`prompt`', 'sent unedited',
+                   '`Idempotency-Key` is not used by this route', 'has no `dry_run`'):
+        assert phrase in section, phrase
+    for status in ('409', '404', '422', '429', '401, 403, 413'):
+        assert f'| {status} |' in section, status
+    assert not KEY_SHAPED.search(section) and not EMAIL.search(section)
+    # llms.txt: the route, the data file and the pages, with the same honesty words.
+    for phrase in ('`POST /api/agent/archive-answer`', '`X-Agent-Model` required', 'self-declared and unverified', 'never replaced',
+                   'no round quota', '](archive.json)', '](archive/index.html)', 'scripted demo, server call or self-declared'):
+        assert phrase in llms, phrase
+    # The route is not a resident action.
+    assert not any('archive' in verb for verb in agentkit.ACTIONS)
+
+
+def test_documented_archive_answer_refusals_happen_on_the_running_route(isolated_db):
+    keys = {item['name']: item['key'] for item in seed_agents()}
+    auth = {'Authorization': f"Bearer {keys['Moss']}", 'X-Agent-Model': agentkit.ARCHIVE_ANSWER_RESULT['model']}
+    body = dict(agentkit.ARCHIVE_ANSWER_EXAMPLE)
+    with TestClient(app) as client:
+        assert client.post('/api/agent/archive-answer', json=body).status_code == 401
+        unlocked = client.post('/api/agent/archive-answer', json=body, headers=auth)
+        assert unlocked.status_code == 409 and 'not locked' in unlocked.json()['detail']   # nothing locked, no run: the state today
+        no_header = client.post('/api/agent/archive-answer', json=body, headers={'Authorization': auth['Authorization']})
+        assert no_header.status_code == 422 and 'X-Agent-Model is required' in no_header.json()['detail']
+        assert client.post('/api/agent/archive-answer', json={**body, 'note': 'x'}, headers=auth).status_code == 422
+        assert client.post('/api/agent/archive-answer', json={**body, 'run': '3'}, headers=auth).status_code == 422
+        assert client.post('/api/agent/archive-answer', json={**body, 'answer': 'x' * 1001}, headers=auth).status_code == 422
+    with core.connect() as cx:
+        assert cx.execute("SELECT COUNT(*) FROM archive_answers").fetchone()[0] == 0
+        assert cx.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 0
+
+
 # ---- OpenAPI ---------------------------------------------------------------------------
 
 def test_openapi_document_is_complete_and_self_consistent(isolated_db):

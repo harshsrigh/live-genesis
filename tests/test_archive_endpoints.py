@@ -160,9 +160,9 @@ def test_old_single_endpoint_form_still_runs_with_the_same_client(ready, monkeyp
     assert planned['worst_case_usd'] == 0 and planned['endpoints'][0]['basis'] == 'local' and planned['input_rate'] == 0
     done = archive.run_archive(max_usd=0.01)
     assert done['status'] == 'complete' and done['answers']['answered'] == 20 and not done['mock']
-    # The client is built exactly as before named endpoints (no http_client argument); only the request gained the sampling.
+    # Same base URL, key and retries as before named endpoints; since the redirect fix it follows no redirect either.
     assert {(c['base_url'], c['api_key'], c['max_retries'], c['follow_redirects']) for c in seen} == {
-        ('http://localhost:18999/private-legacy/v1', providers.LOCAL_PLACEHOLDER_KEY, 0, None)}
+        ('http://localhost:18999/private-legacy/v1', providers.LOCAL_PLACEHOLDER_KEY, 0, False)}
     assert seen[0]['request']['temperature'] == 0 and seen[0]['request']['seed'] == archive.ARCHIVE_SEED
     stored = rows('SELECT endpoint,provider,model,pricing_basis,local,sampling FROM archive_answers WHERE id=1')[0]
     assert stored == {'endpoint': 'openai-compatible', 'provider': 'openai-compatible', 'model': 'qwen3:8b', 'pricing_basis': 'local',
@@ -722,10 +722,11 @@ def test_a_database_from_before_named_endpoints_migrates_in_place(ready, tmp_pat
     core.init_db()                                  # idempotent
     with core.connect() as cx:
         columns = [r[1] for r in cx.execute('PRAGMA table_info(archive_answers)')]
-        assert columns[-len(archive.CALL_COLUMNS):] == list(archive.CALL_COLUMNS)
+        # The endpoint columns, then (since repeat samples) the sample index: 1 on every row from before it.
+        assert columns[-len(archive.CALL_COLUMNS) - 1:] == [*archive.CALL_COLUMNS, 'sample']
         assert [tuple(r)[:len(before_rows[0])] for r in cx.execute('SELECT * FROM archive_answers')] == before_rows     # nothing rewritten
-        assert [tuple(r)[len(before_rows[0]):] for r in cx.execute('SELECT * FROM archive_answers')] == [(None,) * len(archive.CALL_COLUMNS)]
-        assert [tuple(r) for r in cx.execute('SELECT * FROM archive_runs')] == before_runs
+        assert [tuple(r)[len(before_rows[0]):] for r in cx.execute('SELECT * FROM archive_answers')] == [(None,) * len(archive.CALL_COLUMNS) + (1,)]
+        assert [tuple(r) for r in cx.execute('SELECT * FROM archive_runs')] == [row + (1,) for row in before_runs]      # + samples
         assert cx.execute('SELECT COUNT(*) FROM archive_run_answerers').fetchone()[0] == 0
         assert {'archive_run_answerers_no_update', 'archive_run_answerers_no_delete'} <= {r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert archive.public_payload() == before

@@ -11,6 +11,10 @@ in both web apps (`/archive/index.html`, `/archive/trending.html`, `/archive/q/Q
 
 A trending question is added after the archive started, so it has cells only in the runs that
 asked it (`runs[].asked` in the payload): its strip and its table start at its first run.
+
+Repeat samples: a run may ask each question several times (`runs[].samples`). A cell then shows the
+representative answer with "2 of 3 agree", and a third state, UNSETTLED (archive.stability), next to
+same and changed. Nothing of this is rendered for an archive whose runs all asked once.
 """
 from __future__ import annotations
 
@@ -100,6 +104,24 @@ class _View:
         self.run_date = {r["number"]: r["date"] for r in self.runs}
         self.demo = any(a["source"] == "demo" for a in self.answers) or any(r["demo"] for r in self.runs)
         self.empty = not self.answers
+        # Repeat samples: how many each run asked, whether any run asked several, and per answered cell its
+        # derived label (archive.stability) against that answerer's previous answered cell.
+        self.run_samples = {r["number"]: r.get("samples", 1) for r in self.runs}
+        self.multi = any(count > 1 for count in self.run_samples.values())
+        self.label: dict[tuple[str, str, int], str] = {}
+        for (question_id, label), series in self.by_series.items():
+            previous = None
+            for answer in series:
+                if answer["state"] == "answered":
+                    self.label[(question_id, label, answer["run"])] = archive.stability(answer, previous)
+                    previous = answer
+
+    def kind(self, answer: dict | None) -> str:
+        """none / same / changed / unsettled: the state of one cell, also its CSS class suffix."""
+        if answer is None or answer["state"] != "answered":
+            return "none"
+        label = self.label[(answer["question"], answer["answerer"], answer["run"])]
+        return "same" if label == "steady" else label
 
     def asked(self, question_id: str) -> list[dict]:
         """The runs that asked this question, oldest first."""
@@ -139,10 +161,31 @@ class _View:
         return None
 
 
-def _kind(answer: dict | None) -> str:
-    if answer is None or answer["state"] != "answered":
-        return "none"
-    return "changed" if answer["changed"] else "same"
+def _agreement(view: _View, answer: dict) -> str:
+    """"3 of 3 agree" for a cell of a run that asked several samples; "" for any other cell."""
+    samples = answer.get("samples")
+    if samples is None:
+        return ""
+    asked = view.run_samples[answer["run"]]
+    if not samples:
+        return "no sample gave an answer"
+    return (f"{answer['agree']} of {samples} agree"
+            + (f" · only {samples} of {asked} samples answered" if samples < asked else ""))
+
+
+def _legend(view: _View, note: str) -> str:
+    """The "how to read a strip" box of the index and the trending page. The unsettled row exists only
+    when some run asked several samples."""
+    unsettled = ('    <div class="legend-row"><span class="sq sq-unsettled"></span><span>Unsettled: asked several times and the '
+                 'answers did not all agree, in that run or the one before</span></div>\n' if view.multi else '')
+    return ('  <div class="legend">\n'
+            '    <strong class="legend-title">How to read a strip</strong>\n'
+            f'    <span class="legend-note">{note}</span>\n'
+            '    <div class="legend-row"><span class="sq sq-same"></span><span>Same answer as the run before, or the first answer</span></div>\n'
+            '    <div class="legend-row"><span class="sq sq-changed"></span><span>The answer changed</span></div>\n'
+            + unsettled +
+            '    <div class="legend-row"><span class="sq sq-none"></span><span>No answer recorded</span></div>\n'
+            '  </div>\n</header>\n')
 
 
 def _head(title: str, up: str, versions: dict[str, str], description: str) -> str:
@@ -175,14 +218,15 @@ def _bar(up: str, base: str, versions: dict[str, str], current: str = "") -> str
 
 
 def _strip(view: _View, question_id: str, label: str) -> tuple[str, int, int]:
-    squares, changes, missing = [], 0, 0
+    squares, changes, missing, unsettled = [], 0, 0, 0
     for _run, answer in view.series(question_id, label):
-        kind = _kind(answer)
+        kind = view.kind(answer)
         changes += kind == "changed"
         missing += kind == "none"
+        unsettled += kind == "unsettled"
         squares.append(f'<span class="sq sq-{kind}"></span>')
     summary = (f"{label}: {_plural(changes, 'change')} across {_plural(len(squares), 'run')}"
-               + (f", {missing} without an answer" if missing else ""))
+               + (f", {unsettled} unsettled" if unsettled else "") + (f", {missing} without an answer" if missing else ""))
     return (f'<div class="strip-row"><span class="strip-name mono">{esc(label)}</span>'
             f'<div class="strip" role="img" aria-label="{esc(summary)}">{"".join(squares)}</div></div>'), changes, missing
 
@@ -190,7 +234,7 @@ def _strip(view: _View, question_id: str, label: str) -> tuple[str, int, int]:
 def _last_change(view: _View, question_id: str) -> str:
     if not any(a["question"] == question_id for a in view.answers):
         return "No answers recorded yet"
-    changed = [a for a in view.answers if a["question"] == question_id and _kind(a) == "changed"]
+    changed = [a for a in view.answers if a["question"] == question_id and view.kind(a) == "changed"]
     if not changed:
         return f"No change in any model across {_plural(len(view.asked(question_id)), 'run')}"
     last = max(changed, key=lambda a: a["run"])
@@ -209,13 +253,7 @@ def render_index(payload: dict, versions: dict[str, str] | None = None) -> str:
                '    <h1 class="display">Simple questions, asked again every month.</h1>\n'
                '    <p class="lede">People ask AI the same basic things year after year. This archive keeps every answer '
                'with its date and the model that gave it, so you can see when an answer changes.</p>\n'
-               '  </div>\n  <div class="legend">\n'
-               '    <strong class="legend-title">How to read a strip</strong>\n'
-               '    <span class="legend-note">One square per run, oldest on the left.</span>\n'
-               '    <div class="legend-row"><span class="sq sq-same"></span><span>Same answer as the run before, or the first answer</span></div>\n'
-               '    <div class="legend-row"><span class="sq sq-changed"></span><span>The answer changed</span></div>\n'
-               '    <div class="legend-row"><span class="sq sq-none"></span><span>No answer recorded</span></div>\n'
-               '  </div>\n</header>\n')
+               '  </div>\n' + _legend(view, 'One square per run, oldest on the left.'))
     for group in payload["groups"]:
         questions = [q for q in view.questions if q["group"] == group["name"]]
         if not questions:
@@ -256,7 +294,10 @@ def render_index(payload: dict, versions: dict[str, str] | None = None) -> str:
                'Scripted sample answers are labelled as scripted.</span></div>\n'
                '    <div><strong>"Changed" is a plain comparison</strong><span>A square is dark when the text differs from that model\'s previous '
                'answer, ignoring letter case, spacing, and punctuation at the ends. It does not say which answer is right.</span></div>\n'
-               '  </div>\n</section>\n')
+               + ('    <div><strong>Asked more than once</strong><span>In a run with several samples each question is asked several times, '
+                  'each time on its own; the answer shown is the one most samples gave, and a cell is marked unsettled, not changed, '
+                  'when the samples did not all agree in that run or the one before.</span></div>\n' if view.multi else '')
+               + '  </div>\n</section>\n')
     honesty = ("Sample answers on this page are scripted, not model output." if view.demo
                else "Answers are model output and may be wrong.")
     out.append(f'<footer class="foot"><span>Part of LIVE Genesis. {honesty}</span>'
@@ -275,17 +316,31 @@ def _moved(view: _View, question_id: str) -> str:
                 continue
             change = view.model_change(question_id, label, run["number"])
             when = month_year(run["date"])
-            if _kind(answer) == "changed":
+            kind = view.kind(answer)
+            if kind == "changed":
                 text = f"{label}'s answer changed."
                 if change:
                     text += f" Its {change[1]} changed from {change[2]} to {change[3]}."
                 items.append((when, text))
+            elif kind == "unsettled":
+                if archive.split(answer):
+                    text = (f"{label}'s {_plural(answer['samples'], 'sample')} did not agree: {answer['agree']} gave the answer shown. "
+                            "Not counted as a change.")
+                elif answer["changed"]:
+                    text = (f"{label}'s answer differs from the run before, where its samples did not agree. "
+                            "Not counted as a change.")
+                else:
+                    text = ""
+                if change:
+                    text = (text + " " if text else f"{label}: ") + f"Its {change[1]} changed from {change[2]} to {change[3]}."
+                if text:
+                    items.append((when, text))
             elif change:
                 items.append((when, f"{label}'s {change[1]} changed from {change[2]} to {change[3]}; "
-                                    + ("the answer stayed the same." if _kind(answer) == "same" else "no answer was recorded.")))
+                                    + ("the answer stayed the same." if kind == "same" else "no answer was recorded.")))
     for label in view.labels:
         series = [a for _run, a in view.series(question_id, label) if a is not None and a["state"] == "answered"]
-        if series and not any(a["changed"] for a in series):
+        if series and not any(a["changed"] or view.kind(a) == "unsettled" for a in series):
             items.append(("—", f"{label} gave the same answer in every run recorded."))
     if not items:
         return '<p class="muted small">Nothing has been recorded for this question yet.</p>'
@@ -300,14 +355,28 @@ def _cell(view: _View, question_id: str, label: str, run: dict) -> str:
         return ('<div class="cell cell-none" role="cell">No answer recorded in this run'
                 + (f': this model was skipped after a failed call ({esc(why)})' if why else '') + '</div>')
     change = view.model_change(question_id, label, run["number"])
-    meta = f"{answer['model']} · {_where(answer)}{SOURCE_LABELS[answer['source']]}" + (f" · {change[0]}" if change else "")
+    agreement = _agreement(view, answer)
+    meta = (f"{answer['model']} · {_where(answer)}{SOURCE_LABELS[answer['source']]}" + (f" · {change[0]}" if change else "")
+            + (f" · {agreement}" if agreement else ""))
     if answer["state"] == "withheld":
         return (f'<div class="cell cell-none" role="cell"><span>Withheld by content check ({esc(answer["reason"])})</span>'
                 f'<span class="cell-meta mono">{esc(meta)}</span></div>')
     if answer["state"] != "answered":
         return (f'<div class="cell cell-none" role="cell"><span>No answer recorded: {esc(answer["reason"] or "none given")}</span>'
                 f'<span class="cell-meta mono">{esc(meta)}</span></div>')
-    if answer["changed"]:
+    kind = view.kind(answer)
+    if kind == "unsettled":
+        # The other distinct answers of this run's samples, most frequent first; none when only the run before disagreed.
+        others = "".join(f'<span role="listitem"><span class="mono">{esc(other["count"])} of {esc(answer["samples"])}</span> '
+                         f'{esc(other["text"])}</span>'
+                         for other in answer.get("others", ()))
+        if not archive.split(answer):
+            meta += " · the run before did not agree"
+        return ('<div class="cell cell-unsettled" role="cell"><span class="unsettled-tag mono">UNSETTLED</span>'
+                f'<span class="cell-text">{esc(answer["text"])}</span>'
+                + (f'<div class="cell-others" role="list" aria-label="Other answers in this run">{others}</div>' if others else '')
+                + f'<span class="cell-meta mono">{esc(meta)}</span></div>')
+    if kind == "changed":
         return ('<div class="cell cell-changed" role="cell"><span class="changed-tag mono">CHANGED</span>'
                 f'<span class="cell-text">{esc(answer["text"])}</span><span class="cell-meta mono">{esc(meta)}</span></div>')
     return (f'<div class="cell cell-same" role="cell"><span class="cell-text">{esc(answer["text"])}</span>'
@@ -360,7 +429,8 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
                f'  <p class="lede">{esc(question["rationale"])}</p>\n{source}</header>\n')
     out.append('<div class="split">\n<main class="answers">\n'
                '  <div class="group-head spread"><h2>Every answer, newest first</h2>'
-               '<span class="muted small">Dark cells differ from that model\'s answer before</span></div>\n')
+               '<span class="muted small">Dark cells differ from that model\'s answer before'
+               + (' · outlined cells: the samples did not agree' if view.multi else '') + '</span></div>\n')
     if runs and view.labels:
         out.append(f'  <div class="grid-scroll" tabindex="0" role="region" aria-label="Answers by date and model">\n'
                    f'  <div class="grid n-{columns}" role="table" aria-label="Answers to {esc(question["id"])}, newest first">\n'
@@ -389,6 +459,9 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
                   if view.demo else
                   '    <span><strong>run locally</strong> or <strong>via</strong> a name says where the model ran. A model run locally or hosted '
                   'by a third party is not the same as its maker\'s own chat app, and can answer differently.</span>\n')
+               + ('    <span><strong>unsettled</strong> means the question was asked several times in that run and the answers did not all '
+                  'agree, there or in the run before. The answer shown is the one most samples gave; the difference is not counted as a '
+                  'change.</span>\n' if view.multi else '')
                + '  </div>\n</aside>\n</div>\n')
     back = ('<a class="back" href="../trending.html">All trending questions</a>' if trending
             else f'<a class="back" href="../index.html">All {esc(count_word(len(view.questions)))} questions</a>')
@@ -411,13 +484,8 @@ def render_trending(payload: dict, versions: dict[str, str] | None = None) -> st
                '    <h1 class="display">Questions from what people are searching for.</h1>\n'
                '    <p class="lede">Now and then a question is written from a topic many people were looking up that day. '
                'From then on it is asked in every run, in the same words, so you can see how the answers move.</p>\n'
-               '  </div>\n  <div class="legend">\n'
-               '    <strong class="legend-title">How to read a strip</strong>\n'
-               '    <span class="legend-note">One square per run, oldest on the left. A strip starts at the first run after the question was added.</span>\n'
-               '    <div class="legend-row"><span class="sq sq-same"></span><span>Same answer as the run before, or the first answer</span></div>\n'
-               '    <div class="legend-row"><span class="sq sq-changed"></span><span>The answer changed</span></div>\n'
-               '    <div class="legend-row"><span class="sq sq-none"></span><span>No answer recorded</span></div>\n'
-               '  </div>\n</header>\n')
+               '  </div>\n' + _legend(view, 'One square per run, oldest on the left. A strip starts at the first run after '
+                                               'the question was added.'))
     out.append('<section class="group">\n  <div class="group-head"><h2>Trending</h2>'
                '<span class="muted">Newest first.</span></div>\n')
     ordered = sorted(view.trending, key=lambda q: (q["added"], view.place[q["id"]][1]), reverse=True)
@@ -459,7 +527,7 @@ def _card_models(view: _View, question_id: str) -> tuple[list[dict], dict | None
         series = [a for a in view.by_series.get((question_id, label), ()) if a["state"] == "answered"]
         if not series:
             continue
-        at = max((n for n, answer in enumerate(series) if answer["changed"]), default=0)
+        at = max((n for n, answer in enumerate(series) if view.kind(answer) == "changed"), default=0)
         found.append({"order": order, "label": label, "latest": series[-1], "before": series[at - 1] if at else None,
                       "changed_in": series[at]["run"] if at else 0})
     chosen = sorted(found, key=lambda m: (-m["changed_in"], m["order"]))[:CARD_MODELS]
@@ -470,7 +538,8 @@ def _card_models(view: _View, question_id: str) -> tuple[list[dict], dict | None
 def render_card(payload: dict, question_id: str, versions: dict[str, str] | None = None) -> str:
     """`card/<ID>.html`: a 9:16 portrait card for a screenshot or a screen recording (540 by 960
     CSS pixels; it scales to any window of that shape). The question, the latest answer of up to
-    three models and, for one that changed, the answer before. No script, no animation."""
+    three models and, for one that changed, the answer before. An answer whose samples did not all
+    agree shows the representative and "2 of 3 agree". No script, no animation."""
     view = _View(payload)
     versions = versions or asset_versions()
     question = view.by_id.get(question_id)
@@ -492,8 +561,10 @@ def render_card(payload: dict, question_id: str, versions: dict[str, str] | None
            f'  <div class="card-panels n-{max(len(models), 1)}">\n']
     for model in models:
         latest = model["latest"]
+        agreement = f" · {latest['agree']} of {latest['samples']} agree" if archive.split(latest) else ""
         meta = (f'<div class="card-meta mono"><span class="card-label">{esc(model["label"])}</span>'
-                f'<span class="card-when">{esc(month_year(view.run_date[latest["run"]]))} · {esc(SOURCE_LABELS[latest["source"]])}</span></div>')
+                f'<span class="card-when">{esc(month_year(view.run_date[latest["run"]]))} · {esc(SOURCE_LABELS[latest["source"]])}'
+                f'{esc(agreement)}</span></div>')
         if model is moved:
             before = model["before"]
             out.append(f'    <section class="card-panel card-panel-changed">{meta}'

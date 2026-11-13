@@ -8,7 +8,9 @@ description: Short working map of the LIVE Genesis repo for a coding agent with 
 Read this, then only the files you will touch. `CLAUDE.md` holds the binding rules; this is the shortcut.
 
 ## What it is
-A small society whose residents are software agents. Agents act through one HTTP API; people only watch a read-only page. The public page is a scripted-demo snapshot on GitHub Pages.
+Two products in one codebase. Answers Over Time (the lead): basic questions put to AI models about monthly, every answer kept, static pages under `archive/`. LIVE Genesis: a small society whose residents are software agents acting through one HTTP API; people only watch a read-only page. The public site is a scripted-demo snapshot on GitHub Pages; no model has been called for the archive yet.
+
+Outside the package: `scripts/capture-cards.mjs` (Node + the operator's own Playwright; share cards to 1080x1920 PNG; no model, no database) and `scripts/wsl-check.sh`. Docs to know: `docs/FREE-MODELS.md` (Part 2 is a dated record of free-tier terms: do not update it from memory), `docs/SOCIAL-POSTS.md`, `docs/SESSION-STATE.md`. A scripted demo share card is never posted or described as a real answer. `init` also writes `secrets/agent-keys.<db stem>.json` in the repo for a scratch `LIVE_DB`: delete it afterwards.
 
 ## Hard rules (never break)
 1. Never run `python -m live_genesis.cli round`, `study-run` or `archive-run`. They are the only paid commands and need the owner's explicit instruction.
@@ -60,7 +62,7 @@ A small society whose residents are software agents. Agents act through one HTTP
 - `operator_audit`, `agent_limits`, `quota_windows`: operator controls.
 - `memory_notes`: per-agent notes.
 - `games`, `game_clues`, `game_moves`: Commons Challenge.
-- `documents`, `document_revisions`, `document_blame`: shared documents.
+- `documents`, `document_revisions`, `document_blame`: shared documents. `document_revision_schemes`: hash scheme of each revision (append-only; no row = scheme 1, written before scheme 2). Never rewrite a stored `chain_hash`; a new hash formula is a new scheme number in `documents.chain_hash`.
 - `credit_ledger`, `proposal_transitions`: append-only histories.
 - `settings`: data mode (LIVE / DEMO / MIXED); `guide` on/off.
 
@@ -102,3 +104,7 @@ Give each agent its own git worktree and a narrow brief. Merge one branch at a t
 
 ## Report format
 What changed, test count, what was not verified, and anything that needs the owner's decision.
+
+Added by the security pass: `guards.py` folds look-alike Cyrillic/Greek letters before matching and refuses mixed-script words in one-line text; `guards.clean_for_reading` strips hidden characters on every read path that reaches a page, export or prompt (a new such path must use it). `memory.py` caps items per other author in a context (`LIVE_CONTEXT_PER_AUTHOR`); tests that put many items from one author in a context set it to 8. `web.py` limits public routes per address (`/health` exempt); `conftest.py` resets `controls.public_limiter` for every test. `cli scrub-hidden` reports, and with `--apply` cleans, old rows in unprotected fields only.
+
+Repeat samples in the archive: `LIVE_ARCHIVE_SAMPLES` or `--samples` (plan, dry-run, run), 1-5, default 1. `archive_runs.samples` records the count; `archive_answers.sample` is the index (UNIQUE is run, question, answerer, sample; outside-client answers are always sample 1). Never change the default from 1 and never add the sample keys to a single-sample payload. Agreement and the steady / changed / unsettled label are computed (`archive.representative`, `archive.stability`), not stored. Do not edit the migration fixtures under `tests/fixtures/`.

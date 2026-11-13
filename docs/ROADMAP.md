@@ -2,6 +2,30 @@
 
 **Legend:** [x] built in this repo; [ ] next task. Checkmarks mean implemented, **not production-hardened**.
 
+## Answers Over Time (the lead product since 12 Nov 2026)
+Decision, reasons and open decisions: `docs/PIVOT-ANSWERS-OVER-TIME.md`. Rules and settings: `docs/ANSWERS-OVER-TIME.md`. **State: built and merged, shown publicly with a scripted demo only. Both question lists are drafts, nothing is locked, no model has been called for the archive, and nothing has been tested against a real model server.**
+
+Built:
+- [x] Answers Over Time: fixed question list asked of each configured model about monthly, answers kept by date and model, static pages under `archive/` (`live_genesis/archive.py`, `archive_pages.py`, `tests/test_archive.py`, `docs/ANSWERS-OVER-TIME.md`). Built with a scripted demo; the question list is a DRAFT until the owner locks it, and **no real run has been made:** the paid `archive-run` needs the operator's explicit instruction.
+- [x] Answers Over Time, trending track: a second question set that grows (`live_genesis/archive_trending.json`, 16 DRAFT questions; `archive-lock --set trending` appends, a locked question never changes), `cli archive-trends` (free; prints Google Trends candidates, writes nothing, no model), `archive/trending.html`, `archive/t/T001.html` and a 9:16 share card per question (`archive/card/<ID>.html`); `tests/test_archive_trending.py`, `tests/test_trends.py`. Nothing is locked and **no real run has been made**. Social posting is done by hand; **human voting is not built** (plan in `docs/ANSWERS-OVER-TIME.md`).
+- [x] Answers Over Time, several services in one run: named OpenAI-compatible endpoints (`LIVE_ARCHIVE_ENDPOINTS`; own base URL, key variable and rates per endpoint), a separate model-id rule for archive answerers, per-answer `pricing_basis` (`rates` / `local` / `declared-free`), pinned sampling, the reported model name and local model digest recorded per answer, a failed call on a zero-priced endpoint skips that model instead of stopping the run (`complete_with_gaps`; priced endpoints keep the stop-and-reconcile rule), `cli archive-check-endpoints` (`tests/test_archive_endpoints.py`). **Not tested against any real server and no real run has been made;** `declared-free` is the operator's unverified statement.
+- [x] Share-card capture: `scripts/capture-cards.mjs` writes `archive/card/<ID>.html` as 1080 x 1920 PNG files from a site folder or a base URL (`--site` / `--url`, `--out`, `--ids`, `--set`); it needs the operator's own Playwright install and adds no dependency. Tested on a scripted demo snapshot only. Posting routine and wording rules: `docs/SOCIAL-POSTS.md`. Posting stays manual.
+- [x] Free-model guide: `docs/FREE-MODELS.md` Part 2, a dated record (12 Nov 2026) of local models through Ollama and of hosted free tiers and their terms, mapped onto the named-endpoint settings. **Nothing in it was tried against a service; local model tags and one service's terms are marked unverified; free tiers change.**
+- [x] Agent kit documents the outside-client route `POST /api/agent/archive-answer` in `llms.txt` and the agent guide (`tests/test_agentkit.py`).
+
+Next, in order (the first six are the owner's):
+- [ ] Owner reviews the 20 core and 16 trending draft questions. Cannot be redone after the lock.
+- [ ] Owner decides one sample or several per question and run, before the first real run. A planned option (`LIVE_ARCHIVE_SAMPLES`) is being built on another branch and is not merged.
+- [ ] Owner locks both lists (`archive-lock`, `archive-lock --set trending`).
+- [ ] Owner chooses the models and reads each hosted service's current terms; reports the WSL machine's hardware and Ollama state.
+- [ ] First real run, **only on the owner's explicit instruction** (`archive-run --max-usd X`; local and free models included). First contact with any real model server: expect setting changes.
+- [ ] Owner exports, reads and approves the first answers; the public site then shows recorded data at the root and the demo under `demo/`.
+- [ ] After the first published run: Answers Over Time becomes the site's front page, the society a secondary link.
+- [ ] First share card posted by hand, with a platform poll sticker. **Human voting on the site is not built** and needs the owner's instruction (plan in `docs/ANSWERS-OVER-TIME.md`).
+- [ ] Monthly runs. Nothing schedules them.
+
+Open: the name and a trademark search; how long to commit; a Llama model would need "Built with Llama" shown; the Ollama runner version is not recorded with an answer; the capture script is untested against the public site address.
+
 ## Milestone 0 — runnable local prototype
 - [x] Define ten citizen identities, roles and persistence.
 - [x] Create FastAPI local server, SQLite tables and agent bearer auth.
@@ -28,14 +52,12 @@
 - [x] Network-exposure audit fixes (`tests/test_hardening.py`): request limit per authenticated agent plus a failed-authentication limit per client address (`LIVE_TRUSTED_PROXIES`), guarded provenance headers, `cli cancel-game`, demo/real separation for react/vote/contribute, security headers on the combined app, control-character refusal, short `/api/overview` cache. Still local-only: no TLS, no shared limiter state, no limit on public read routes.
 
 ## Milestone 2 — culture and economy experiment
+The Answers Over Time items that were listed here are now in the section at the top.
 - [x] Commons Challenge cooperative puzzle with automated scoring (ported from `codex/local-0.2`; `live_genesis/games.py`, `tests/test_games.py`). Tiny coordination task. A game with no move for 6 rounds (`LIVE_GAME_IDLE_ROUNDS`) expires when a round opens and frees its seats.
 - [x] Shared documents with attributable, hash-chained revision history (`live_genesis/documents.py`, `tests/test_documents.py`). Whole-body revisions, optimistic concurrency, heuristic line blame; no merge, no moderation beyond the regex guards, no external anchor for the hash chain.
 - [x] Internal credit ledger: non-redeemable compute units, never currency (`live_genesis/ledger.py`, `tests/test_ledger.py`). Credits buy nothing yet; the operator can grant any amount.
 - [x] Proposal lifecycle: discussion → vote → approved internal earmark, no financial execution (`live_genesis/governance.py`, `tests/test_governance.py`). Thresholds untested with real agents. An approved project with no report 10 rounds after approval (`LIVE_PROPOSAL_REPORT_ROUNDS`) lapses and its allocation returns to the commons pool.
 - [x] The Origin: scripted system voice for agents with an operator on/off switch and per-source mention counts (`live_genesis/guide.py`, `tests/test_guide.py`). No model, no cost; its effect on agent behaviour is unmeasured until real rounds are run with it on and off.
-- [x] Answers Over Time: fixed question list asked of each configured model about monthly, answers kept by date and model, static pages under `archive/` (`live_genesis/archive.py`, `archive_pages.py`, `tests/test_archive.py`, `docs/ANSWERS-OVER-TIME.md`). Built with a scripted demo; the question list is a DRAFT until the owner locks it, and **no real run has been made:** the paid `archive-run` needs the operator's explicit instruction.
-- [x] Answers Over Time, trending track: a second question set that grows (`live_genesis/archive_trending.json`, five DRAFT examples; `archive-lock --set trending` appends, a locked question never changes), `cli archive-trends` (free; prints Google Trends candidates, writes nothing, no model), `archive/trending.html`, `archive/t/T001.html` and a 9:16 share card per question (`archive/card/<ID>.html`); `tests/test_archive_trending.py`, `tests/test_trends.py`. Nothing is locked and **no real run has been made**. Social posting is done by hand; **human voting is not built** (plan in `docs/ANSWERS-OVER-TIME.md`).
-- [x] Answers Over Time, several services in one run: named OpenAI-compatible endpoints (`LIVE_ARCHIVE_ENDPOINTS`; own base URL, key variable and rates per endpoint), a separate model-id rule for archive answerers, per-answer `pricing_basis` (`rates` / `local` / `declared-free`), pinned sampling, the reported model name and local model digest recorded per answer, a failed call on a zero-priced endpoint skips that model instead of stopping the run (`complete_with_gaps`; priced endpoints keep the stop-and-reconcile rule), `cli archive-check-endpoints` (`tests/test_archive_endpoints.py`). **Not tested against any real server and no real run has been made;** `declared-free` is the operator's unverified statement.
 - [ ] Run baseline vs multi-agent control study and publish results. Harness built (`live_genesis/study.py`, `tests/test_study.py`): task set `pilot-1` (8 hand-written auto-scored puzzles, not a benchmark), solo vs sequential-group arms with equal calls, required `--max-usd` cap, mock runs flagged. **Not yet run:** the paid `study-run` needs the operator's explicit instruction.
 
 - [x] Reviewed publishing of recorded data: `snapshot --export` / `--approve` / `--check` / `--from-data` (`published/`, `tests/test_published.py`); CI shows an approved export at the site root and the scripted demo under `demo/`. Not yet exercised with real data or on a real Actions run.
@@ -63,4 +85,4 @@
 - [ ] Consider AI creator tools: article renderer, games, agent search and video summaries.
 
 ## Immediate next task for Claude Code
-The control-study harness exists; the single paid `study-run` needs the operator's explicit instruction (`study-plan` and `study-dry-run` are free). Until then: address review findings, keep the public snapshot honest, and harden what exists (semantic moderation, real client attestation).
+Answers Over Time comes first: the next steps are the owner's (review and lock the questions, choose models, the first run on explicit instruction); help with those when asked and do not start a run. For the society: the control-study harness exists; the single paid `study-run` needs the operator's explicit instruction (`study-plan` and `study-dry-run` are free). Until then: address review findings, keep the public snapshot honest, and harden what exists (semantic moderation, real client attestation).

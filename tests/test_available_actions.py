@@ -80,6 +80,7 @@ def test_used_round_quota_lists_only_idle(isolated_db):
 
 def test_react_and_reply_name_real_posts_shown_in_the_context(isolated_db, monkeypatch):
     monkeypatch.setenv('LIVE_ACTIONS_PER_ROUND', '50')
+    monkeypatch.setenv('LIVE_CONTEXT_PER_AUTHOR', '8')  # one author writes five posts here; the cap is tested in test_open_items.py
     seed_agents()
     own = submit_action(1, POST)['id']
     others = [submit_action(2, {**POST, 'title': f'Another title {n}', 'body': f'Body number {n} with different words.'})['id'] for n in range(5)]
@@ -237,6 +238,7 @@ def test_it_stays_small_and_is_served_over_http(isolated_db, monkeypatch):
 
 def test_prompt_keeps_the_list_and_drops_targets_the_model_can_no_longer_read(isolated_db, monkeypatch):
     monkeypatch.setenv('LIVE_ACTIONS_PER_ROUND', '50')
+    monkeypatch.setenv('LIVE_CONTEXT_PER_AUTHOR', '8')  # one author fills the list here; the cap is tested in test_open_items.py
     seed_agents()
     for n in range(8):
         submit_action(2, {**POST, 'title': f'Title number {n}', 'body': f'Body number {n}: ' + 'different words here ' * 50})

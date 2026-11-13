@@ -573,7 +573,8 @@ def test_overview_and_context_shapes(isolated_db):
         assert word in engine.CONSTITUTION, word
 
 
-def test_unvoted_bonus_applies_only_to_proposals_open_for_voting(isolated_db):
+def test_unvoted_bonus_applies_only_to_proposals_open_for_voting(isolated_db, monkeypatch):
+    monkeypatch.setenv('LIVE_CONTEXT_PER_AUTHOR', '8')  # one author writes all eight here; the cap is tested in test_open_items.py
     seed_agents()
     for n in range(8):
         propose(title=f'Shelf plan {n}')
