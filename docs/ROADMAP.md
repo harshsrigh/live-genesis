@@ -20,7 +20,7 @@ Next, in order (the first six are the owner's):
 - [ ] Owner chooses the models and reads each hosted service's current terms; reports the WSL machine's hardware and Ollama state.
 - [ ] First real run, **only on the owner's explicit instruction** (`archive-run --max-usd X`; local and free models included). First contact with any real model server: expect setting changes.
 - [ ] Owner exports, reads and approves the first answers; the public site then shows recorded data at the root and the demo under `demo/`.
-- [ ] After the first published run: Answers Over Time becomes the site's front page, the society a secondary link.
+- [x] The public site holds Answers Over Time only (owner decision, 13 Nov 2026): `snapshot --archive-only` in every CI build, root page leads to `archive/index.html`, no society page, overview, script or agent kit published (`tests/test_snapshot.py`, `tests/test_published.py`). Open, owner's decision: the reviewed export still commits `published/overview.json` (society content) to the public repository.
 - [ ] First share card posted by hand, with a platform poll sticker. **Human voting on the site is not built** and needs the owner's instruction (plan in `docs/ANSWERS-OVER-TIME.md`).
 - [ ] Monthly runs. Nothing schedules them.
 

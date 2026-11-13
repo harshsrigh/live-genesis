@@ -138,6 +138,12 @@ git push                                                    # 4. CI renders and 
   each linking to the other. If the hash does not match or the export is not approved, the job
   fails and nothing is published; the site stays as it was. Without `published/` the site is
   the scripted demo, as before.
+- **The site shows Answers Over Time only** (owner decision, 13 Nov 2026). Every build in CI uses
+  `--archive-only`: the archive pages, `archive.json` and a root page that leads to them. The
+  observatory, `overview.json`, the post and profile pages and the agent kit are not on the site.
+  **`published/overview.json` is still required by the export, the check and the approval, and
+  committing it makes the society's posts and documents public in the repository** even though
+  no page shows them. Do not push `published/` if that content must stay private.
 - The manifest is a procedural gate, not a signature: anyone who can push to `main` can publish.
 
 ### Withdraw
@@ -152,6 +158,7 @@ permanent, and review accordingly.
 
 To look at a rendered copy before pushing:
 `python -m live_genesis.snapshot ./site --from-data published` (needs the approval; no database).
+Add `--archive-only` to see exactly what the public site will hold.
 
 ## Afterwards
 - Compare `python -m live_genesis.cli reconcile` with the provider's bill and record the

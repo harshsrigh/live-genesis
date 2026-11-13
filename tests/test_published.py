@@ -381,6 +381,55 @@ def test_render_from_data_equals_render_from_database(isolated_db, tmp_path, mon
         assert not (tmp_path / 'bad').exists()
 
 
+def test_archive_only_render_from_data_publishes_no_society_content(isolated_db, tmp_path, monkeypatch, capsys):
+    """Owner decision, 13 Nov 2026: the public site is Answers Over Time alone. The reviewed export is
+    still checked as a whole, but nothing of its overview.json reaches the site."""
+    recorded_world(monkeypatch)                                           # MIXED society; the archive holds no answers
+    published = tmp_path / 'published'
+    snapshot.export_published(published)
+    with pytest.raises(RuntimeError, match='not approved'):
+        snapshot.build_from_data(tmp_path / 'early', published, archive_only=True)
+    assert not (tmp_path / 'early').exists()
+    snapshot.approve_published(published, confirmed=True)
+    site = tmp_path / 'site'
+    # Rendering from data opens no database at all.
+    monkeypatch.setenv('LIVE_DB', str(tmp_path / 'no-such.sqlite'))
+    monkeypatch.setattr('sys.argv', ['snapshot', str(site), '--from-data', str(published), '--sibling', 'demo/', '--archive-only'])
+    snapshot.main()
+    printed = capsys.readouterr().out
+    assert 'rendered from approved data' in printed and 'Archive only' in printed and 'Agent kit' not in printed
+    assert not (tmp_path / 'no-such.sqlite').exists()
+    names = {p.relative_to(site).as_posix() for p in site.rglob('*') if p.is_file()}
+    assert {'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/trending.html', 'static/archive.css'} <= names
+    assert not names & {'overview.json', 'stats.html', 'llms.txt', 'agent-guide.md', 'openapi.json', 'agent_client.py', 'MANIFEST.json',
+                        'static/app.js', 'static/time.js', 'static/style.css', 'static/agents.txt', 'static/genesis-sigil.png'}
+    assert not any(name.startswith(('post/', 'profile/')) or name.endswith('.js') for name in names)
+    assert (site / 'archive.json').read_bytes() == (published / 'archive.json').read_bytes()
+    # No text an agent or a model wrote in the society is anywhere in the output.
+    world = json.loads((published / 'overview.json').read_text(encoding='utf-8'))
+    texts = [post['body'] for post in world['posts']] + [post['title'] for post in world['posts']]
+    assert 'Offline mocked provider response.' in texts
+    everything = ''.join((site / name).read_text(encoding='utf-8') for name in names if name.endswith(('.html', '.json', '.css')))
+    for text in texts:
+        assert text not in everything
+    assert '<script' not in everything and 'overview.json' not in everything
+    front = (site / 'archive' / 'index.html').read_text(encoding='utf-8')
+    assert 'No answers recorded yet' in front and 'Observatory' not in front
+    assert front.count('<a href="../demo/archive/index.html">Scripted demo</a>') == 1
+    # Every address resolves, except the one that leads to the demo folder, which this test did not build.
+    for page in site.rglob('*.html'):
+        for url in re.findall(r'(?:href|src)="([^"]*)"', page.read_text(encoding='utf-8')):
+            target = (page.parent / url.split('#')[0].split('?')[0]).resolve()
+            assert site.resolve() in target.parents, url
+            assert target.is_file() or target == (site / 'demo' / 'archive' / 'index.html').resolve(), (page.name, url)
+    assert '<meta http-equiv="refresh" content="0; url=archive/index.html" />' in (site / 'index.html').read_text(encoding='utf-8')
+    # A damaged overview.json still stops the build, although it would not have been shown.
+    (published / 'overview.json').write_bytes((published / 'overview.json').read_bytes() + b'\n')
+    with pytest.raises(RuntimeError, match='does not match the sha256'):
+        snapshot.build_from_data(tmp_path / 'damaged', published, archive_only=True)
+    assert not (tmp_path / 'damaged').exists()
+
+
 def test_page_labels_and_link_wording():
     script = (snapshot.STATIC / 'app.js').read_text(encoding='utf-8')
     for label in ('STATIC SNAPSHOT · NOT RUNNING', 'SCRIPTED DEMO DATA', 'RECORDED DATA · NO DEMO', "'CAPTURED '+shortDate(snap.generated_at)",
@@ -490,6 +539,10 @@ def workflow_problems(text):
     for needed in ('--from-data published --sibling demo/', '"$RUNNER_TEMP/site/demo" --sibling ../', 'if [ "${HAVE_PUBLISHED:-}" = "1" ]; then'):
         if needed not in builds:
             problems.append(f'missing: {needed}')
+    # Owner decision, 13 Nov 2026: every published variant is Answers Over Time alone.
+    built = [line for line in builds.splitlines() if 'live_genesis.snapshot "$RUNNER_TEMP' in line]
+    if len(built) != 3 or not all(line.endswith(' --archive-only') for line in built):
+        problems.append('every site build must use --archive-only')
     if 'runner.temp' in text:
         problems.append('runner.temp is not allowed in job-level env')
     if text.count('contents: write') != 1 or text.count('contents: read') != 1 or jobs['snapshot']['keys'].get('permissions') != '':
@@ -518,8 +571,11 @@ MUTATIONS = {
     'if: always() on the publish step': mutate('      - name: Publish to gh-pages\n', '      - name: Publish to gh-pages\n        if: always()\n'),
     'needs: test deleted': mutate('    needs: test\n', ''),
     'check step deleted': lambda text: text[:text.index(CHECK_STEP)] + text[text.index('      - name: Build scripted demo world'):],
-    'check moved after the build': mutate('          python -m live_genesis.snapshot "$RUNNER_TEMP/site"\n',
-                                         '          python -m live_genesis.snapshot "$RUNNER_TEMP/site"\n          ' + CHECK_LINE + '\n'),
+    'check moved after the build': mutate('          python -m live_genesis.snapshot "$RUNNER_TEMP/site" --archive-only\n',
+                                         '          python -m live_genesis.snapshot "$RUNNER_TEMP/site" --archive-only\n          ' + CHECK_LINE + '\n'),
+    'demo-only site built with the society pages': mutate('"$RUNNER_TEMP/site" --archive-only\n', '"$RUNNER_TEMP/site"\n'),
+    'reviewed root built with the society pages': mutate('--sibling demo/ --archive-only\n', '--sibling demo/\n'),
+    'demo folder built with the society pages': mutate('--sibling ../ --archive-only\n', '--sibling ../\n'),
     'check only under a narrower condition': mutate('if [ -e published ]; then', 'if [ -f published/APPROVED ]; then'),
     'job-level continue-on-error': mutate('    needs: test\n', '    needs: test\n    continue-on-error: true\n'),
 }
