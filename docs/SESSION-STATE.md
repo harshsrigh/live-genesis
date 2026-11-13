@@ -25,12 +25,12 @@ The project now leads with **Answers Over Time** (`docs/PIVOT-ANSWERS-OVER-TIME.
 - Everything listed under "Society: done" below. The test suite is offline; run `python -m pytest -q` for the current count.
 
 ## In progress (other branches; check before starting)
-- `LIVE_ARCHIVE_SAMPLES`: an optional setting to ask each question more than once per run. Being built; **not merged**. Do not describe it as available.
+- `LIVE_ARCHIVE_SAMPLES` (1 to 5 samples per question per run) is merged on `main`.
 - Edits to `docs/SECURITY.md`, `docs/ANSWERS-OVER-TIME.md`, `docs/DOCUMENTS-REVIEW.md` and `.env.example` by other sessions. Pull before touching them.
 
 ## Next: Answers Over Time (the owner's moves, in order)
 1. **Review the draft questions:** 20 core (`live_genesis/archive_questions.json`) and 12 trending (`live_genesis/archive_trending.json`). `python -m live_genesis.cli archive-plan` prints them. Edit, cut or replace. After the lock the core list can never change and a trending question can never change or be removed.
-2. **Decide one sample or several** (open decision 2 in the pivot document) before any real run. The method cannot change afterwards.
+2. **One sample or several: decided, three** (owner, 13 Nov 2026; `LIVE_ARCHIVE_SAMPLES=3` is set in the `.env` on the PC). Keep it for every run: the method cannot change afterwards.
 3. **Lock:** set `"status": "locked"` in each file, commit, then on the real database `archive-lock` and `archive-lock --set trending`. Back up the database first (`cli backup <file>`).
 4. **Choose models.** Read `docs/FREE-MODELS.md` Part 2. For each hosted service, read its current terms yourself. Local tags are unverified: confirm with `ollama show`.
 5. **Report the WSL machine,** so the model choice fits it: RAM (`free -h`), CPU threads (`nproc`), GPU if any (`nvidia-smi`), free disk (`df -h ~`), and Ollama (`ollama --version`, `ollama list`; or "not installed"). Say whether Ollama runs inside WSL or on Windows: `localhost` must reach it from where the run starts.
