@@ -25,6 +25,11 @@ The export also carries `archive.json` (Answers Over Time: questions, runs and a
 answers are never in it) under the same hash, manifest, guard and ASCII rules, and every
 snapshot holds the archive pages under `archive/` (archive_pages.py; plain HTML, no script).
 
+`--archive-only` (with a database or with `--from-data`; what the public site is built with) writes
+Answers Over Time and nothing of the society: `archive/`, `archive.json`, the stylesheet, mark, icon
+and fonts those pages use, and a root `index.html` that sends the visitor to `archive/index.html`.
+No overview, no post, profile or stats page, no script, no agent kit.
+
 See docs/FIRST-REAL-ROUND.md. Publishing is not reversible in practice: git history keeps the data.
 """
 from __future__ import annotations
@@ -245,11 +250,45 @@ def _render(out: Path, payload: bytes, kit: dict[str, str], include_client: bool
         shutil.copyfile(agentkit.REFERENCE_CLIENT, out / agentkit.REFERENCE_CLIENT_NAME)
 
 
+def _render_archive_only(out: Path, sibling: str | None, archive_payload: bytes) -> None:
+    """Answers Over Time on its own: the archive pages, the static files they use, the data behind
+    them and a root page that leads to them. Nothing of the society is written."""
+    try:
+        archive_html = archive_pages.render_site(_loads(archive_payload), standalone=True, sibling=sibling)
+        home = archive_pages.render_home()
+    except ValueError as err:
+        raise RuntimeError(str(err)) from None
+    assets = archive_pages.static_files()
+    missing = [name for name in assets if not (STATIC / name).is_file()]
+    if missing:
+        raise RuntimeError(f"the archive pages refer to a missing static file: {missing[0]}")
+    out.mkdir(parents=True, exist_ok=True)
+    for name in assets:
+        target = out / "static" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(STATIC / name, target)
+    (out / "index.html").write_text(home, encoding="utf-8")
+    (out / ARCHIVE_FILE).write_bytes(archive_payload)   # the data behind archive/, byte for byte
+    for name, text in archive_html.items():
+        target = out / "archive" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    (out / ".nojekyll").write_text("", encoding="utf-8")  # serve files as-is on GitHub Pages
+
+
+def _no_kit(api_base: str | None) -> None:
+    if api_base is not None:
+        raise RuntimeError("--api-base cannot be used with --archive-only: the agent kit is not written there")
+
+
 def build(outdir: str | Path, *, allow_non_demo: bool = False, api_base: str | None = None,
-          sibling: str | None = None) -> dict:
+          sibling: str | None = None, archive_only: bool = False) -> dict:
     out = Path(outdir)
     # Generated before anything is written, so a failure leaves no half-built folder.
-    api_base, kit, include_client = _kit(api_base)
+    if archive_only:
+        _no_kit(api_base)
+    else:
+        api_base, kit, include_client = _kit(api_base)
     _check_outdir(out, sibling)
     data = _capture()
     answers = _capture_archive()
@@ -258,7 +297,10 @@ def build(outdir: str | Path, *, allow_non_demo: bool = False, api_base: str | N
     if not data["snapshot"]["demo_only"] and not allow_non_demo:
         raise RuntimeError("Database is not scripted-demo-only (mode %s). Review the content, then pass "
                            "--allow-non-demo to export it anyway." % data.get("mode"))
-    _render(out, _encode(data), kit, include_client, sibling, _encode(answers))
+    if archive_only:   # the same gate as above, although the overview itself is not written
+        _render_archive_only(out, sibling, _encode(answers))
+    else:
+        _render(out, _encode(data), kit, include_client, sibling, _encode(answers))
     return {**data["snapshot"], "api_base": api_base}
 
 
@@ -519,16 +561,23 @@ def approve_published(target: str | Path | None = None, *, confirmed: bool = Fal
 
 
 def build_from_data(outdir: str | Path, published: str | Path | None = None, *, api_base: str | None = None,
-                    sibling: str | None = None) -> dict:
-    """Render the site from reviewed, committed data. No database is opened."""
+                    sibling: str | None = None, archive_only: bool = False) -> dict:
+    """Render the site from reviewed, committed data. No database is opened. With archive_only the
+    whole export is still checked, but only its archive.json is rendered and copied."""
     out = Path(outdir)
     folder = Path(published) if published is not None else PUBLISHED
-    api_base, kit, include_client = _kit(api_base)
+    if archive_only:
+        _no_kit(api_base)
+    else:
+        api_base, kit, include_client = _kit(api_base)
     _check_outdir(out, sibling)
     manifest = check_published(folder)
     payload = (folder / DATA_FILE).read_bytes()   # published byte for byte, so anyone can re-check the hash
     info = _loads(payload)["snapshot"]
-    _render(out, payload, kit, include_client, sibling, (folder / ARCHIVE_FILE).read_bytes())
+    if archive_only:
+        _render_archive_only(out, sibling, (folder / ARCHIVE_FILE).read_bytes())
+    else:
+        _render(out, payload, kit, include_client, sibling, (folder / ARCHIVE_FILE).read_bytes())
     return {**info, "api_base": api_base, "manifest": manifest}
 
 
@@ -555,6 +604,9 @@ def main() -> None:
                         help="Render OUTDIR from an approved export folder instead of a database")
     parser.add_argument("--sibling", metavar="HREF", default=None,
                         help="Relative link to the other published snapshot (demo/ or ../), shown on the page")
+    parser.add_argument("--archive-only", action="store_true",
+                        help="Write Answers Over Time only (archive/, its static files, a root page that leads to it): "
+                             "no observatory page, no overview.json, no script, no agent kit")
     steps = parser.add_mutually_exclusive_group()
     steps.add_argument("--export", metavar="DIR", nargs="?", const=str(PUBLISHED), default=None,
                        help="Write overview.json, archive.json and MANIFEST.json for review (default folder: published/)")
@@ -567,8 +619,8 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.export or args.approve or args.check:
-            if args.outdir or args.from_data:
-                parser.error("--export, --approve and --check take no OUTDIR and no --from-data")
+            if args.outdir or args.from_data or args.archive_only:
+                parser.error("--export, --approve and --check take no OUTDIR, no --from-data and no --archive-only")
             if args.export:
                 manifest = export_published(args.export, replace=args.replace)
                 print(f"Export written to {args.export} (NOT yet approved). No model was called.\n{_describe(manifest)}")
@@ -594,14 +646,19 @@ def main() -> None:
         if not args.outdir:
             parser.error("OUTDIR is required unless --export, --approve or --check is given")
         if args.from_data:
-            info = build_from_data(args.outdir, args.from_data, api_base=args.api_base, sibling=args.sibling)
+            info = build_from_data(args.outdir, args.from_data, api_base=args.api_base, sibling=args.sibling,
+                                   archive_only=args.archive_only)
         else:
-            info = build(args.outdir, allow_non_demo=args.allow_non_demo, api_base=args.api_base, sibling=args.sibling)
+            info = build(args.outdir, allow_non_demo=args.allow_non_demo, api_base=args.api_base, sibling=args.sibling,
+                         archive_only=args.archive_only)
     except RuntimeError as err:
         parser.error(str(err))
     origin = "rendered from approved data, " if args.from_data else ""
     print(f"Static snapshot written to {args.outdir} ({origin}captured {info['generated_at']}, "
           f"{'scripted demo data only' if info['demo_only'] else 'INCLUDES NON-DEMO DATA'}). No model was called.")
+    if args.archive_only:
+        print("Archive only: Answers Over Time and its static files. No observatory page, overview or agent kit was written.")
+        return
     print(f"Agent kit: API base {info['api_base']}." if info["api_base"]
           else "Agent kit: no API base given; the files say the API is not publicly hosted.")
 

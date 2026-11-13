@@ -12,6 +12,11 @@ in both web apps (`/archive/index.html`, `/archive/trending.html`, `/archive/q/Q
 A trending question is added after the archive started, so it has cells only in the runs that
 asked it (`runs[].asked` in the payload): its strip and its table start at its first run.
 
+Standalone: `render_site(payload, standalone=True)` is the archive published on its own (snapshot.py
+`--archive-only`). Its pages carry no link to the observatory, which such a site does not hold, and
+`render_home` is the site's root page. `sibling` (standalone only) is the relative address of the
+other published snapshot as seen from the site root (`demo/` or `../`); the bar links its archive.
+
 Repeat samples: a run may ask each question several times (`runs[].samples`). A cell then shows the
 representative answer with "2 of 3 agree", and a third state, UNSETTLED (archive.stability), next to
 same and changed. Nothing of this is rendered for an archive whose runs all asked once.
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import re
 from pathlib import Path
 
 from . import archive
@@ -200,9 +206,20 @@ def _head(title: str, up: str, versions: dict[str, str], description: str) -> st
             '</head>\n<body>\n')
 
 
-def _bar(up: str, base: str, versions: dict[str, str], current: str = "") -> str:
-    """`base` leads to the archive folder ("" on its own pages, "../" one folder down)."""
+def _bar(up: str, base: str, versions: dict[str, str], current: str = "", *, standalone: bool = False,
+         sibling: str | None = None, demo: bool = False) -> str:
+    """`base` leads to the archive folder ("" on its own pages, "../" one folder down). The last link
+    goes to the observatory; a standalone archive has none, so it is left out there (or, when the build
+    names the other published snapshot, replaced by a link to that snapshot's archive)."""
     index_href = f"{base}index.html"
+    if not standalone:
+        last = f'    <a href="{up}">Observatory</a>\n'
+    elif sibling:
+        # A scripted page never calls the other snapshot (or itself) "recorded".
+        last = (f'    <a href="{esc(up + sibling)}archive/index.html">'
+                f'{"Main archive" if demo else "Scripted demo"}</a>\n')
+    else:
+        last = ""
     here = {name: ' aria-current="page"' if name == current else "" for name in ("questions", "trending")}
     return ('<div class="bar"><div class="bar-in">\n'
             f'  <a class="wordmark" href="{index_href}"><img class="mark" src="{up}static/archive-mark.svg?v={versions["archive-mark.svg"]}" '
@@ -211,7 +228,7 @@ def _bar(up: str, base: str, versions: dict[str, str], current: str = "") -> str
             f'    <a href="{index_href}"{here["questions"]}>Questions</a>\n'
             f'    <a href="{base}trending.html"{here["trending"]}>Trending</a>\n'
             f'    <a href="{index_href}#method">Method</a>\n'
-            f'    <a href="{up}">Observatory</a>\n'
+            + last +
             '  </nav>\n'
             '  <span class="mono small muted">READ-ONLY ARCHIVE</span>\n'
             '</div></div>\n')
@@ -241,13 +258,36 @@ def _last_change(view: _View, question_id: str) -> str:
     return f"Last change: {last['answerer']}, {month_year(view.run_date[last['run']])}"
 
 
-def render_index(payload: dict, versions: dict[str, str] | None = None) -> str:
+HOME_DESCRIPTION = "The same simple questions, asked of AI models again every month, with every answer kept."
+
+
+def render_home(versions: dict[str, str] | None = None) -> str:
+    """`index.html` at the root of a standalone archive: sends the visitor to `archive/index.html`
+    with a meta refresh and shows a plain link for a browser that does not follow it. No script."""
+    versions = versions or asset_versions()
+    head = _head("Answers Over Time", "", versions, HOME_DESCRIPTION)
+    title = '  <title>'
+    if head.count(title) != 1:
+        raise ValueError("the page head must hold exactly one <title>")
+    head = head.replace(title, '  <meta http-equiv="refresh" content="0; url=archive/index.html" />\n' + title)
+    return (head + '<div class="wrap">\n<header class="hero hero-small">\n  <div class="hero-copy">\n'
+            '    <span class="tag tag-dark mono">Read-only archive · static snapshot</span>\n'
+            '    <h1 class="display">Answers Over Time</h1>\n'
+            '    <p class="lede"><a href="archive/index.html">Open the archive</a></p>\n'
+            '  </div>\n</header>\n'
+            '<footer class="foot"><span>Nothing is running behind this page.</span>'
+            '<span class="mono small">No payments · nothing can be changed from this page</span></footer>\n'
+            '</div>\n</body>\n</html>\n')
+
+
+def render_index(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
+                 sibling: str | None = None) -> str:
     view = _View(payload)
     versions = versions or asset_versions()
     total = count_word(len(view.questions))
-    out = [_head("Answers Over Time", "../", versions,
-                 "The same simple questions, asked of AI models again every month, with every answer kept."),
-           _bar("../", "", versions, "questions"), '<div class="wrap">\n']
+    out = [_head("Answers Over Time", "../", versions, HOME_DESCRIPTION),
+           _bar("../", "", versions, "questions", standalone=standalone, sibling=sibling, demo=view.demo),
+           '<div class="wrap">\n']
     out.append('<header class="hero">\n  <div class="hero-copy">\n'
                f'    <span class="tag tag-dark mono">{esc(view.tag())}</span>\n'
                '    <h1 class="display">Simple questions, asked again every month.</h1>\n'
@@ -399,7 +439,8 @@ def _honesty(view: _View) -> str:
             else "Answers are model output and may be wrong")
 
 
-def render_question(payload: dict, question_id: str, versions: dict[str, str] | None = None) -> str:
+def render_question(payload: dict, question_id: str, versions: dict[str, str] | None = None, *,
+                    standalone: bool = False, sibling: str | None = None) -> str:
     """One question of either track: `q/Q01.html` or `t/T001.html` (same layout; a trending
     question also shows its topic and where the topic came from)."""
     view = _View(payload)
@@ -411,7 +452,8 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
     runs = view.asked(question_id)
     columns = min(max(len(view.labels), 1), MAX_COLUMNS)
     out = [_head(f"{question['id']} · Answers Over Time", "../../", versions, question["text"]),
-           _bar("../../", "../", versions), '<div class="wrap">\n']
+           _bar("../../", "../", versions, standalone=standalone, sibling=sibling, demo=view.demo),
+           '<div class="wrap">\n']
     if trending:
         chips = (f'<span class="chip chip-topic">{esc(question["topic"])}</span>'
                  f'<span class="muted small">added {esc(month_year(question["added"]))}</span>')
@@ -471,14 +513,16 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
     return "".join(out)
 
 
-def render_trending(payload: dict, versions: dict[str, str] | None = None) -> str:
+def render_trending(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
+                    sibling: str | None = None) -> str:
     """`trending.html`: the trending questions, newest first, each with its topic, the month it
     was added and the same strips as the index."""
     view = _View(payload)
     versions = versions or asset_versions()
     out = [_head("Trending · Answers Over Time", "../", versions,
                  "Questions written from what many people were searching for, asked of AI models in every run since."),
-           _bar("../", "", versions, "trending"), '<div class="wrap">\n']
+           _bar("../", "", versions, "trending", standalone=standalone, sibling=sibling, demo=view.demo),
+           '<div class="wrap">\n']
     out.append('<header class="hero hero-small">\n  <div class="hero-copy">\n'
                f'    <span class="tag tag-dark mono">{esc(view.tag())}</span>\n'
                '    <h1 class="display">Questions from what people are searching for.</h1>\n'
@@ -583,12 +627,25 @@ def render_card(payload: dict, question_id: str, versions: dict[str, str] | None
     return "".join(out)
 
 
-def render_site(payload: dict) -> dict[str, str]:
+def static_files() -> list[str]:
+    """Every file under static/ that the archive pages need: the stylesheet, the mark, the icon, the
+    fonts the stylesheet names and each font's licence text. Nothing of the observatory page."""
+    names = list(ASSETS)
+    for font in sorted(set(re.findall(r'url\("(fonts/[A-Za-z0-9._-]+)"\)', (STATIC / "archive.css").read_text(encoding="utf-8")))):
+        names.append(font)
+        licence = f"{font.rsplit('.', 1)[0]}-OFL.txt"
+        if (STATIC / licence).is_file():
+            names.append(licence)
+    return names
+
+
+def render_site(payload: dict, *, standalone: bool = False, sibling: str | None = None) -> dict[str, str]:
     """Every archive page, keyed by its path under `archive/`."""
     versions = asset_versions()
-    pages = {"index.html": render_index(payload, versions), "trending.html": render_trending(payload, versions)}
+    options = {"standalone": standalone, "sibling": sibling if standalone else None}
+    pages = {"index.html": render_index(payload, versions, **options), "trending.html": render_trending(payload, versions, **options)}
     for folder, questions in (("q", payload["questions"]), ("t", payload["trending"]["questions"])):
         for question in questions:
-            pages[f"{folder}/{question['id']}.html"] = render_question(payload, question["id"], versions)
+            pages[f"{folder}/{question['id']}.html"] = render_question(payload, question["id"], versions, **options)
             pages[f"card/{question['id']}.html"] = render_card(payload, question["id"], versions)
     return pages

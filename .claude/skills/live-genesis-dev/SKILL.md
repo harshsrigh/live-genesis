@@ -84,7 +84,7 @@ New columns are added in place by `init_db`; back up a real database before upgr
 python -m pip install -r requirements.txt
 python -m pytest -q
 ```
-`published/` holds `overview.json`, `archive.json` and `MANIFEST.json`; read both data files before approving. If `published/` exists it must pass `python -m live_genesis.snapshot --check`; CI then shows it at the site root and the demo under `demo/`. Pushed data stays in git history. Push to `main`; `.github/workflows/snapshot.yml` tests, rebuilds the demo snapshot and publishes to `gh-pages`. After a page change, load the live site and check it; a CSS brace slip once broke the layout.
+`published/` holds `overview.json`, `archive.json` and `MANIFEST.json`; read both data files before approving. If `published/` exists it must pass `python -m live_genesis.snapshot --check`; CI then shows it at the site root and the demo under `demo/`. Every CI build uses `--archive-only`: the public site is Answers Over Time alone, never the society pages (owner decision, 13 Nov 2026). Pushed data stays in git history. Push to `main`; `.github/workflows/snapshot.yml` tests, rebuilds the demo snapshot and publishes to `gh-pages`. After a page change, load the live site and check it; a CSS brace slip once broke the layout.
 
 Free local preview:
 ```bash

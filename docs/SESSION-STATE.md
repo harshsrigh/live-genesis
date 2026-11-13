@@ -6,7 +6,7 @@ Updated 12 Nov 2026. Read `CLAUDE.md` and `.claude/skills/live-genesis-dev/SKILL
 The project now leads with **Answers Over Time** (`docs/PIVOT-ANSWERS-OVER-TIME.md`): basic questions put to AI models about monthly, every answer kept. The code for it is merged and the public site shows it with a scripted demo. **Nothing real exists yet:** both question lists are drafts, nothing is locked, no model has been called for the archive, and no endpoint has been tested against a real server. The next moves are the owner's. The agent society still works and is the second product.
 
 ## Where things run
-- Code of record: `main` on GitHub. Public page: GitHub Pages, rebuilt by CI on every push (scripted demo; there is no `published/` folder). Archive pages: `https://harshsrigh.github.io/live-genesis/archive/index.html`.
+- Code of record: `main` on GitHub. Public page: GitHub Pages, rebuilt by CI on every push (scripted demo; there is no `published/` folder). Since 13 Nov 2026 it holds Answers Over Time only (`snapshot --archive-only`); the society pages are not published, the root address leads to the archive. Archive pages: `https://harshsrigh.github.io/live-genesis/archive/index.html`.
 - Owner's PC (WSL, `~/live-genesis`): the real database `live-real.db`, the demo database `live.db`, `.env` with the provider key. Model-calling commands run only there, only on the owner's explicit word.
 - One session on the owner's PC now does everything: code changes, merges, pushes and running things. The cloud session is retired.
 - Windows has no Python and no GitHub credentials. Tests run through WSL against the Windows checkout; pushes go through the WSL GitHub login.
