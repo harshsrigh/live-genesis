@@ -139,9 +139,9 @@ def test_classify_empty_long_and_withheld():
 
 # ---- the question file and the lock -----------------------------------------------------------
 
-def test_checked_in_question_file_is_a_valid_draft():
+def test_checked_in_question_file_is_the_locked_list():
     data = archive.load_questions(REPO / 'live_genesis' / 'archive_questions.json')
-    assert data['status'] == 'draft' and len(data['questions']) == 20 and len(data['groups']) == 4
+    assert data['status'] == 'locked' and len(data['questions']) == 20 and len(data['groups']) == 4
     assert [g['name'] for g in data['groups']] == ['Everyday facts', 'Health and home', 'Right now', 'About the AI']
     for group in data['groups']:
         assert sum(q['group'] == group['name'] for q in data['questions']) == 5

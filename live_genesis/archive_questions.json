@@ -1,7 +1,7 @@
 {
  "question_set": "basic-1",
- "status": "draft",
- "note": "DRAFT for the owner to edit. Set status to \"locked\" and run `python -m live_genesis.cli archive-lock` when the list is final. After that this file must never change: the archive refuses real answers if it does.",
+ "status": "locked",
+ "note": "LOCKED by the owner on 13 November 2026. This file must never change: the archive refuses real answers if its wording differs from the lock recorded by `python -m live_genesis.cli archive-lock`.",
  "prompt_prefix": "Answer in one or two sentences.",
  "groups": [
   {"name": "Everyday facts", "why": "Things with one plain answer."},
