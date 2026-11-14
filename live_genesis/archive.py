@@ -89,9 +89,10 @@ TRENDING_FILE = Path(__file__).resolve().parent / "archive_trending.json"
 # model name the provider reported, the local model digest, the pricing basis and whether sampling was pinned;
 # per run, the answerers that were skipped.
 PAYLOAD_SCHEMA = "live-genesis-archive/3"
-# /4: the payload also holds the hand-entered chat-app track (`chatbots`, archive_chatbots.py). Written only when
+# /5: the payload also holds the hand-entered chat-app track (`chatbots`, archive_chatbots.py: its own questions, the
+# apps and the Human column; /4 was that track's first shape, never published). Written only when
 # the database holds such a run: a payload without that track is still /3, byte for byte what it always was.
-PAYLOAD_SCHEMA_CHATBOTS = "live-genesis-archive/4"
+PAYLOAD_SCHEMA_CHATBOTS = "live-genesis-archive/5"
 TRACKS = ("core", "trending")
 GROUP_COUNT = 4
 QUESTION_ID = re.compile(r"Q[0-9]{2}")
@@ -1661,7 +1662,7 @@ def demo_archive() -> dict:
                            source="demo", state=state, reason=why, text=kept, created_at=date)
                     written += 1
             cx.execute("UPDATE archive_runs SET status='complete',finished_at=? WHERE id=?", (date, run_id))
-        chat = archive_chatbots.demo(cx, [data, trending])
+        chat = archive_chatbots.demo(cx)
     return {"runs": len(DEMO_DATES), "answerers": list(DEMO_MODELS), "answers": written,
             "trending_questions": len(DEMO_TRENDING), **chat}
 
@@ -1780,7 +1781,7 @@ def public_payload(readonly: bool = True) -> dict:
     and `others` (the other distinct answers with their counts); the run carries `samples` (asked).
     None of these keys exists for a single-sample run.
 
-    `chatbots` (and the schema marker /4) exists only when the database holds a chat-app run
+    `chatbots` (and the schema marker /5) exists only when the database holds a chat-app run
     (archive_chatbots.public_block): replies the owner collected by hand, kept apart from `answers`."""
     from . import archive_chatbots
     with core.connect(readonly=readonly) as cx:
@@ -2074,7 +2075,7 @@ def payload_problem(data: object) -> str | None:
             return f"key {key} is missing or has the wrong type"
     if data["schema"] != (PAYLOAD_SCHEMA_CHATBOTS if "chatbots" in data else PAYLOAD_SCHEMA):
         return "unknown schema" if data["schema"] not in (PAYLOAD_SCHEMA, PAYLOAD_SCHEMA_CHATBOTS) else \
-            "the schema marker does not fit the file (/4 exactly when it holds the chat-app track)"
+            "the schema marker does not fit the file (/5 exactly when it holds the chat-app track)"
     trending = data["trending"]
     for key, kind in _TRENDING_SHAPE.items():
         if not isinstance(trending.get(key), kind) or (kind is int and isinstance(trending[key], bool)):

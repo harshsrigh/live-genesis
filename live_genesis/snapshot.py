@@ -26,7 +26,7 @@ answers are never in it) under the same hash, manifest, guard and ASCII rules, a
 snapshot holds the archive pages under `archive/` (archive_pages.py; plain HTML, no script).
 
 Replies the owner collected from chat apps BY HAND (archive_chatbots.py) are part of `archive.json`
-(its optional `chatbots` block, payload schema /4): they pass the same guards, the closed key sets and
+(its optional `chatbots` block, payload schema /5): they pass the same guards, the closed key sets and
 `--check`, which also refuses a chat app that is not in `archive_chatbots.json`, an answer to a question
 outside its run's recorded id list and an answer without recorded conditions. A screenshot is exported
 as its sha256 only. An archive that holds only such replies can be exported.
@@ -44,7 +44,7 @@ marked `running` (an archive-run in progress, or one that was killed and so neve
 
 `--archive-only` (with a database or with `--from-data`; what the public site is built with) writes
 Answers Over Time and no page of the society: `archive/`, `archive.json`, the stylesheet, mark, icon
-and fonts those pages use, and a root `index.html` that sends the visitor to `archive/trending.html`.
+and fonts those pages use, and a root `index.html` that sends the visitor to `archive/index.html`.
 No overview, no post, profile or stats page, no script, no agent kit.
 
 See docs/FIRST-REAL-ROUND.md. Publishing is not reversible in practice: git history keeps the data.
@@ -420,12 +420,14 @@ def _archive_counts(answers: dict) -> dict:
                            "set_hash": trending["set_hash"], "version": trending["version"]}}
     if "chatbots" in answers:   # only for a file that holds the hand-entered chat-app track: any other manifest is unchanged
         chat = answers["chatbots"]
-        counts["chatbots"] = {"runs": len(chat["runs"]), "answers": len(chat["answers"]), "apps": [app["label"] for app in chat["apps"]]}
+        counts["chatbots"] = {"runs": len(chat["runs"]), "answers": len(chat["answers"]), "apps": [app["label"] for app in chat["apps"]],
+                              "human_answers": len(chat["human_answers"]), "questions": len(chat["questions"])}
     return counts
 
 
 def _chat_answers(answers: dict) -> list:
-    return answers.get("chatbots", {}).get("answers", [])
+    chat = answers.get("chatbots", {})
+    return chat.get("answers", []) + chat.get("human_answers", [])
 
 
 def _archive_problem(answers: object) -> str | None:
@@ -442,13 +444,11 @@ def _archive_problem(answers: object) -> str | None:
     if any(a["source"] == "demo" for a in answers["answers"]) or any(run["demo"] for run in answers["runs"]):
         return "it holds scripted demo answers; the demo is published without review"
     if "chatbots" in answers:
-        # Hand-entered chat-app replies: never scripted ones, only apps of the checked-in configuration, closed keys,
-        # and both question sets locked (the importer requires that too).
+        # Hand-entered chat-app replies and human answers: never scripted ones, only apps and questions of the checked-in
+        # configuration, closed keys. The track has its own questions: the core and trending lists need not be locked.
         problem = archive_chatbots.export_problem(answers["chatbots"])
         if problem:
             return problem
-        if not (answers["locked"] and answers["trending"]["locked"]):
-            return "it holds hand-entered chat-app answers but a question list is not locked"
     if answers["answers"] and not answers["locked"] and not answers["trending"]["locked"]:
         return "it holds answers but the question list is not locked"
     for track, ids in (("core", {q["id"] for q in answers["questions"]}), ("trending", {q["id"] for q in answers["trending"]["questions"]})):

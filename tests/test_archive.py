@@ -415,7 +415,7 @@ def test_withheld_answer_keeps_category_and_no_text(ready, monkeypatch):
                      'answer_sha256': None, 'changed': None}
     assert 'example.org' not in json.dumps(rows('SELECT * FROM archive_answers'))
     page = archive_pages.render_question(archive.public_payload(), 'Q01')
-    assert 'Withheld by content check (looks like an email address)' in page and 'example.org' not in page
+    assert 'Hidden: broke our content rules (looks like an email address)' in page and 'example.org' not in page
 
 
 # ---- mock, dry run, demo: kept apart ------------------------------------------------------------
@@ -465,7 +465,7 @@ def test_demo_archive_is_scripted_dated_monthly_and_separate(ready, monkeypatch)
     assert done == {'runs': 8, 'answerers': ['model-a', 'model-b', 'model-c'], 'answers': 8 * 20 * 3 - 2 + (6 + 4 + 2) * 3,
                     'trending_questions': 3,
                     # the chat-app track, scripted under made-up names (tests/test_archive_chatbots.py)
-                    'chatbot_runs': 4, 'chatbots': ['chat-app-a', 'chat-app-b', 'chat-app-c', 'chat-app-d'], 'chatbot_answers': 90}
+                    'chatbot_runs': 4, 'chatbots': ['chat-app-a', 'chat-app-b', 'chat-app-c'], 'chatbot_answers': 84}
     runs = rows('SELECT number,kind,status,started_at FROM archive_runs ORDER BY number')
     assert [r['started_at'][:7] for r in runs] == [f'2026-{m:02d}' for m in range(4, 12)]
     assert {(r['kind'], r['status']) for r in runs} == {('demo', 'complete')}
@@ -524,10 +524,23 @@ def hostile_payload():
     return payload
 
 
-ALLOWED_TAGS = {'html', 'head', 'meta', 'title', 'link', 'body', 'div', 'span', 'a', 'img', 'nav', 'header', 'h1', 'h2', 'p',
-                'strong', 'section', 'article', 'main', 'aside', 'pre', 'footer'}
+# The elements and attributes the archive pages may use. Extended on purpose for the redesign of November 2026:
+# * `input` (type radio or checkbox ONLY) and `label`: the month switch and "More" without script. Safe because no page
+#   holds a <form>, a button or a submit control (checked below), the inputs carry no `value`, `form` or `formaction`, and
+#   the Content-Security-Policy keeps `form-action 'none'`: nothing can be sent anywhere. `name` only groups the radios.
+# * `details` / `summary`: the browser's own open-and-close. No script, no request, no external load.
+# * `table` and its parts, `time`, lists, `h3`, `em`: plain structure.
+# * `itemscope` / `itemtype` / `itemprop` (schema.org microdata) and `data-*` (a closed list): labels for machines. They load
+#   nothing: an itemtype is an identifier, never fetched, and is required to be a schema.org type.
+ALLOWED_TAGS = {'html', 'head', 'meta', 'title', 'link', 'body', 'div', 'span', 'a', 'img', 'nav', 'header', 'h1', 'h2', 'h3', 'p',
+                'strong', 'em', 'section', 'article', 'main', 'pre', 'footer', 'input', 'label', 'details', 'summary',
+                'table', 'caption', 'thead', 'tbody', 'tr', 'th', 'td', 'time', 'ol', 'ul', 'li'}
 ALLOWED_ATTRS = {'lang', 'charset', 'name', 'content', 'http-equiv', 'rel', 'type', 'href', 'class', 'src', 'alt', 'width', 'height',
-                 'aria-label', 'aria-current', 'role', 'id', 'tabindex'}
+                 'aria-label', 'aria-current', 'role', 'id', 'for', 'checked', 'reversed', 'scope', 'datetime',
+                 'itemscope', 'itemtype', 'itemprop'}
+DATA_ATTRS = {'data-question-id', 'data-answerer', 'data-answerer-kind', 'data-maker', 'data-version', 'data-collected', 'data-method',
+              'data-provenance', 'data-human-form', 'data-state', 'data-previous-collected', 'data-truncated-display', 'data-lang',
+              'data-label'}
 
 
 class Tags(HTMLParser):
@@ -553,8 +566,14 @@ def assert_page_is_safe(page):
     would block them), only known elements and attributes, and only relative same-site addresses."""
     parser = Tags(); parser.feed(page)
     for tag, attrs in parser.tags:
-        assert tag in ALLOWED_TAGS, tag
-        assert set(attrs) <= ALLOWED_ATTRS, (tag, sorted(attrs))
+        assert tag in ALLOWED_TAGS, tag                      # so: no script, style, form, button, select, textarea, iframe, object
+        assert set(attrs) <= ALLOWED_ATTRS | DATA_ATTRS, (tag, sorted(attrs))
+        assert not any(name.startswith('on') or name == 'style' for name in attrs), (tag, sorted(attrs))
+        if tag == 'input':                                   # a switch for the stylesheet, never a field that is sent
+            assert attrs.get('type') in ('radio', 'checkbox') and not {'value', 'form', 'formaction', 'src'} & set(attrs), attrs
+        if 'itemtype' in attrs:
+            assert re.fullmatch(r'https://schema\.org/[A-Za-z]+', attrs['itemtype']), attrs['itemtype']
+    assert "form-action 'none'" in web.CONTENT_SECURITY_POLICY
     assert parser.urls
     for url in parser.urls:
         assert not re.match(r'[a-z][a-z0-9+.-]*:|//|/', url, re.I), url
@@ -571,10 +590,16 @@ def test_hostile_text_is_escaped_on_both_pages():
         assert [tag for tag, _ in parsed.tags].count('img') == 1 and 'onmouseover="' not in page       # only the mark
         assert HOSTILE in ''.join(parsed.text)                          # the browser shows the text itself, as text
         assert '&lt;script&gt;alert(1)&lt;/script&gt; &quot; onmouseover=&quot;x&quot; &#x27;&gt;&lt;img src=x onerror=y&gt; &amp;amp; &lt;/div&gt;' in page
-    assert question.count('&lt;script&gt;') >= 5          # heading, rationale, prompt, description, answer, model id, reason
+    assert question.count('&lt;script&gt;') >= 5          # heading, rationale, prompt, description, answer, version, reason
+    # The machine-readable attributes carry untrusted text too (the version a service reported): escaped like the rest.
+    assert f'data-version="{archive_pages.esc(HOSTILE)}"' in question and 'data-version="<' not in question
     # Tag balance survives the hostile text: every opened div is closed.
     for page in (index, question):
         assert page.count('<div') == page.count('</div>') and page.count('<span') == page.count('</span>')
+
+
+def html_pages(pages):
+    return {name: page for name, page in pages.items() if name.endswith('.html')}
 
 
 def test_pages_for_the_demo_archive(ready):
@@ -582,42 +607,67 @@ def test_pages_for_the_demo_archive(ready):
     payload = archive.public_payload()
     pages = archive_pages.render_site(payload)
     core_ids, trend_ids = [f'Q{n:02d}' for n in range(1, 21)], ['T001', 'T002', 'T003']
-    chat_cards = {f'card/{q}-{s}.html' for q in ('Q03', 'Q11', 'Q12', 'Q16', 'Q17', 'T003')
-                  for s in ('chatbots', 'chat-app-a', 'chat-app-b', 'chat-app-c', 'chat-app-d')}
-    assert set(pages) == ({'index.html', 'trending.html', 'chatbots.html'} | {f'q/{i}.html' for i in core_ids}
-                          | {f't/{i}.html' for i in trend_ids} | {f'card/{i}.html' for i in core_ids + trend_ids} | chat_cards)
-    index, date = pages['index.html'], pages['q/Q11.html']
-    for page in pages.values():
+    chat_ids = [f'C{n:03d}' for n in range(1, 7)]
+    chat_cards = {f'card/{q}-{s}.html' for q in chat_ids for s in ('chat-app-a', 'chat-app-b', 'chat-app-c', 'human')}
+    every = core_ids + trend_ids + chat_ids
+    assert set(pages) == ({'index.html', 'models.html', 'trending.html', 'chatbots.html'} | {f'q/{i}.html' for i in core_ids}
+                          | {f't/{i}.html' for i in trend_ids} | {f'c/{i}.html' for i in chat_ids}
+                          | {f'card/{i}.html' for i in every} | chat_cards
+                          | {f'data/{i}.json' for i in every} | {'data/answers.jsonl', 'data/README.txt'})
+    index, models, date = pages['index.html'], pages['models.html'], pages['q/Q11.html']
+    for name, page in html_pages(pages).items():
         assert_page_is_safe(page)
-        assert 'Scripted demo answers and dates · no model was called' in page          # page-level tag on every page
-        assert not re.search(r'\bround', page, re.I)                                     # time is told in runs and dates
+        assert 'Sample we wrote, not a real AI answer' in page, name                     # the one sample label, on every page
+        assert page.count('<main') == 1 and page.count('<h1') == 1 and '<script' not in page, name
+        assert '<meta name="color-scheme" content="light" />' in page and '<meta name="aot:content" content="scripted-sample" />' in page
+        assert not re.search(r'\bround', page, re.I)                                     # time is told in checks and dates
         assert not re.search(r'agents?[- ]only|no humans|humans (?:may|can)not|software agents only', page, re.I)
         assert 'no payments' in page.lower()
-    assert 'Simple questions, asked again every month.' in index and 'How the record is kept' in index
-    assert 'One square per run, oldest on the left.' in index and 'It does not say which answer is right.' in index
-    assert index.count('class="strip"') == 60 and index.count('role="img"') == 60
-    assert 'aria-label="model-a: 2 changes across 8 runs"' in index
-    assert 'aria-label="model-c: 1 change across 8 runs, 1 without an answer"' in index
-    assert 'Last change: model-a, Nov 2026' in index and 'No change in any model across 8 runs' in index
-    assert [g for g in ('Everyday facts', 'Health and home', 'Right now', 'About the AI') if f'<h2>{g}</h2>' in index] == \
+        if not name.startswith('card/'):
+            assert f'<a class="skip" href="{name.rsplit("/", 1)[-1]}#main">' in page and '<header class="bar">' in page and '<main id="main"' in page, name
+            assert 'READ-ONLY ARCHIVE' not in page and 'Read-only archive.' in page
+    # The model list: every core question with each model's newest answer inline and a timeline that says WHEN it changed.
+    assert 'The same questions, straight to the models.' in models and 'How the record is kept' in models
+    assert 'It does not say which answer is right.' in models and 'one square per check, oldest first' in models
+    assert models.count('class="timeline"') == 60 and models.count('role="img"') == 60
+    assert models.count('<h3 class="row-q"><a href="q/') == 20 and models.count('class="mini-text"') == 60
+    assert 'aria-label="model-a: changed Aug 2026 and Nov 2026; 8 checks"' in models
+    assert 'aria-label="model-c: changed Jun 2026; no answer Sep 2026; 8 checks"' in models
+    assert 'aria-label="model-a: no change; 8 checks"' in models
+    assert [g for g in ('Everyday facts', 'Health and home', 'Right now', 'About the AI') if f'<h2>{g}</h2>' in models] == \
         ['Everyday facts', 'Health and home', 'Right now', 'About the AI']
-    assert 'href="q/Q11.html"' in index and 'archive-mark.svg?v=' in index and 'rel="icon"' in index
-    assert re.search(r'href="\.\./static/archive\.css\?v=[0-9a-f]{12}"', index)
-    assert 'This list of twenty questions is a draft' in index
-    # The question page: newest first, one column per answerer, every cell labelled as scripted.
-    assert date.index('Nov 2026') < date.index('Oct 2026') < date.index('Apr 2026')
-    models = date.split('<div id="chat-apps"')[0]          # the model grid; the chat-app grid below it has its own tests
-    assert len(models) < len(date)
-    assert models.count('class="cell cell-changed"') == 3 and models.count('>CHANGED<') == 3
-    assert models.count('class="cell cell-same"') == 20 and models.count('class="cell cell-none"') == 1
-    assert models.count('· scripted demo') == 23 and 'server call</span>' not in date
-    assert 'model-a-2 · scripted demo · new model ID' in date and '1 Nov 2026' in date
-    assert '<pre class="prompt mono">Answer in one or two sentences.\n\nWhat is today&#x27;s date?</pre>' in date
-    assert 'This list is generated from the comparison. No model wrote it.' in date
-    assert 'model-a&#x27;s answer changed. Its model ID changed from model-a-1 to model-a-2.' in date
-    assert 'model-b gave the same answer in every run recorded.' in date
-    assert '<strong>self-declared</strong> means an outside client sent the answer' in date and '<strong>scripted demo</strong>' in date
-    assert re.search(r'href="\.\./\.\./static/archive\.css\?v=[0-9a-f]{12}"', date) and 'href="../index.html"' in date
+    assert 'href="q/Q11.html"' in models and 'archive-mark.svg?v=' in models and 'rel="icon"' in models
+    assert re.search(r'href="\.\./static/archive\.css\?v=[0-9a-f]{12}"', models)
+    assert 'This list of twenty questions is a draft' in models
+    # The front page of the scripted demo is the chat-app comparison (tests/test_archive_chatbots.py).
+    assert 'Same question. Three AI apps. One human.' in index and 'href="c/C001.html"' in index and 'href="q/' not in index
+    # The question page: the newest month is the first panel, one card per answerer, older months one radio away.
+    assert '<title>What is today&#x27;s date? · Answers Over Time</title>' in date
+    assert date.index('id="m-run-8"') < date.index('id="m-run-7"') < date.index('id="m-run-1"')
+    assert date.count('<section class="panel"') == 8 and date.count('class="m-radio" type="radio" name="month"') == 8
+    assert date.count(' checked />') == 1 and '<input class="m-radio" type="radio" name="month" id="pick-1" checked />' in date
+    assert '<label for="pick-1">Nov 2026</label><label for="pick-2">Oct 2026</label>' in date
+    assert date.count('<article class="acard') == 24 and date.count('acard is-changed') == 3 and date.count('>Changed<') == 3
+    assert date.count('class="acard acard-none"') == 1 and 'No answer this time' in date
+    cards = date.split('<section class="changes">')[0]
+    # Per-cell and per-row repeats are gone from the cards; the labels live in the closed block and in the attributes.
+    assert 'scripted' not in re.sub(r'<[^>]*>', '', cards).lower() and 'model-a-2' not in re.sub(r'<[^>]*>', '', cards)
+    assert cards.count('data-method="scripted-sample" data-provenance="scripted-sample"') == 23 and 'data-version="model-a-2"' in cards
+    assert '<details><summary>Where each answer came from</summary>' in date
+    assert 'version model-a-2 · new version: version changed from model-a-1 to model-a-2' in date
+    # Changed shown inline: what it was before, with its month.
+    assert ('<span class="before-when mono">Before · <time datetime="2026-10-01">Oct 2026</time></span>'
+            'It is probably some time in 2026.</p>') in date
+    assert '<summary>History · 2 changes</summary>' in date and 'Aug–Oct 2026 · 3 checks' in date
+    # What changed: a real table with headers; an unchanged cell is one short line.
+    assert '<table class="history" role="table">' in date and '<caption>' in date and date.count('<th scope="col" role="columnheader">') == 4
+    assert date.count('<th scope="row" role="rowheader"><time datetime="') == 8 and '>same as before</td>' in date
+    assert date.count('<span class="t-word mono">changed</span>') == 3 and date.count('<span class="t-word mono">first answer</span>') == 3
+    assert '<details><summary>Exactly what we asked</summary><pre class="prompt mono">Answer in one or two sentences.\n\nWhat is today&#x27;s date?</pre>' in date
+    assert '<details><summary>Why we ask this</summary>' in date and ' open' not in date.split('<section class="more-info">')[1]
+    assert re.search(r'href="\.\./\.\./static/archive\.css\?v=[0-9a-f]{12}"', date) and 'href="../models.html"' in date
+    for gone in ('class="side"', 'grid-scroll', 'class="grid n-', 'scripted date', 'class="legend"', 'What moved', 'The exact prompt'):
+        assert all(gone not in page for page in html_pages(pages).values()), gone
     with pytest.raises(KeyError):
         archive_pages.render_question(payload, 'Q99')
     with pytest.raises(ValueError, match='malformed'):
@@ -634,7 +684,20 @@ def test_archive_stylesheet_uses_tokens_local_fonts_and_no_gradient():
     assert not re.findall(r'#[0-9a-fA-F]{3,8}\b', rules) and 'var(--changed)' in rules and 'var(--same)' in rules
     mark = (STATIC / 'archive-mark.svg').read_text(encoding='utf-8')
     assert mark.count('<rect') == 3 and mark.count('#c9cdf0') == 2 and mark.count('#312e81') == 1 and '<script' not in mark
-    assert archive_pages.MAX_COLUMNS == 18 and all(f'.grid.n-{n} ' in css for n in range(1, 19))
+    # The redesign: no sidebar, no sideways-scrolling grid, no min-width ladder; one rule set per month panel instead.
+    for gone in ('.grid-scroll', '.grid.n-', '.side', '.legend', 'min-width: 296px'):
+        assert gone not in css, gone
+    assert all(f'.m-radio:nth-of-type({n}):checked ~ .panel:nth-of-type({n}) ' in css for n in range(1, archive_pages.MAX_PANELS + 1))
+    assert '.month-strip { position: sticky;' in css and '.more-box:checked + .clamp' in css
+    assert 'grid-template-columns: repeat(4, minmax(0, 1fr))' in css and '@media (min-width: 1100px)' in css and '@media (min-width: 700px)' in css
+    # Timeline squares keep an edge, also in forced colours; the fitted card layout exists only at the capture size.
+    assert '.sq { ' in css and 'border: 1px solid var(--muted)' in css and '.sq-none { border-style: dashed; }' in css
+    assert '@media (forced-colors: active)' in css and '@media (min-width: 540px) and (min-height: 960px)' in css
+    # Sizes are in rem with a floor: nothing under 12px (0.75rem) outside the fitted card.
+    flowing = css.split('@media (min-width: 540px) and (min-height: 960px)')[0]
+    assert all(float(size) >= 0.75 for size in re.findall(r'font-size: ([0-9.]+)rem', flowing))
+    assert not re.findall(r'font-size: [0-9.]+px', flowing) and 'text-transform: uppercase' in flowing
+    assert not re.findall(r'[a-z-]+: [0-9.]+cqw', flowing)                     # no cqw size outside the fitted card
 
 
 def test_snapshot_holds_the_archive_pages_and_links_them(ready, tmp_path, monkeypatch):
@@ -689,7 +752,9 @@ def test_both_web_apps_serve_the_same_pages(ready):
             assert index.status_code == 200 and index.text == archive_pages.render_index(payload)
             assert 'text/html' in index.headers['content-type'] and "default-src 'none'" in index.headers['content-security-policy']
             assert client.get('/archive/q/Q11.html').text == archive_pages.render_question(payload, 'Q11')
-            assert client.get('/archive', follow_redirects=False).headers['location'] == '/archive/trending.html'
+            assert client.get('/archive', follow_redirects=False).headers['location'] == '/archive/index.html'
+            assert client.get('/archive/models.html').text == archive_pages.render_models(payload)
+            assert client.get('/archive/c/C001.html').text == archive_pages.render_question(payload, 'C001')
             for missing in ('/archive/q/Q99.html', '/archive/q/Q11', '/archive/q/..%2Fx.html', '/archive/q/Q1.html'):
                 assert client.get(missing).status_code == 404, missing
             assert client.get('/static/archive.css').status_code == 200
@@ -760,8 +825,9 @@ def test_export_round_trip_with_archive_json(ready, tmp_path, monkeypatch):
     for page in ['index.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)]:
         assert (site / 'archive' / page).read_bytes() == (from_db / 'archive' / page).read_bytes(), page
     page = (site / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
-    assert 'Café answers: seven.' in page and 'gpt-test-1 · server call' in page and 'Recorded answers' in page
-    assert 'scripted' not in page.lower() and 'run 1' in page
+    assert 'Café answers: seven.' in page and 'We asked it ourselves · version gpt-test-1' in page
+    assert 'AI-generated · we asked it ourselves · may be wrong' in page and 'data-method="asked-by-server" data-provenance="ai-generated"' in page
+    assert 'scripted' not in page.lower() and 'sample' not in page.lower()
 
 
 def test_published_archive_tamper_guard_and_mock_are_refused(ready, tmp_path, monkeypatch):
@@ -912,8 +978,9 @@ def test_outside_client_answers_are_self_declared_guarded_and_limited(ready, mon
         new = client.post('/api/agent/archive-answer', json={**body, 'run': 2, 'answer': 'Sydney'}, headers=auth)
         assert new.status_code == 200 and new.json()['changed'] is True
     page = archive_pages.render_question(archive.public_payload(), 'Q03')
-    assert 'vendor/outside-model-2 · self-declared' in page and 'gpt-test-1 · server call' in page
-    assert '>ASTRA<' in page and archive.public_payload()['answers_by_source'] == {'engine': 80, 'api': 3, 'demo': 0}
+    assert 'Sent in by someone else, not checked · version vendor/outside-model-2' in page and 'We asked it ourselves · version gpt-test-1' in page
+    assert 'data-method="sent-in-unverified"' in page and 'AI-generated · may be wrong' in page and 'we asked it ourselves · may' not in page
+    assert '>Astra<' in page and archive.public_payload()['answers_by_source'] == {'engine': 80, 'api': 3, 'demo': 0}
 
 
 def test_engine_label_may_not_equal_an_agent_name(ready, monkeypatch):

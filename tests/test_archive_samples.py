@@ -1,6 +1,7 @@
 """Answers Over Time: optional repeat samples per question (LIVE_ARCHIVE_SAMPLES / --samples).
 Offline: every model call is a replaced `engine.infer` or a fake SDK client; nothing here contacts a provider."""
 import json
+import re
 import sqlite3
 
 import pytest
@@ -110,21 +111,22 @@ def test_three_samples_one_model_unanimous_one_two_of_three(ready, monkeypatch):
     # Pages: the third state, the counts, the other answers, the legend row and the method sentence.
     page = archive_pages.render_question(payload, 'Q01')
     assert_page_is_safe(page)
-    assert 'gpt-test-1 · server call · 3 of 3 agree' in page and 'gpt-test-2 · server call · 2 of 3 agree' in page
-    assert page.count('cell-unsettled') == 1 and page.count('UNSETTLED') == 1 and 'CHANGED' not in page
-    assert '<span class="mono">1 of 3</span> Six, I think.</span>' in page and 'role="list"' in page
-    assert 'outlined cells: the samples did not agree' in page and '<strong>unsettled</strong> means' in page
-    assert "model-b&#x27;s 3 samples did not agree: 2 gave the answer shown. Not counted as a change." in page
-    assert 'model-a gave the same answer in every run recorded.' in page and 'model-b gave the same answer' not in page
+    assert 'version gpt-test-1 · same answer 3 times out of 3' in page and 'version gpt-test-2 · same answer 2 times out of 3' in page
+    assert page.count('acard is-mixed') == 1 and page.count('>Mixed answers</span>') == 1 and '>Changed<' not in page
+    assert page.count('data-state="mixed"') == 2                                   # the card and its cell of the table
+    assert '<li><span class="mono">1 of 3</span> Six, I think.</li>' in page and 'aria-label="Other answers from the same check"' in page
+    assert '<strong>Mixed answers</strong>: we asked several times in one check' in page and 'it is not counted as a change' in page
+    assert 'unsettled' not in page.lower()                                         # the internal word stays in the code
     index = archive_pages.render_index(payload)
     assert_page_is_safe(index)
-    assert index.count('sq sq-unsettled') == 21 and 'Unsettled: asked several times' in index      # 20 strips and the legend
-    assert 'model-b: 0 changes across 1 run, 1 unsettled' in index and 'Asked more than once' in index
-    assert 'No change in any model across 1 run' in index                                           # unsettled is not a change
-    assert 'sq sq-unsettled' in archive_pages.render_trending(payload)                              # the legend there too
+    assert index.count('sq sq-mixed') == 21 and '</span>mixed answers</span>' in index      # 20 timelines and the key
+    assert 'model-b: no change; mixed answers 2 Jan 2027; 1 check' in index or 'model-b: no change; mixed answers ' in index
+    assert 'Asked more than once' in index
+    assert 'sq sq-changed' not in index.split('</p>', 3)[3]                                         # mixed is not a change
+    assert 'sq sq-mixed' in archive_pages.render_trending(payload)                                  # the key there too
     card = archive_pages.render_card(payload, 'Q01')
     assert_page_is_safe(card)
-    assert card.count('agree') == 1 and 'server call · 2 of 3 agree' in card and 'Six, I think.' not in card
+    assert card.count('mixed answers') == 1 and ' · mixed answers</span>' in card and 'Six, I think.' not in card
     for text in (page, index, card):
         assert '<script' not in text and 'style=' not in text
 
@@ -144,9 +146,11 @@ def test_single_sample_archive_has_no_new_key_and_no_new_word(ready, monkeypatch
     assert labels == {'steady', 'changed'}                                                            # never unsettled
     pages = archive_pages.render_site(payload)
     for name, page in pages.items():
-        assert 'unsettled' not in page.lower() and ' of 1 agree' not in page and 'Asked more than once' not in page, name
-        assert 'outlined' not in page and 'samples' not in page.lower(), name
-    assert 'CHANGED' in pages['q/Q01.html'] and 'sq sq-changed' in pages['index.html']
+        assert 'unsettled' not in page.lower() and 'times out of' not in page and 'Asked more than once' not in page, name
+        assert 'mixed' not in page.lower() or name == 'data/README.txt', name
+        if name.endswith('.html'):
+            assert 'outlined' not in page and 'samples' not in page.lower() and 'tries' not in page, name
+    assert '>Changed<' in pages['q/Q01.html'] and 'sq sq-changed' in pages['index.html']
     status = archive.status()
     assert [run['samples'] for run in status['runs']] == [1, 1] and status['samples_configured'] is None
 
@@ -174,14 +178,14 @@ def test_stability_across_runs_and_changed_compares_representatives(ready, monke
     view = archive_pages._View(payload)
     assert [view.kind(a) for a in series] == ['same', 'unsettled', 'unsettled', 'same', 'changed', 'unsettled', 'unsettled']
     page = archive_pages.render_question(payload, 'Q01')
-    assert page.count('cell-unsettled') == 4 and page.count('cell-changed') == 1
-    assert '3 of 3 agree · the run before did not agree' in page                                    # run 3: unanimous, but after a split run
-    assert 'differs from the run before, where its samples did not agree. Not counted as a change.' in page
+    assert page.count('acard is-mixed') == 4 and page.count('acard is-changed') == 1
+    assert 'same answer 3 times out of 3 · the check before gave mixed answers' in page            # run 3: unanimous, but after a split run
     index = archive_pages.render_index(payload)
-    assert 'model-b: 1 change across 7 runs, 4 unsettled' in index and 'Last change: model-b' in index
-    # The card's "Before" panel follows the one counted change (run 5), not the unsettled runs after it.
+    assert re.search(r'aria-label="model-b: changed [^;"]+; mixed answers [^;"]+; 7 checks"', index)
+    assert index.count('sq sq-mixed') == 4 * 20 + 1                                                  # four squares per question, and the key
+    # The card shows the latest answer (run 7, mixed), never a "changed" mark for an answer that only wobbled.
     card = archive_pages.render_card(payload, 'Q01')
-    assert 'card-panel-changed' in card and 'X.' in card and '2 of 3 agree' in card
+    assert 'data-state="mixed"' in card and 'card-panel-changed' not in card
 
 
 def test_representative_rule():
@@ -214,8 +218,8 @@ def test_samples_without_an_answer_and_a_cell_with_none(ready, monkeypatch):
     assert (first['state'], first['samples'], first['agree'], first['others'], first['text']) == ('answered', 2, 2, [], 'Seven.')
     assert (second['state'], second['samples'], second['agree'], second['others'], second['text']) == ('no_answer', 0, 0, [], None)
     page = archive_pages.render_question(payload, 'Q01')
-    assert '2 of 2 agree · only 2 of 3 samples answered' in page and 'no sample gave an answer' in page
-    assert 'UNSETTLED' not in page and 'sq-unsettled' not in archive_pages.render_index(payload).split('</header>', 1)[1]
+    assert 'same answer 2 times out of 2 · only 2 of 3 tries answered' in page and 'none of the tries gave an answer' in page
+    assert 'acard is-mixed' not in page and 'sq-mixed' not in archive_pages.render_index(payload).split('</p>', 3)[3]
 
 
 # ---- seeds, and the failure rule per call ---------------------------------------------------------------
@@ -249,8 +253,8 @@ def test_a_failed_sample_skips_a_free_model_and_stops_a_priced_one(three, monkey
     partial = cell(payload, answerer='llama')
     assert (partial['samples'], partial['agree'], partial['others']) == (1, 1, [])
     page = archive_pages.render_question(payload, 'Q01')
-    assert '1 of 1 agree · only 1 of 3 samples answered' in page
-    assert 'this model was skipped after a failed call' in archive_pages.render_question(payload, 'Q02')
+    assert 'same answer 1 times out of 1 · only 1 of 3 tries answered' in page
+    assert 'No answer this time: the ' in archive_pages.render_question(payload, 'Q02')
     # Priced: the hold of the failed sample stays unconfirmed and the run stops, as for a single-sample run.
     monkeypatch.setenv(var('cf', 'FREE_TIER'), 'NO')
     monkeypatch.setenv(var('cf', 'INPUT_USD_PER_M'), '0.50')
@@ -306,7 +310,8 @@ def test_outside_client_keeps_one_answer_per_run_and_question(ready, monkeypatch
     mine = cell(payload, 'Q03', 'Astra')
     assert mine['source'] == 'api' and not any(key in mine for key in archive.SAMPLE_FIELDS)
     page = archive_pages.render_question(payload, 'Q03')
-    assert 'vendor/outside-model-2 · self-declared</span>' in page and 'gpt-test-1 · server call · 3 of 3 agree' in page
+    assert 'Sent in by someone else, not checked · version vendor/outside-model-2</li>' in page
+    assert 'We asked it ourselves · version gpt-test-1 · same answer 3 times out of 3' in page
 
 
 def test_database_rules_for_samples(ready, monkeypatch):
@@ -412,7 +417,7 @@ def test_a_database_from_before_repeat_samples_migrates_in_place(ready, tmp_path
     assert 'samples' not in old and (new['samples'], new['agree'], new['changed']) == (3, 2, False)
     assert archive.stability(new, old) == 'unsettled'
     page = archive_pages.render_question(payload, 'Q01')
-    assert 'gpt-test-1 · server call</span>' in page and 'gpt-test-1 · server call · 2 of 3 agree' in page
+    assert 'We asked it ourselves · version gpt-test-1</li>' in page and 'We asked it ourselves · version gpt-test-1 · same answer 2 times out of 3' in page
 
 
 def test_fresh_and_migrated_databases_have_the_same_archive_columns_with_samples(isolated_db):
@@ -450,7 +455,7 @@ def test_export_check_and_tampering_with_sample_fields(ready, tmp_path, monkeypa
     assert snapshot.check_published(out)['reviewed'] is True
     site = tmp_path / 'site'
     snapshot.build_from_data(site, out)
-    assert '2 of 3 agree' in (site / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
+    assert 'same answer 2 times out of 3' in (site / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
     good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
 
     def refused(edit, match):

@@ -242,14 +242,14 @@ def test_a_run_asks_every_locked_question_of_both_sets_and_set_limits_it(ready, 
         'prompt': 'Answer in one or two sentences.\n\nWhat is the newest iPhone?', 'added': '2026-05-18', 'topic': 'new phones',
         'trend_source': 'Google Trends US, 2026-05-18'}
     listing = archive_pages.render_trending(payload)
-    assert 'aria-label="model-a: 0 changes across 1 run"' in listing              # T003: one square, no "missing" ones before it
-    assert 'aria-label="model-a: 0 changes across 4 runs"' in listing             # T001: runs 2, 3, 5, 6
-    assert listing.count('sq-none') == 1                                          # only the legend's sample square
+    assert 'aria-label="model-a: no change; 1 check"' in listing                  # T003: one square, no "missing" ones before it
+    assert 'aria-label="model-a: no change; 4 checks"' in listing                 # T001: runs 2, 3, 5, 6
+    assert listing.count('sq-none') == 1                                          # only the key's sample square
     page = archive_pages.render_question(payload, 'T003')
-    assert page.count('role="rowheader"') == 1 and 'cell-none' not in page and 'run 6' in page and 'run 5' not in page
+    assert page.count('role="rowheader"') == 1 and 'acard-none' not in page and 'id="m-run-6"' in page and 'm-run-5' not in page
     core_page = archive_pages.render_question(payload, 'Q01')
     assert core_page.count('role="rowheader"') == 5 and 'run 3' not in core_page    # run 3 asked the trending set only
-    assert 'aria-label="model-a: 0 changes across 5 runs"' in archive_pages.render_index(payload)
+    assert 'aria-label="model-a: no change; 5 checks"' in archive_pages.render_index(payload)
 
 
 def test_a_changed_or_missing_trending_file_stops_real_answers(ready, tmp_path, monkeypatch):
@@ -369,7 +369,7 @@ def test_a_database_from_before_the_trending_track_keeps_working(ready, tmp_path
     assert archive.payload_problem(payload) is None
     assert [r['asked'] for r in payload['runs']] == [{'core': 20, 'trending': 0}, {'core': 20, 'trending': 0}, {'core': 20, 'trending': 2}]
     pages = archive_pages.render_site(payload)
-    assert 'Canberra.' in pages['q/Q03.html'] and 'run 1' in pages['q/Q03.html'] and 't/T001.html' in pages
+    assert 'Canberra.' in pages['q/Q03.html'] and 'id="m-run-1"' in pages['q/Q03.html'] and 't/T001.html' in pages
 
 
 # ---- outside clients ------------------------------------------------------------------------------------------
@@ -405,7 +405,7 @@ def test_outside_client_can_answer_a_trending_question_a_run_asked(ready, tmp_pa
     stored = rows("SELECT question_set,question_id,source FROM archive_answers WHERE source='api' ORDER BY id")
     assert stored == [{'question_set': 'basic-1', 'question_id': 'Q03', 'source': 'api'},
                       {'question_set': 'trending', 'question_id': 'T001', 'source': 'api'}]
-    assert 'vendor/outside-model-2 · self-declared' in archive_pages.render_question(archive.public_payload(), 'T001')
+    assert 'Sent in by someone else, not checked · version vendor/outside-model-2' in archive_pages.render_question(archive.public_payload(), 'T001')
 
 
 # ---- reviewed export -----------------------------------------------------------------------------------------------
@@ -434,7 +434,8 @@ def test_export_and_check_understand_both_sets(ready, tmp_path, monkeypatch):
     for name in ('trending.html', 't/T001.html', 't/T002.html', 'card/T001.html', 'card/Q01.html', 'q/Q01.html'):
         assert (site / 'archive' / name).is_file(), name
     page = (site / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8')
-    assert 'Answers are model output and may be wrong' in page and 'scripted' not in page.lower() and 'server call' in page
+    assert 'AI-generated · we asked it ourselves · may be wrong' in page and 'scripted' not in page.lower()
+    assert 'data-method="asked-by-server"' in page and 'data-provenance="recorded"' in page
 
     def refused(edit, match):
         retarget_archive(out, edit)
@@ -520,36 +521,35 @@ def test_demo_adds_scripted_trending_questions_that_start_late(ready, monkeypatc
 def test_trending_pages_for_the_demo(ready):
     archive.demo_archive()
     payload = archive.public_payload()
-    pages = archive_pages.render_site(payload)
-    index, listing, t2 = pages['index.html'], pages['trending.html'], pages['t/T002.html']
+    pages = {name: page for name, page in archive_pages.render_site(payload).items() if name.endswith('.html')}
+    models, listing, t2 = pages['models.html'], pages['trending.html'], pages['t/T002.html']
     for name, page in pages.items():
         assert_page_is_safe(page)
-        assert 'Scripted demo answers and dates · no model was called' in page, name
+        assert 'Sample we wrote, not a real AI answer' in page, name
         assert '<script' not in page and ' style=' not in page and 'onclick' not in page
-    # Navigation and the link section on the index.
-    for page in (index, listing, t2, pages['q/Q01.html']):
+    # Navigation: Trending stays reachable from every page; the model list has its own page.
+    for page in (pages['index.html'], models, listing, t2, pages['q/Q01.html'], pages['c/C001.html']):
         assert re.search(r'<a href="(\.\./)?trending\.html"( aria-current="page")?>Trending</a>', page)
-    assert '<a href="trending.html">Trending</a>' in index and '<a href="trending.html" aria-current="page">Trending</a>' in listing
-    assert '<a href="index.html" aria-current="page">Questions</a>' in index and 'aria-current' not in t2
-    assert '<h2>Trending</h2>' in index and '<a href="trending.html">See the three trending questions</a>' in index
-    assert 'Newest, added Sep 2026: Which company is the most valuable in the world right now?' in index
-    assert index.count('class="strip"') == 60                                    # the index keeps to the fixed list
-    # The list: newest first, topic pill, month added, strips that start late.
+        assert re.search(r'<a href="(\.\./)?models\.html"( aria-current="page")?>Models</a>', page)
+    assert '<a href="trending.html" aria-current="page">Trending</a>' in listing and '<a href="models.html" aria-current="page">Models</a>' in models
+    assert '<a href="../trending.html" aria-current="page">Trending</a>' in t2
+    assert models.count('class="timeline"') == 60 and 't/T00' not in models       # the model list keeps to the fixed list
+    # The list: newest first, each model's newest answer inline, timelines that start late.
     assert listing.index('t/T003.html') < listing.index('t/T002.html') < listing.index('t/T001.html')
-    assert '<span class="chip chip-topic">chip stocks</span><span class="muted small">added Jul 2026</span>' in listing
-    assert listing.count('class="strip"') == 9
-    for runs, changes in ((6, 1), (4, 0), (2, 0)):
-        assert f'aria-label="model-a: {changes} change{"" if changes == 1 else "s"} across {runs} runs"' in listing
-    assert listing.count('<span class="sq sq-none"></span>') == 1                # the legend only: no dashed squares before a question existed
+    assert listing.count('class="timeline"') == 9 and listing.count('class="mini-text"') == 9
+    assert '<h3 class="row-q"><a href="t/T002.html">What is Nvidia&#x27;s share price today?</a></h3>' in listing
+    assert 'aria-label="model-a: no change; 4 checks"' in listing and 'aria-label="model-a: no change; 2 checks"' in listing
+    assert re.search(r'aria-label="model-b: changed Oct 2026; 4 checks"', listing)
+    assert listing.count('<span class="sq sq-none"></span>') == 1                # the key only: no dashed squares before a question existed
     assert listing.count('<span class="sq ') == 3 + 3 * (6 + 4 + 2)
-    assert 'Last change: model-b, Oct 2026' in listing and 'written by hand for the demo' in listing
-    assert 'A strip starts at the first run after the question was added.' in listing
-    # One trending question: the core layout plus topic and source.
-    assert '<span class="q-id mono">T002</span><span class="chip chip-topic">chip stocks</span><span class="muted small">added Jul 2026</span>' in t2
+    assert 'written by hand' in listing and 'one square per check, oldest first' in listing
+    assert listing.count('<main') == 1 and listing.count('<h1') == 1
+    # One trending question: the same layout plus topic and source.
+    assert '<span class="q-id mono">T002</span><span class="chip chip-topic">chip stocks</span><span class="chip-note">added Jul 2026</span>' in t2
     assert 'Topic taken from: Scripted sample, not a real trend. Added 20 Jul 2026;' in t2
-    assert t2.count('role="rowheader"') == 4 and 'Aug 2026' in t2 and 'Jul 2026</span><span class="when-day' not in t2
-    assert t2.index('Nov 2026</span>') < t2.index('Aug 2026</span>') and 'cell-none' not in t2
-    assert t2.count('class="cell cell-changed"') == 1 and "model-b&#x27;s answer changed." in t2
+    assert t2.count('role="rowheader"') == 4 and 'Aug 2026' in t2 and '<label for="pick-4">Aug 2026</label>' in t2 and 'pick-5' not in t2
+    assert t2.index('id="m-run-8"') < t2.index('id="m-run-5"') and 'acard-none' not in t2
+    assert t2.count('<span class="tag-changed mono">Changed</span>') == 1 and '<span class="t-word mono">changed</span>' in t2
     assert '<pre class="prompt mono">Answer in one or two sentences.\n\nWhat is Nvidia&#x27;s share price today?</pre>' in t2
     assert '<a class="back" href="../trending.html">All trending questions</a>' in t2
     assert '<a class="share" href="../card/T002.html">Share card</a>' in t2
@@ -568,42 +568,45 @@ def test_share_card_shows_the_latest_answers_and_one_change(ready):
     payload = archive.public_payload()
     card = archive_pages.render_card(payload, 'Q11')
     parsed = assert_page_is_safe(card)
-    assert '<body class="card-page">' in card and '<main class="card"><div class="card-in">' in card
+    # Model cards sit in the same safe box as the chat-app cards now.
+    assert '<body class="card-page">' in card and '<main id="main" class="card card-safe" data-question-id="Q11" data-provenance="scripted-sample">' in card
     assert [attrs['src'].split('?')[0] for tag, attrs in parsed.tags if tag == 'img'] == ['../../static/archive-mark.svg']
     assert 'Answers Over Time</a>' in card and '<a class="card-brand" href="../q/Q11.html">' in card
-    assert '<h1 class="card-q card-q-xl">What is today&#x27;s date?</h1>' in card
+    assert '<h1 class="card-q card-q-xl card-q-f1">What is today&#x27;s date?</h1>' in card
     assert card.count('<section class="card-panel') == 3 and '<div class="card-panels n-3">' in card
-    # model-a changed last (Nov 2026): its panel carries the answer before, dated at the run that gave it.
-    assert card.count('card-panel-changed') == 1 and card.count('class="card-before"') == 1
-    assert ('<section class="card-panel card-panel-changed"><div class="card-meta mono"><span class="card-label">model-a</span>'
-            '<span class="card-when">Nov 2026 · scripted demo</span></div>'
-            '<p class="card-answer">I have no clock, so I cannot know. My training suggests 2026 or later.</p>'
-            '<p class="card-before"><span class="mono">Before (Oct 2026)</span> It is probably some time in 2026.</p></section>') in card
-    assert '<span class="card-label">model-c</span><span class="card-when">Nov 2026 · scripted demo</span>' in card
+    # model-a changed last (Nov 2026): its panel is marked. A card of several panels has no room for the answer before;
+    # the question page shows it.
+    assert card.count('card-panel-changed') == 1 and 'card-before' not in card
+    assert '<span class="card-label">model-a</span><span class="card-when">Nov 2026 · changed</span></div>' in card
+    assert '<p class="card-answer">I have no clock, so I cannot know. My training suggests 2026 or later.</p>' in card
+    assert '<span class="card-label">model-c</span><span class="card-when">Nov 2026</span>' in card
     assert "I don&#x27;t have access to the current date." in card                     # model-c's latest, not its first
-    assert '<span>Scripted demo answers and dates · no model was called</span>' in card and 'no payments' in card
-    assert 'Answers are model output' not in card
-    # A question nobody changed has no "before" line; a trending card names its topic and links to its page.
+    assert '<p class="card-honest mono">Sample we wrote, not a real AI answer</p>' in card and 'no payments' in card
+    assert 'AI-generated' not in card
+    assert card.index('class="card-honest') < card.index('</div>\n  <footer class="card-foot')   # the honesty line is inside the safe box
     plain = archive_pages.render_card(payload, 'Q02')
-    assert 'card-before' not in plain and 'card-panel-changed' not in plain and plain.count('<section class="card-panel">') == 3
+    assert 'card-panel-changed' not in plain and plain.count('<section class="card-panel"') == 3
     trend = archive_pages.render_card(payload, 'T002')
     assert '<span class="card-kicker">chip stocks</span>' in trend and 'href="../t/T002.html"' in trend
-    assert 'Before (Sep 2026)</span> About 140 dollars.' in trend
     assert '<span class="card-kicker">Right now</span>' in card
     # The size class follows the length of the question, so a long one cannot push the panels out.
     sizes = {len(q['text']): re.search(r'card-q card-q-(\w+)', archive_pages.render_card(payload, q['id'])).group(1)
              for q in payload['questions'] + payload['trending']['questions']}
     assert all(size == ('xl' if n <= 26 else 'l' if n <= 48 else 'm' if n <= 90 else 's') for n, size in sizes.items())
-    # No script, no style attribute, no animation, nothing to scroll: the stylesheet does the clamping.
+    # No script, no style attribute, no animation. The fitted 9:16 picture exists only at the capture size; outside it the
+    # card is an ordinary page in rem sizes with nothing clamped, so it can be read and zoomed on a phone.
     css = (STATIC / 'archive.css').read_text(encoding='utf-8')
-    card_css = css.split('/* ---- share card', 1)[1].split('@media', 1)[0]
-    assert 'container-type: size' in card_css and 'min(100vw, 56.25vh)' in card_css and 'min(100vh, 177.7778vw)' in card_css
-    assert card_css.count('line-clamp') >= 14 and 'overflow: hidden' in card_css
+    flowing, fitted = css.split('/* ---- share card', 1)[1].split('@media (min-width: 540px) and (min-height: 960px) {', 1)
+    assert 'line-clamp' not in flowing and 'cqw;' not in flowing and '.card-answer { font-size: 1rem;' in flowing
+    assert 'container-type: size' in fitted and 'min(100vw, 56.25vh)' in fitted and 'min(100vh, 177.7778vw)' in fitted
+    assert fitted.count('line-clamp') >= 14 and 'overflow: hidden' in fitted
+    assert '.card-top { flex: none; flex-wrap: nowrap; height: 25cqw; padding: 0 13cqw 0 6.1cqw;' in fitted      # y 270, x 65-940
+    assert '.card-body { flex: none; height: 108.33cqw; padding: 0 13cqw 0 6.1cqw;' in fitted                    # y 270-1440
     for banned in ('animation', 'transition', '@keyframes', 'px;', ' transform'):
-        assert banned not in card_css, banned
-    assert re.findall(r'\d(?:px|rem|em)\b', card_css.replace('0.08em', '').replace('0.035em', '').replace('0.02em', '')) == []
-    for name in ('.card-q-xl', '.card-q-l', '.card-q-m', '.card-q-s', '.n-1 .card-answer', '.n-2 .card-answer', '.card-before'):
-        assert name in card_css, name
+        assert banned not in fitted, banned
+    assert re.findall(r'\d(?:px|rem|em)\b', fitted.replace('0.08em', '').replace('0.035em', '')) == []
+    for name in ('.card-q-xl', '.card-q-l', '.card-q-m', '.card-q-s', '.one .card-answer', '.n-2 .card-answer', '.card-before', '.card-four'):
+        assert name in fitted, name
 
 
 def card_payload(labels, answers):
@@ -630,16 +633,18 @@ def test_share_card_picks_three_models_and_labels_recorded_answers():
     assert_page_is_safe(card)
     shown = re.findall(r'<span class="card-label">(\w+)</span>', card)
     assert shown == ['m1', 'm4', 'm5']                # the two that changed, then the first other; in their usual order
-    assert card.count('card-panel-changed') == 1      # one "before" only: the most recent change
-    assert '<p class="card-answer">five newest</p><p class="card-before"><span class="mono">Before (Oct 2026)</span> five new</p>' in card
-    assert '<span class="card-when">Oct 2026 · self-declared</span></div><p class="card-answer">four new</p>' in card     # its latest ANSWER, with its month
-    assert 'Sep 2026 · server call' in card
-    assert '<span>Answers are model output and may be wrong</span>' in card and 'scripted' not in card.lower()
+    assert card.count('card-panel-changed') == 2      # both whose latest answer differs from the one before
+    assert '<span class="card-when">Nov 2026 · changed</span></div><p class="card-answer">five newest</p>' in card
+    assert '<span class="card-when">Oct 2026 · changed</span></div><p class="card-answer">four new</p>' in card     # its latest ANSWER, with its month
+    assert '<span class="card-when">Sep 2026</span>' in card
+    # One answer was sent in by an outside program, so the card does not claim that we asked them all ourselves.
+    assert '<p class="card-honest mono">AI-generated · may be wrong</p>' in card and 'scripted' not in card.lower() and 'sample' not in card.lower()
+    assert 'data-method="sent-in-unverified"' in card and 'data-method="asked-by-server"' in card
     # One or two models get larger text; none at all is said plainly.
     assert '<div class="card-panels n-2">' in archive_pages.render_card(card_payload(['a', 'b'], [
         (1, 'a', 'engine', 'answered', 'x', None), (1, 'b', 'engine', 'answered', 'y', None)]), 'Q01')
     empty = archive_pages.render_card(archive.empty_payload(), 'Q01')
-    assert '<div class="card-panels n-1">' in empty and 'No answers recorded yet.' in empty and '<span>No answers recorded yet</span>' in empty
+    assert '<div class="card-panels n-1">' in empty and 'No answers recorded yet.' in empty and '<p class="card-honest mono">No answers recorded yet</p>' in empty
     assert archive_pages.render_card(payload, 'Q02').count('No answers recorded yet.') == 1
 
 
@@ -665,7 +670,7 @@ def test_hostile_text_is_escaped_on_trending_pages_and_cards():
         assert escaped in page and HOSTILE in ''.join(parsed.text), name
         for tag in ('div', 'span', 'section', 'main', 'header', 'footer', 'article'):
             assert page.count(f'<{tag}') == page.count(f'</{tag}>'), (name, tag)
-    assert pages['card-t'].count('&lt;script&gt;') >= 5              # description, topic, question, answer, the answer before
+    assert pages['card-t'].count('&lt;script&gt;') >= 5              # title, description, the prompt in the head, topic, question, answer
     assert pages['t'].count('&lt;script&gt;') >= 7                   # also rationale, prompt, trend source
 
 
@@ -705,13 +710,15 @@ def test_snapshot_holds_trending_pages_and_cards_at_the_same_addresses(ready, tm
     out = tmp_path / 'site'
     snapshot.build(out)
     names = sorted(str(p.relative_to(out / 'archive')) for p in (out / 'archive').rglob('*.html'))
-    assert names == sorted(['index.html', 'trending.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)] + [f't/T00{n}.html' for n in (1, 2, 3)]
+    chat = [f'C00{n}' for n in range(1, 7)]
+    assert names == sorted(['index.html', 'models.html', 'trending.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)]
+                           + [f't/T00{n}.html' for n in (1, 2, 3)] + [f'c/{q}.html' for q in chat]
                            + [f'card/Q{n:02d}.html' for n in range(1, 21)] + [f'card/T00{n}.html' for n in (1, 2, 3)]
-                           + ['chatbots.html'] + [f'card/{q}-{s}.html' for q in ('Q03', 'Q11', 'Q12', 'Q16', 'Q17', 'T003')
-                                                  for s in ('chatbots', 'chat-app-a', 'chat-app-b', 'chat-app-c', 'chat-app-d')])
+                           + ['chatbots.html'] + [f'card/{q}{s}.html' for q in chat
+                                                  for s in ('', '-chat-app-a', '-chat-app-b', '-chat-app-c', '-human')])
     payload = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
-    # /4: the scripted archive also holds the scripted chat-app track
-    assert payload['schema'] == 'live-genesis-archive/4' and len(payload['trending']['questions']) == 3
+    # /5: the scripted archive also holds the scripted chat-app track
+    assert payload['schema'] == 'live-genesis-archive/5' and len(payload['trending']['questions']) == 3
     assert (out / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8') == archive_pages.render_card(payload, 'T001')
     assert (out / 'archive' / 'trending.html').read_text(encoding='utf-8') == archive_pages.render_trending(payload)
     for html in (out / 'archive').rglob('*.html'):                               # every relative address resolves inside the snapshot
@@ -770,9 +777,10 @@ def test_a_hidden_question_has_no_page_no_card_and_is_in_no_list(ready, monkeypa
     assert 't/T001.html' in shown and hidden_text in shown['trending.html']
     monkeypatch.setattr(archive_pages, 'HIDDEN', {'T001': 'test', 'Q05': 'test'})
     pages = archive_pages.render_site(payload)
-    assert set(shown) - set(pages) == {'t/T001.html', 'card/T001.html', 'q/Q05.html', 'card/Q05.html'}
+    assert set(shown) - set(pages) == {'t/T001.html', 'card/T001.html', 'q/Q05.html', 'card/Q05.html', 'data/T001.json', 'data/Q05.json'}
     for name, page in pages.items():
-        assert_page_is_safe(page)
+        if name.endswith('.html'):
+            assert_page_is_safe(page)
         assert 'T001' not in page and 'Q05.html' not in page and hidden_text not in page, name
     # The later questions keep their pages and their answers: a run's "first N" still counts the hidden one.
     assert 't/T002.html' in pages and 't/T003.html' in pages and 'q/Q06.html' in pages

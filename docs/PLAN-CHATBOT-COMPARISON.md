@@ -15,6 +15,12 @@ These override anything below that disagrees. Written down by the PC session fro
 7. **Tone: short, punchy, made for people who scroll fast.** Headlines may be cheeky.
 8. **Ask logged in.**
 
+### Built state (14 November 2026, after the redesign merge)
+
+The decisions above are built and merged: three apps (ChatGPT, Gemini, Grok) and a Human column; a chat-app question list of its own (ten draft questions `C001` to `C010` in `live_genesis/archive_chatbots.json`, editable until the first import, fixed after it); refusals and non-answers stored and left off the pages; the chat-app comparison as the front page; the redesigned reading pages; share cards inside the safe area; machine-readable labels and data files. The political trending question was removed and the published local-model answers were withdrawn by the owner, so the public site shows scripted samples only, under made-up app names. Where the older sections below say four apps, Copilot, or "being built", this section is the current state.
+
+Still the owner's to decide: the Reddit quoting rule (before the first human answer is imported); whether a refused reply's words may stay in the published data files (they are on no page); the wording and place of the Copilot joke (one line on the "How it works" page, marked as a joke); whether hooks stay frozen with their question; the name.
+
 ### State when these decisions were made
 
 The table under "What we have" was written before the PC session's work of 13 to 14 November. Since then: both question lists are locked in the real database; two real runs of four local models are recorded (run 1: phi4-mini only; run 2: all four, 384 answers, $0); the reviewed archive-only export was used and approved by the owner; and the public site shows those recorded answers, opening on the trending page, with the scripted demo under `demo/`. The line "No real answer of any kind has been recorded or published" is no longer true.
@@ -102,7 +108,7 @@ Nothing here calls a model or costs money. The exact command names are confirmed
 | ~~Keep Copilot~~ | Decided: dropped | 14 Nov |
 | ~~Logged in or out~~ | Decided: logged in | 14 Nov |
 | How Reddit answers are collected and quoted | Owner | Before the first human answer is imported |
-| What to do with the locked question T004 | Owner | Before the redesign ships |
+| ~~What to do with the question T004~~ | Decided: removed | 14 Nov |
 | Whether to build an on-site vote | Owner | After there are visitors |
 
 ## Risks

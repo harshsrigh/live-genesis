@@ -111,8 +111,8 @@ def test_archive_only_round_trip_renders_the_archive_and_nothing_else(ready, tmp
     assert not any(name in written for name in ('overview.json', 'stats.html', 'MANIFEST.json'))
     assert not any(name.startswith(('post/', 'profile/')) or name.endswith('.js') for name in written)
     page = (site / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
-    assert 'Seven.' in page and 'server call' in page and 'Recorded answers' in page and 'not model output' not in page
-    assert len(re.findall(r'(?i)scripted', page)) == len(re.findall(r'(?i)>scripted demo</a>', page)) == 1   # only the link to the sibling
+    assert 'Seven.' in page and 'We asked it ourselves · version' in page and 'AI-generated · we asked it ourselves · may be wrong' in page
+    assert 'scripted' not in page.lower() and len(re.findall(r'(?i)sample', page)) == len(re.findall(r'>Sample site</a>', page)) == 1   # only the link to the sibling
     for name in written:
         if name.endswith(('.html', '.json')):
             assert SOCIETY_TEXT not in (site / name).read_text(encoding='utf-8'), name
