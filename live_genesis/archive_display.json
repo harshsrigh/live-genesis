@@ -1,6 +1,0 @@
-{
- "format": "live-genesis-archive-display/1",
- "note": "Display switches for the Answers Over Time pages (archive_pages.py). They change what the PAGES show, never what is recorded: archive.json keeps every question and answer. `hidden`: ids of recorded questions (Q01, T004, C003 ...) to leave off the public pages, their share cards and the data files; when any is listed, every page's footer says \"Some recorded questions are not shown.\" Empty by default: everything is shown. `political`: ids of questions flagged as political; a page that shows one carries the footer line \"This site does not promote hate.\" Only the owner edits this file.",
- "hidden": [],
- "political": ["T004"]
-}

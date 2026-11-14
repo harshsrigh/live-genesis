@@ -30,9 +30,8 @@ schema.org microdata on the answer's element, in the `<meta name="aot:...">` tag
 in the data files, and for people inside the closed "Where each answer came from" block. A visible
 honesty label is never moved into metadata only.
 
-Display switches (`archive_display.json`): question ids the owner leaves off the pages (`hidden`;
-the footer then says so) and ids flagged as political (`political`; a page that shows one carries
-"This site does not promote hate."). They never change what is recorded.
+Hidden questions (`HIDDEN`, owner's decision): a question listed there has no page, no card and no data
+file and is in no list; the record keeps it. Nothing is hidden now.
 
 Chat apps and Human (the optional `chatbots` block; archive_chatbots.py): replies a person collected
 by hand. Never mixed into a model's grid or timeline. A refusal, a non-answer or a reply the content
@@ -55,8 +54,6 @@ from . import archive
 from . import web  # CONTENT_SECURITY_POLICY is read at call time (web imports this module for its routes)
 
 STATIC = Path(__file__).resolve().parent / "static"
-DISPLAY_FILE = Path(__file__).resolve().parent / "archive_display.json"
-DISPLAY_FORMAT = "live-genesis-archive-display/1"
 ASSETS = ("archive.css", "archive-mark.svg", "archive-icon.svg")
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine",
@@ -73,8 +70,6 @@ SAMPLE = "scripted-sample"
 SAMPLE_LABEL = SOURCE_LABELS["demo"]
 HIDDEN_WORDS = "Hidden: broke our content rules"
 LEFT_OUT = "Refusals and non-answers are left out."
-NOT_SHOWN = "Some recorded questions are not shown."
-NO_HATE = "This site does not promote hate."
 DATA_SCHEMA = "answers-over-time-data/1"
 DATA_NOTICE = ("Answers Over Time. AI answers are recorded verbatim and may be wrong; they are not advice. Text marked "
                "human-written was written by people and collected by hand. Records marked scripted-sample were written "
@@ -116,24 +111,11 @@ def asset_versions() -> dict[str, str]:
     return {name: hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12] for name in ASSETS}
 
 
-def display_config(path: str | Path | None = None) -> dict:
-    """`archive_display.json`: {"hidden": ids left off the pages, "political": ids flagged as political}.
-    Strict: a malformed file raises ValueError (a page is never built from a switch that was not read)."""
-    source = Path(path) if path is not None else DISPLAY_FILE
-    try:
-        raw = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as err:
-        raise ValueError(f"{source.name} is missing or not valid JSON ({type(err).__name__})") from None
-    if not isinstance(raw, dict) or raw.get("format") != DISPLAY_FORMAT or set(raw) - {"format", "note", "hidden", "political"}:
-        raise ValueError(f'{source.name} must hold format "{DISPLAY_FORMAT}", note, hidden and political only')
-    out = {}
-    for key in ("hidden", "political"):
-        ids = raw.get(key, [])
-        if not isinstance(ids, list) or not all(isinstance(i, str) and (archive.ANY_QUESTION_ID.fullmatch(i) or CHAT_ID.fullmatch(i))
-                                                for i in ids):
-            raise ValueError(f"{source.name}: {key} must list question ids such as Q01, T004 or C003")
-        out[key] = frozenset(ids)
-    return out
+# Questions no page shows (owner's decision; the reason is for maintainers and is never rendered). A locked
+# question can never leave its list or the data file, so hiding is all the pages can do: a hidden question has
+# no page, no card and no data file, is in no list and no count, and its answers are not rendered. `archive.json`
+# still holds it, and so does the repository's history.
+HIDDEN: dict[str, str] = {}   # id -> reason. Empty: the one question hidden so far was removed outright on 14 November 2026.
 
 
 def count_word(n: int) -> str:
@@ -270,24 +252,23 @@ def conditions_line(conditions: dict) -> str:
 class _View:
     """Lookups over one payload, shared by every page kind."""
 
-    def __init__(self, payload: dict, display: dict | None = None):
+    def __init__(self, payload: dict):
         problem = archive.payload_problem(payload)
         if problem:
             raise ValueError(f"archive payload is malformed: {problem}")
-        display = display if display is not None else display_config()
-        self.hidden, self.political = display["hidden"], display["political"]
+        self.hidden = frozenset(HIDDEN)
         self.payload = payload
         self.questions = [q for q in payload["questions"] if q["id"] not in self.hidden]
         self.trend = payload["trending"]
         self.trending = [q for q in self.trend["questions"] if q["id"] not in self.hidden]
-        everything = payload["questions"] + self.trend["questions"]
-        self.by_id = {q["id"]: q for q in everything}
+        self.by_id = {q["id"]: q for q in self.questions + self.trending}
+        # A question's place counts hidden ones too: a run asked "the first N", and N includes them.
         self.place = ({q["id"]: ("core", n) for n, q in enumerate(payload["questions"], 1)}
                       | {q["id"]: ("trending", n) for n, q in enumerate(self.trend["questions"], 1)})
         self.runs = sorted(payload["runs"], key=lambda r: r["number"])
         self.labels = list(payload["answerers"])
-        # Mock rows are never rendered, whatever the caller passed in.
-        self.answers = [a for a in payload["answers"] if a["source"] in archive.PUBLIC_SOURCES]
+        # Mock rows are never rendered, whatever the caller passed in; nor is an answer to a hidden question.
+        self.answers = [a for a in payload["answers"] if a["source"] in archive.PUBLIC_SOURCES and a["question"] not in self.hidden]
         self.cell = {(a["question"], a["answerer"], a["run"]): a for a in self.answers}
         self.by_series: dict[tuple[str, str], list[dict]] = {}
         for answer in sorted(self.answers, key=lambda a: a["run"]):
@@ -298,7 +279,6 @@ class _View:
         self.models_demo = any(a["source"] == "demo" for a in self.answers) or any(r["demo"] for r in self.runs)
         self.demo = self.models_demo or self.chat.demo
         self.empty = not self.answers and not self.chat.cell
-        self.any_hidden = bool(self.hidden & (set(self.by_id) | set(self.chat.by_id)))
         # Repeat samples: how many each run asked, whether any run asked several, and per answered cell its
         # derived label (archive.stability) against that answerer's previous answered cell.
         self.run_samples = {r["number"]: r.get("samples", 1) for r in self.runs}
@@ -700,8 +680,8 @@ def chat_disclaimer(makers: list[str]) -> str:
 
 
 def _foot(view: _View, track: str, shown_ids: list[str], back: str = "") -> str:
-    """The honesty footer, once per page: read-only, what the answers are, and the lines that depend on
-    what the page shows (questions left off, a question flagged as political, replies left out)."""
+    """The honesty footer, once per page: read-only, what the answers are, and, on a chat-app page, that
+    refusals and non-answers are left out."""
     sample = view.chat.demo if track == "chat" else view.models_demo
     if sample:
         honesty = "Everything here is a sample we wrote. No AI and no person was asked."
@@ -711,10 +691,6 @@ def _foot(view: _View, track: str, shown_ids: list[str], back: str = "") -> str:
     else:
         honesty = "Answers are AI output and may be wrong."
     lines = [LEFT_OUT] if track == "chat" else []
-    if view.any_hidden:
-        lines.append(NOT_SHOWN)
-    if view.political & set(shown_ids):
-        lines.append(NO_HATE)
     return ('<footer class="foot">' + back + f'<span>Read-only archive. Part of LIVE Genesis. {esc(honesty)}</span>'
             + "".join(f'<span>{esc(line)}</span>' for line in lines)
             + '<span class="mono small">No payments · nothing can be changed from this page</span></footer>\n')
@@ -1511,8 +1487,8 @@ def static_files() -> list[str]:
 
 
 def render_site(payload: dict, *, standalone: bool = False, sibling: str | None = None) -> dict[str, str]:
-    """Every archive page and data file, keyed by its path under `archive/`. A question the owner left
-    off the pages (`archive_display.json`) has no page, no card and no data file."""
+    """Every archive page and data file, keyed by its path under `archive/`. A hidden question (`HIDDEN`)
+    has no page, no card and no data file."""
     versions = asset_versions()
     view = _View(payload)
     options = {"standalone": standalone, "sibling": sibling if standalone else None}
