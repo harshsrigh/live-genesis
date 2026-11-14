@@ -279,8 +279,8 @@ def assert_no_model_track(root):
             assert not re.search(r'(?i)\bmodels?\b', visible_text(text) if name.endswith('.html') else text), name
             assert not re.search(r'(?i)trending', text), name
     data = json.loads((root / 'archive.json').read_text(encoding='utf-8'))
-    assert list(data) == ['schema', 'chatbots'] and data['schema'] == 'live-genesis-chat-archive/1' and not set(data) & set(MODEL_KEYS)
-    assert list(data['chatbots']) == ['apps', 'human', 'questions', 'runs', 'answers', 'human_answers']
+    assert list(data) == ['schema', 'chatbots'] and data['schema'] == 'live-genesis-chat-archive/2' and not set(data) & set(MODEL_KEYS)
+    assert list(data['chatbots']) == ['groups', 'apps', 'human', 'questions', 'runs', 'answers', 'human_answers']
     return data
 
 
@@ -452,7 +452,7 @@ def test_archive_only_with_no_chat_app_run_says_so_and_never_lists_the_models(is
     assert files_of(out) == ARCHIVE_STATIC | {'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/chatbots.html',
                                               'archive/data/answers.jsonl', 'archive/data/README.txt'}
     data = assert_no_model_track(out)
-    assert data['chatbots'] == {'apps': [], 'human': None, 'questions': [], 'runs': [], 'answers': [], 'human_answers': []}
+    assert data['chatbots'] == {'groups': [], 'apps': [], 'human': None, 'questions': [], 'runs': [], 'answers': [], 'human_answers': []}
     assert_every_address_resolves(out)
     front = (out / 'archive' / 'index.html').read_text(encoding='utf-8')
     assert 'No answers recorded yet' in front and 'No chat app has been asked yet.' in front and '<a href="chatbots.html">Here is how we ask</a>' in front

@@ -93,9 +93,12 @@ def visible(page):
 def test_checked_in_configuration_three_apps_human_and_ten_draft_questions_of_its_own():
     config = chatbots.load_config()
     raw = json.loads(CONFIG.read_text(encoding='utf-8'))
-    assert raw['status'] == 'draft' and config['status'] == 'draft' and raw['format'] == 'live-genesis-chatbots/2'
+    assert raw['status'] == 'draft' and config['status'] == 'draft' and raw['format'] == 'live-genesis-chatbots/3'
     assert [(c['label'], c['name'], c['maker']) for c in config['chatbots']] == [
         ('chatgpt', 'ChatGPT', 'OpenAI'), ('gemini', 'Gemini', 'Google'), ('grok', 'Grok', 'xAI')]
+    # One answerer group today; every app belongs to it (tests/test_archive_groups.py covers several).
+    assert raw['groups'] == config['groups'] == [{'id': 'ai-apps', 'name': 'AI chat apps'}] == [chatbots.DEFAULT_GROUP]
+    assert {c['group'] for c in config['chatbots']} == {'ai-apps'} and all('group' not in c for c in raw['chatbots'])
     assert 'opilot' not in json.dumps(raw['chatbots']) and 'Microsoft' not in json.dumps(raw)      # dropped (owner, 14 Nov 2026)
     # A maker's attribution line is configuration, not a special case in the code: only one app has one.
     assert {c['label']: c['attribution'] for c in config['chatbots']} == {'chatgpt': '', 'gemini': '', 'grok': 'Written with Grok'}
@@ -149,7 +152,7 @@ def test_checked_in_configuration_three_apps_human_and_ten_draft_questions_of_it
     (lambda d: d.update(aside='line one\nline two'), 'aside must be one plain line'),
     (lambda d: d.update(status='final'), 'status must be'),
     (lambda d: d.update(extra=1), 'top level'),
-    (lambda d: d.update(format='live-genesis-chatbots/1'), 'format must be'),
+    (lambda d: d.update(format='live-genesis-chatbots/2'), 'format must be'),
 ])
 def test_malformed_configuration_is_refused(tmp_path, monkeypatch, edit, why):
     config_file(tmp_path, monkeypatch, edit=edit)
@@ -387,7 +390,7 @@ def test_model_answers_and_hand_entered_answers_never_touch_each_other(chat, tmp
     chatbots.import_collection(filled(tmp_path, reply=lambda app, q: 'Eight.'))
     archive.run_archive(max_usd=1)
     payload = archive.public_payload()
-    assert payload['schema'] == 'live-genesis-archive/5' and archive.payload_problem(payload) is None
+    assert payload['schema'] == 'live-genesis-archive/6' and archive.payload_problem(payload) is None
     assert payload['answerers'] == ['model-a', 'model-b'] and {a['source'] for a in payload['answers']} == {'engine'}
     assert {a['changed'] for a in payload['answers'] if a['run'] == 2} == {False}            # a hand-entered "Eight." changed no model
     assert payload['answers_by_source'] == {'engine': 80, 'api': 0, 'demo': 0} and len(payload['runs']) == 2
@@ -635,7 +638,9 @@ def test_a_database_with_the_tracks_first_shape_migrates_in_place(chat, tmp_path
         assert 'archive_chatbot_answers_locked_question' not in triggers and 'archive_chatbot_answers_own_question' in triggers
         assert 'refused' in {r[1] for r in cx.execute('PRAGMA table_info(archive_chatbot_answers)')}
         assert [tuple(r) for r in cx.execute('SELECT * FROM archive_chatbot_runs ORDER BY rowid')] == before['archive_chatbot_runs']
-        assert [tuple(r) for r in cx.execute('SELECT * FROM archive_chatbot_conditions ORDER BY rowid')] == before['archive_chatbot_conditions']
+        # The conditions keep every value and gain the two group columns, empty (read as the default group).
+        assert [tuple(r) for r in cx.execute('SELECT * FROM archive_chatbot_conditions ORDER BY rowid')] == \
+            [row + ('', '') for row in before['archive_chatbot_conditions']]
         kept = [tuple(r) for r in cx.execute('SELECT * FROM archive_chatbot_answers ORDER BY rowid')]
         assert kept == [row + (0,) for row in before['archive_chatbot_answers']]          # the same row, plus refused = 0
     # The old-shape run has no question of the track's own list: it is kept and shown nowhere.
@@ -678,7 +683,8 @@ def test_demo_uses_made_up_names_only_and_is_marked_as_a_sample_for_people_and_m
     front, page, method = pages['index.html'], pages['c/C002.html'], pages['chatbots.html']
     card, one, person = pages['card/C002.html'], pages['card/C001-chat-app-c.html'], pages['card/C002-human.html']
     # The front page of the demo IS the chat-app comparison, under made-up names.
-    assert '<h1 class="display">Same question. Three AI apps. One human.</h1>' in front
+    assert ('<h1 class="display"><span class="hl">Same question.</span> <span class="hl">Three AI apps.</span> '
+            '<span class="hl hl-last">One human.</span></h1>') in front
     assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<a href="models.html">Models</a>' in front
     assert front.count('<h3 class="row-q"><a href="c/C00') == 6 and front.count('class="mini-text"') == 24      # every answerer's newest answer inline
     assert '<span class="row-hook">Hot dog: sandwich or not?</span>' in front and 'Human (sample)' in front
@@ -741,7 +747,7 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     front, page, method = pages['index.html'], pages['c/C001.html'], pages['chatbots.html']
     # The front page: the chat-app questions with everyone's newest answer.
     assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<h2>Newest answers</h2>' in front
-    assert '<h1 class="display">Same question. Three AI apps. One human.</h1>' in front
+    assert 'Same question. Three AI apps. One human.' in visible(front) and front.count('<span class="hl') == 3
     assert front.count('<h3 class="row-q"><a href="c/C00') == 4 and front.count('class="mini-text"') == 16
     assert 'aria-label="ChatGPT: changed Nov 2026; conditions changed Nov 2026; 2 checks"' in front
     assert 'aria-label="Human: different answer Nov 2026; 2 checks"' in front and 'aria-label="Grok: no change; no answer Nov 2026; 2 checks"' in front
@@ -755,7 +761,8 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     assert '<span class="hook">Hot dog: sandwich or not?</span>' in page
     newest, older = page.split('<section class="panel"')[1:3]
     assert 'id="m-2026-11-14"' in newest and 'id="m-2026-10-10"' in older.split('>')[0] + '>' or 'id="m-2026-10-10"' in older
-    assert '<label for="pick-1">Nov 2026</label><label for="pick-2">Oct 2026</label>' in page
+    assert ('<label for="pick-1"><span class="m-name">Nov 2026</span><span class="m-mark">2 changed</span></label>'
+            '<label for="pick-2"><span class="m-name">Oct 2026</span></label>') in page          # the Human's is not a "change"
     assert newest.count('<article class="acard') == 4 and '<div class="cards n-4">' in newest
     names = re.findall(r'<span class="acard-name mono"[^>]*>(?:<meta[^>]*>|<span itemprop="name">)?([^<]+)', newest)
     assert names == ['ChatGPT', 'Gemini', 'Grok', 'Human']
@@ -838,7 +845,7 @@ def test_the_front_page_is_the_chat_app_comparison_only_once_a_chat_app_run_exis
     monkeypatch.setattr(chatbots, 'today', lambda: TODAY)
     chatbots.import_collection(filled(tmp_path))
     after = archive_pages.render_site(archive.public_payload())
-    assert 'Same question. Three AI apps. One human.' in after['index.html'] and 'q/Q01.html' not in after['index.html']
+    assert 'Same question. Three AI apps. One human.' in visible(after['index.html']) and 'q/Q01.html' not in after['index.html']
     assert after['models.html'].count('<h3 class="row-q"><a href="q/') == 20 and '<a href="models.html">Models</a>' in after['index.html']
 
 
@@ -871,7 +878,9 @@ def test_chat_cards_three_apps_and_human_in_the_safe_box(chat, tmp_path):
     fitted = css.split('@media (min-width: 540px) and (min-height: 960px) {', 1)[1]
     assert '.card-top { flex: none; flex-wrap: nowrap; height: 25cqw; padding: 0 13cqw 0 6.1cqw;' in fitted
     assert '.card-body { flex: none; height: 108.33cqw; padding: 0 13cqw 0 6.1cqw;' in fitted
-    assert '.card-panel-human { background: var(--ground); border-color: var(--ink-soft); }' in css      # outlined, not filled
+    # The Human answers from the right, in a dark bubble with an outlined mark (never a colour of the apps' palette).
+    assert '.card-panel-human { flex-direction: row-reverse; align-self: flex-end; }' in css
+    assert '.kind-human .bubble, .card-panel-human .bubble { background: var(--ink); color: var(--on-dark);' in css
     sizes = [float(size) * 10.8 for size in re.findall(r'font-size: ([0-9.]+)cqw', fitted.split('.card-foot')[0])]
     assert min(sizes) >= 24
     question_sizes = [float(size) for size in re.findall(r'\.card-q-\w+ \{ font-size: ([0-9.]+)cqw', fitted)]
@@ -1161,7 +1170,7 @@ def test_machine_readable_labels_on_recorded_model_answers(ready, monkeypatch):
     assert 'AI-generated · we asked it ourselves · may be wrong' in front and 'Sample' not in front and 'Chat app' not in front
     assert '<a href="index.html" aria-current="page">Questions</a>' in front and not any(name.startswith('c/') for name in pages)
     # Two checks fell in one month: the periods are told by their day, not twice by the month.
-    labels = re.findall(r'<label for="pick-[12]">([^<]+)</label>', pages['q/Q01.html'])
+    labels = re.findall(r'<label for="pick-[12]"><span class="m-name">([^<]+)</span>', pages['q/Q01.html'])
     assert len(labels) == 2 and labels[0] != labels[1]
 
 
@@ -1195,8 +1204,8 @@ def test_hand_entered_answers_go_through_the_reviewed_export(chat, tmp_path, mon
     assert manifest['archive']['chatbots'] == {'runs': 2, 'answers': 24, 'apps': APPS, 'human_answers': 8, 'questions': 4}
     exported = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
     whole = json.loads(json.dumps(archive.public_payload()))
-    assert whole['schema'] == 'live-genesis-archive/5' and whole['demo_only'] is False and whole['answers'] == [] and whole['locked'] is False
-    assert list(exported) == ['schema', 'chatbots'] and exported == {'schema': 'live-genesis-chat-archive/1', 'chatbots': whole['chatbots']}
+    assert whole['schema'] == 'live-genesis-archive/6' and whole['demo_only'] is False and whole['answers'] == [] and whole['locked'] is False
+    assert list(exported) == ['schema', 'chatbots'] and exported == {'schema': 'live-genesis-chat-archive/2', 'chatbots': whole['chatbots']}
     block = exported['chatbots']
     assert set(block) == set(chatbots.BLOCK_KEYS) and set(block['answers'][0]) == set(chatbots.ANSWER_KEYS_PUBLIC)
     assert set(block['human_answers'][0]) == set(chatbots.HUMAN_ANSWER_KEYS_PUBLIC) and set(block['questions'][0]) == set(chatbots.QUESTION_KEYS)
@@ -1245,8 +1254,8 @@ def test_check_refuses_a_tampered_chat_track(chat, tmp_path, monkeypatch):
     tampered(lambda d: (block(d)['apps'][0].update(label='copilot'), [a.update(chatbot='copilot') for a in block(d)['answers'] if a['chatbot'] == 'chatgpt'],
                         [run['conditions'].update(copilot=run['conditions'].pop('chatgpt')) for run in block(d)['runs']]),
              'chat app copilot is not in chatbots-config.json')
-    tampered(lambda d: block(d)['apps'][0].update(name='Another name'), 'does not carry the name, maker and attribution')
-    tampered(lambda d: block(d)['apps'][2].update(attribution=''), 'does not carry the name, maker and attribution')
+    tampered(lambda d: block(d)['apps'][0].update(name='Another name'), 'does not carry the name, maker, attribution and group')
+    tampered(lambda d: block(d)['apps'][2].update(attribution=''), 'does not carry the name, maker, attribution and group')
     tampered(lambda d: block(d)['answers'][0].update(text='x' * 2001), 'longer than the archive stores')
     tampered(lambda d: block(d)['answers'][0].update(text='Write to someone.real@example.org'), 'Content guards matched')
     tampered(lambda d: block(d)['runs'][0]['conditions']['grok'].update(note='Write to someone.real@example.org'), 'Content guards matched')
@@ -1299,7 +1308,7 @@ def test_a_payload_without_the_track_is_exactly_what_it_was(ready, monkeypatch):
     assert 'chatbots' not in snapshot._archive_counts(payload)
     empty = {'apps': [], 'human': None, 'questions': [], 'runs': [], 'answers': [], 'human_answers': []}
     assert archive.payload_problem({**payload, 'chatbots': empty}) == \
-        'the schema marker does not fit the file (/5 exactly when it holds the chat-app track)'
+        'the schema marker does not fit the file (/6 exactly when it holds the chat-app track)'
 
 
 # ---- CLI, capture script, docs --------------------------------------------------------------------------------
@@ -1340,16 +1349,17 @@ def test_capture_script_takes_chat_card_names_and_docs_describe_the_track():
     script = (REPO / 'scripts' / 'capture-cards.mjs').read_text(encoding='utf-8')
     name = re.search(r'const ID = /(.+?)/;', script).group(1)
     pattern = re.compile(name.replace('[0-9]', r'\d'))
-    for good in ('Q11', 'T001', 'C001', 'C002-grok', 'C003-human', 'C003-chat-app-a'):
+    for good in ('Q11', 'T001', 'C001', 'C002-grok', 'C003-human', 'C003-chat-app-a', 'C001-2', 'C001-12', 'C001-help-desk', 'C001-help-desk-2'):
         assert pattern.fullmatch(good), good
-    for bad in ('Q1', 'C01', 'C001-', 'C001-Grok', '../C001', 'C001-human.html', 'Q11-grok', 'T001-human', 'C001--x' * 5):
+    for bad in ('Q1', 'C01', 'C001-', 'C001-Grok', '../C001', 'C001-human.html', 'Q11-grok', 'T001-human', 'C001--x' * 5, 'C001-0', 'C001-123',
+                'Q11-2'):
         assert not pattern.fullmatch(bad), bad
     assert 'never opens a chat app' in script and 'data.chatbots' in script and "chat: 'C'" in script
     assert 'scripted-sample' in script and 'SAMPLE' in script                                # a sample card is reported, by its machine label
     doc = (REPO / 'docs' / 'ANSWERS-OVER-TIME.md').read_text(encoding='utf-8')
     section = doc.split('## The chat-app track', 1)[1].split('\n## ', 1)[0]
     for phrase in ('archive-chatbot-template', 'archive-chatbot-import', '--dry-run', '--allow-old', 'by hand', 'terms',
-                   'live-genesis-archive/5', 'Temporary Chat', 'Private Chat', 'not verified', 'Written with Grok',
+                   'live-genesis-archive/6', 'Temporary Chat', 'Private Chat', 'not verified', 'Written with Grok',
                    'answer_file', 'chat-app-a', '--export --archive-only', 'Back up first', 'ChatGPT, Gemini and Grok',
                    'Human', 'quoted', 'summarised', 'never contacts Reddit', 'replies may be quoted', 'no usernames',
                    '"refused": true', 'Refusals and non-answers are left out.', 'C001', PREFIX, 'aside', 'never on a share card',

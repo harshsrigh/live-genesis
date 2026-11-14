@@ -11,9 +11,11 @@
 // T... cards of the model track exist in a full snapshot and in the local apps, not there.
 //
 // Chat-app cards (replies the owner typed in by hand, and answers written by people) are
-// archive/card/C001.html (every app and Human), archive/card/C001-<app label>.html (one app) and
-// archive/card/C001-human.html. They are captured like any other card; this script only photographs
-// pages of the site it is given and never opens a chat app or any other site.
+// archive/card/C001.html (up to four answerers, Human among them), archive/card/C001-<app label>.html
+// (one app) and archive/card/C001-human.html. A card holds at most four bubbles, so a question with
+// more answerers has further cards (C001-2.html ...), and with several answerer groups each later group
+// has its own (C001-<group id>.html, C001-<group id>-2.html). They are captured like any other card;
+// this script only photographs pages of the site it is given and never opens a chat app or any other site.
 //
 // The fitted 9:16 picture exists only in a window of at least 540 x 960 CSS pixels, which is the size
 // used here; in a smaller window a card page is ordinary flowing text.
@@ -38,14 +40,14 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 const WIDTH = 540, HEIGHT = 960, SCALE = 2;
-const ID = /^(Q[0-9]{2}|T[0-9]{3}|C[0-9]{3}(-[a-z][a-z0-9-]{1,23})?)$/;
+const ID = /^(Q[0-9]{2}|T[0-9]{3}|C[0-9]{3}(-([a-z][a-z0-9-]{1,23}|[1-9][0-9]?))?)$/;
 const SETS = { core: 'Q', trending: 'T', chat: 'C' };
 const USAGE = `Usage: node scripts/capture-cards.mjs (--site DIR | --url BASE) --out DIR [--ids Q11,T001,C001] [--set core|trending|chat]
 
   --site DIR   a built site folder (the output of: python -m live_genesis.snapshot DIR)
   --url BASE   the address of a served site, e.g. http://127.0.0.1:8000/ or the published site
   --out DIR    where the PNG files go (created if missing)
-  --ids LIST   comma-separated card names (Q11, T001, C001, C001-grok, C001-human); default: every card of the site
+  --ids LIST   comma-separated card names (Q11, T001, C001, C001-2, C001-grok, C001-human); default: every card of the site
   --set NAME   core (Q..), trending (T..) or chat (C...) only`;
 
 class Problem extends Error {}
@@ -170,12 +172,16 @@ async function main() {
         }
         const trending = data.trending && Array.isArray(data.trending.questions) ? data.trending.questions : [];
         ids = [...(core || []), ...trending].map((q) => String(q && q.id)).filter((id) => ID.test(id));
-        // The chat-app track, when the site has one: per question, one card for everyone, one per app and one for Human.
+        // The chat-app track, when the site has one: per question, the first card, one per app, one for Human and one
+        // per later answerer group. A further card of a long thread (C001-2, C001-<group id>-2) cannot be told from
+        // this file: with --url name those with --ids; with --site every card in the folder is found.
         if (chat) {
+          const groups = Array.isArray(chat.groups) ? chat.groups.slice(1) : [];
           for (const question of chat.questions) {
             const id = String(question && question.id);
             ids.push(id);
             for (const app of chat.apps) ids.push(`${id}-${String(app && app.label)}`);
+            for (const group of groups) ids.push(`${id}-${String(group && group.id)}`);
             if (chat.human) ids.push(`${id}-human`);
           }
           ids = ids.filter((id) => ID.test(id));
