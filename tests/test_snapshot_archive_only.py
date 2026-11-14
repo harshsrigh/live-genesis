@@ -154,7 +154,7 @@ def test_archive_only_round_trip_renders_the_chat_track_and_nothing_else(ready, 
     assert list(json.loads((site / 'archive.json').read_text(encoding='utf-8'))) == ['schema', 'chatbots']
     assert_every_address_resolves(site)                                                # no link to a page that is not published
     page = (site / 'archive' / 'c' / 'C001.html').read_text(encoding='utf-8')
-    assert CHAT_TEXT in page and 'AI-generated · typed in by hand · may be wrong' in page and 'Typed in by hand' in page
+    assert CHAT_TEXT in page and 'AI-generated · may be wrong' in page and 'by hand' not in page.lower()
     assert 'Not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI' in page and 'Read-only archive.' in page and 'No payments' in page
     assert 'scripted' not in page.lower() and not re.search(r'(?i)sample', page)
     everything = all_text(site)
