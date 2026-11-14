@@ -1,6 +1,8 @@
 # Funding and spend plan (planning only)
 
-Total *proposed* initial experiment budget: **$4,000 USD**. **No money has been spent, transferred or raised by creating this repo.** The owner retains all funds, accounts and legal responsibility. First checkpoint: spend at most **$1,000** before validating product interest and core behavior.
+Total *proposed* initial budget: **$4,000 USD**. **No money has been spent, transferred or raised by creating this repo.** The owner retains all funds, accounts and legal responsibility. First checkpoint: spend at most **$1,000** before validating product interest.
+
+The table was drawn up when the project was an agent society (removed on 14 November 2026). It has not been redrawn for Answers Over Time; treat the categories as placeholders and the two totals as the limits the software enforces.
 
 | Category | Ceiling (USD) | Phase |
 |---|---:|---|
@@ -12,28 +14,17 @@ Total *proposed* initial experiment budget: **$4,000 USD**. **No money has been 
 | Contingency | $600 | no spending without approval |
 | **Total** | **$4,000** | |
 
-## Internal credits are outside this budget
-The credit ledger (`cli grant-credits`, commons pool, proposal earmarks) counts internal compute-accounting units only. It is not part of the $4,000 plan, is not funded by it, and no dollar figure is ever converted into credits or back. Credits currently buy nothing, including model calls: API spend is still governed solely by the estimated USD gate below. An agent-endorsed fundraising proposal is a text for the operator to read; amount raised remains $0 until collected externally by the legal operator.
-
 ## What the software gate enforces
-The ceiling used before every paid call is min(`LIVE_SPEND_LIMIT_USD`, `LIVE_PROJECT_BUDGET_USD` − `LIVE_OTHER_COMMITTED_USD`, $1,000 − `LIVE_OTHER_COMMITTED_USD`). It counts only what this software knows: estimated API usage, open holds, and the hand-typed `LIVE_OTHER_COMMITTED_USD`. It verifies nothing and does not know about hosting or other bills unless declared. The $1,000 gate has no "validated" switch; raising it is a code change. A paid round needs `LIVE_ALLOW_PAID_CALLS=YES`. An unconfirmed charge blocks all paid calls until the operator reconciles it from the provider bill; reconciliation figures are typed in, never fetched. Using both the cumulative `--provider-usd` form and the per-reservation form for the same charge can count it twice, which errs high, never low.
+The ceiling used before every paid call is min(`LIVE_SPEND_LIMIT_USD`, `LIVE_PROJECT_BUDGET_USD` − `LIVE_OTHER_COMMITTED_USD`, $1,000 − `LIVE_OTHER_COMMITTED_USD`). It counts only what this software knows: estimated API usage, open holds, and the hand-typed `LIVE_OTHER_COMMITTED_USD`. It verifies nothing and does not know about hosting or other bills unless declared. The $1,000 gate has no "validated" switch; raising it is a code change. `LIVE_PROJECT_BUDGET_USD` must stay below 4000.
 
-**Control study.** `cli study-run` spends from the same estimated gate as `round` and requires its own `--max-usd`; the worst-case estimate (about $0.055 for N=3 at the `.env.example` rates) must fit before the first call. A failed call stops the run until `cli reconcile`. `study-plan`, `study-dry-run` and `study-report` cost nothing.
+The only command that can spend is `cli archive-run`. It needs the owner's explicit instruction, `LIVE_ALLOW_PAID_CALLS=YES` and its own `--max-usd`, which the worst-case estimate must fit under before the first call. An unconfirmed charge blocks all paid calls until the owner reconciles it from the provider bill; reconciliation figures are typed in, never fetched. Using both the cumulative `--provider-usd` form and the per-reservation form for the same charge can count it twice, which errs high, never low.
 
-## Phase 1 gate ($0-$100)
-- Local demo costs $0 in model usage.
-- 10 identities, 1 turn per selected agent, manually invoked.
-- App starts with `LIVE_SPEND_LIMIT_USD=10` as an **estimated software gate**.
-- Obtain a separate **provider-level hard spending limit if supported**, alerts otherwise. App cannot guarantee third-party billing stops at $10.
-- Check vendor model access and live prices. The defaults are illustrative, not a contract.
+The chat-app track costs nothing in model usage: the owner asks the apps by hand.
 
-## Phase 2 gate (up to $1,000 total)
-- Security review and 100+ real agent interactions with demonstrable value.
-- A first collaborative challenge and independent evaluation.
-- Publish actual spend, amount raised ($0 until collected externally), and usage.
+## What it cannot do
+The app cannot guarantee that a provider's billing stops at any figure: get a provider-level hard spending limit where one exists, alerts otherwise. Check vendor model access and live prices; the default rates are illustrative, not a contract.
 
-## Phase 3 gate (remainder of budget)
-Only after user approval of the next milestone. The world may *propose* fundraising ideas; it cannot send donation links, collect payment credentials, register a legal entity, or spend money. Any real sponsorship agreement is an outside-world act approved by the legal operator, using clear AI-generated-content disclosures.
+Nothing in this repository requests, collects or moves money, and nothing links to a donation or payment page. Any sponsorship or paid service is an outside-world act decided by the owner.
 
 ## Names/domains
-`LIVE` is provisional. `live.com` is not registered to this project. Conduct domain availability and trademark clearance before spending money on branding.
+The name is open (see `docs/ROADMAP.md`). Do a domain and trademark check before spending money on branding.

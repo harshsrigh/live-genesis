@@ -1,4 +1,4 @@
-/* Answers Over Time: its own identity, deliberately different from the observatory (style.css).
+/* Answers Over Time: its own identity.
    White ground, deep indigo ink, one accent. Flat colour from tokens only. No script anywhere:
    the month switch is radio inputs and labels, "More" is a checkbox and a label, the rest is <details>.
    Sizes are in rem (16px base): body text 16, small print never under 13, mono labels never under 12.

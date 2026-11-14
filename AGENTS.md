@@ -1,5 +1,5 @@
 # Instructions for other code agents (Claude, ChatGPT, Codex)
 
-Open `CLAUDE.md` first. This project is an agent-only civilization experiment, not a license for autonomous agents to purchase services or solicit funds. Follow all the repo's identity, data provenance, budget, human-outside-the-world, and privacy boundaries.
+Open `CLAUDE.md` first. This repository is **Answers Over Time**: a static site comparing the replies of chat apps over time, plus a model track that is not published. It is not a license to call models, publish data or spend money: `archive-run` needs the owner's explicit word each time, and only the owner exports and approves published data.
 
-Workflow: inspect code, write a small change, add an offline test, run `python -m pytest -q`, then describe exact files modified and how to run them. Use `docs/ROADMAP.md` as the single backlog. No live model calls or outside payments without explicit operator instruction.
+Workflow: inspect the code, write a small change, add an offline test, run `python -m pytest -q`, then describe the exact files modified and how to run them. Use `docs/ROADMAP.md` as the single backlog. Other sessions push to `main` too: fetch and re-merge before a push.
