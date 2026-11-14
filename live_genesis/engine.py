@@ -131,6 +131,12 @@ class UsageMissing(RuntimeError):
     treat it as any failed call; live_genesis/archive.py records it under its own category."""
 
 
+class UnexpectedCharge(RuntimeError):
+    """A free-only request came back reporting a cost above zero (or a cost that is not a number). The answer
+    is not recorded. live_genesis/archive.py stops the run and keeps the hold unconfirmed, so nothing more is
+    sent until the operator has looked at the provider's billing page and run `cli reconcile`."""
+
+
 @dataclass
 class Completion:
     text: str
@@ -170,15 +176,22 @@ def _chat(client: Any, model: str, system: str, prompt: str, max_output_tokens: 
     sent = {key: sampling[key] for key in ('temperature', 'seed') if sampling and key in sampling}
     request.update(sent)
     if free_openrouter:
-        from .openrouter_setup import FREE_ID
-        if not FREE_ID.fullmatch(model):
-            raise ProviderNotReady('Free-only OpenRouter requires an explicit :free model ID')
+        # Checked here as well as in the settings, so no caller can reach OpenRouter with another id. Nothing is sent.
+        if not providers.openrouter_free_model_ok(model):
+            raise ProviderNotReady('A model ' + providers.OPENROUTER_RULE)
+        # OpenRouter's provider routing: refuse any provider priced above zero on every price dimension, and do
+        # not fall back to another provider. No `models` list (a fallback list is billed per model), no plugin.
         request['extra_body'] = {'provider': {
             'allow_fallbacks': False,
             'max_price': {'prompt': 0, 'completion': 0, 'request': 0, 'image': 0},
         }}
     response = client.chat.completions.create(**request)
     usage = getattr(response, 'usage', None)
+    if free_openrouter:
+        # OpenRouter reports the amount charged as `usage.cost`. Zero or absent is accepted; anything else is not.
+        cost = getattr(usage, 'cost', None)
+        if cost is not None and (type(cost) not in (int, float) or cost != cost or cost > 0):
+            raise UnexpectedCharge('A free-only request reported a cost; the answer is not recorded')
     tokens = (getattr(usage, 'prompt_tokens', None), getattr(usage, 'completion_tokens', None))
     if any(type(n) is not int or n < 0 for n in tokens):
         # No numbers are invented: the callers keep the hold as unconfirmed and stop.
@@ -250,7 +263,7 @@ def infer(provider: str, model: str, prompt: str, *, system: str | None = None, 
             client = OpenAI(base_url=endpoint.base_url, api_key=endpoint_key, timeout=timeout, max_retries=0, http_client=http)
             return _chat(client, model, system, prompt, max_output_tokens, json_mode=False,
                          reasoning_effort=endpoint.reasoning_effort, sampling=sampling,
-                         free_openrouter=(endpoint.host == 'openrouter.ai' and endpoint.basis == providers.BASIS_FREE))
+                         free_openrouter=providers.is_openrouter_host(endpoint.host))
     if compat:
         # Any server speaking the OpenAI Chat Completions API (local or hosted). The base URL and key are
         # passed explicitly, never taken from OPENAI_* variables. Exceptions from here on are caught by the

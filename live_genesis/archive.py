@@ -896,6 +896,8 @@ def resolve(models: list[dict], tokens_out: int) -> tuple[list[dict], dict]:
             name = answerer.get("endpoint")
             if name:
                 record = records[name]
+                if providers.is_openrouter_host(record.host) and not providers.openrouter_free_model_ok(answerer["model"]):
+                    raise ArchiveRefused(f"LIVE_ARCHIVE_MODELS, {answerer['label']}: a model {providers.OPENROUTER_RULE}")
                 limit = tokens_out if record.max_output_tokens is None else min(max(record.max_output_tokens, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS)
                 out.append({**answerer, "record": record, "input_rate": record.input_rate, "output_rate": record.output_rate,
                             "basis": record.basis, "local": record.loopback, "max_output_tokens": limit,
@@ -1367,6 +1369,18 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
                     core.close_reservation(reservation, "released")  # nothing was sent
                     reason = "provider not ready (local setup); nothing was sent for this call"
                     state_of.update(reason="not_ready", reservation=reservation)
+                    break
+                except engine.UnexpectedCharge:
+                    # A free-only call reported a cost. Not a gap to skip past: the answer is not recorded, the hold
+                    # stays unconfirmed and the whole run stops, so nothing more is sent until the operator has looked.
+                    core.close_reservation(reservation, "unconfirmed")
+                    open_hold = None
+                    reason = (f"a free-only call reported a charge; the answer was not recorded and no further call was made "
+                              f"(reservation {reservation}). " + unconfirmed.format(reservation))
+                    state_of.update(reason="other", reservation=reservation)
+                    with core.connect() as cx:
+                        controls.audit(cx, f"archive run {number} ({kind}): {answerer['label']} reported a charge on a free-only "
+                                           f"call; run stopped, hold {reservation} unconfirmed")
                     break
                 except Exception as exc:
                     # Provider exception text is never stored or echoed: it can contain secrets. Only a category is kept.
