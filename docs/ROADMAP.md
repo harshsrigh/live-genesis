@@ -20,7 +20,8 @@ Next, in order (the first six are the owner's):
 - [ ] Owner chooses the models and reads each hosted service's current terms; reports the WSL machine's hardware and Ollama state.
 - [ ] First real run, **only on the owner's explicit instruction** (`archive-run --max-usd X`; local and free models included). First contact with any real model server: expect setting changes.
 - [ ] Owner exports, reads and approves the first answers; the public site then shows recorded data at the root and the demo under `demo/`.
-- [x] The public site holds Answers Over Time only (owner decision, 13 Nov 2026): `snapshot --archive-only` in every CI build, root page leads to `archive/index.html`, no society page, overview, script or agent kit published (`tests/test_snapshot.py`, `tests/test_published.py`). Open, owner's decision: the reviewed export still commits `published/overview.json` (society content) to the public repository.
+- [x] The public site holds Answers Over Time only (owner decision, 13 Nov 2026): `snapshot --archive-only` in every CI build, root page leads to `archive/index.html`, no society page, overview, script or agent kit published (`tests/test_snapshot.py`, `tests/test_published.py`).
+- [x] Archive-only reviewed export (owner decision: society data must not enter the public repository): `snapshot --export --archive-only` writes `published/archive.json` and `MANIFEST.json` only and never reads the society tables; manifest schema `live-genesis-published/5` with `"contents"` (`"archive"` or `"full"`), read by `--approve` and `--check`; an older `/4` export is refused. The full export stays in the code and is not the path for the public site. Not yet exercised with real data.
 - [ ] First share card posted by hand, with a platform poll sticker. **Human voting on the site is not built** and needs the owner's instruction (plan in `docs/ANSWERS-OVER-TIME.md`).
 - [ ] Monthly runs. Nothing schedules them.
 
