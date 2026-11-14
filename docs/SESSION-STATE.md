@@ -36,7 +36,7 @@ The project now leads with **Answers Over Time** (`docs/PIVOT-ANSWERS-OVER-TIME.
 5. **Report the WSL machine,** so the model choice fits it: RAM (`free -h`), CPU threads (`nproc`), GPU if any (`nvidia-smi`), free disk (`df -h ~`), and Ollama (`ollama --version`, `ollama list`; or "not installed"). Say whether Ollama runs inside WSL or on Windows: `localhost` must reach it from where the run starts.
 6. **Configure and check, free:** endpoint settings in `.env`, then `archive-check-endpoints` and `archive-plan`. Read both outputs.
 7. **First run: only on the owner's explicit word,** with a ceiling: `archive-run --max-usd X`. This holds for a run on local or free models too. A session must not start it on its own, and must not treat an earlier "yes" as standing permission.
-8. Then `archive-status`; export with `snapshot --export --archive-only`, read `published/archive.json`, approve, push (`docs/FIRST-REAL-ROUND.md`); check the live pages. That export holds answers only: no society data enters the public repository.
+8. Then `archive-status`; export with `snapshot --export --archive-only`, read `published/archive.json`, approve, push (`docs/FIRST-REAL-ROUND.md`); check the live pages. That export holds answers only: no society table is read, so no post, document, proposal, game or profile is exported. An answer that an outside agent submitted (`source: api`) is part of the archive and is exported with that agent's name and self-declared model; the export and approve summaries say how many such answers there are.
 9. After the first published run: Answers Over Time moves to the site's front page; first share card and post by hand (`docs/SOCIAL-POSTS.md`).
 
 For Claude, when asked: apply the proposed lines to `CLAUDE.md` and the skill file; help word questions; never write trending questions from the trends feed automatically; no human-voting code without the owner's instruction.
@@ -44,7 +44,7 @@ For Claude, when asked: apply the proposed lines to `CLAUDE.md` and the skill fi
 ## Society: done
 - All of Milestones 1 and 2 except running the control study.
 - Security: one audit, fixes, one re-audit, fixes. Verdict: paid rounds on the owner's PC are fine; one outside key needs TLS in front, `LIVE_TRUSTED_PROXIES`, and `set-external` on the issued identity.
-- Publishing path for reviewed real data (`snapshot --export / --approve / --check`); not yet used. For the public repository the export is `--export --archive-only` (`archive.json` and the manifest, no society data); the full export, which also writes `overview.json`, stays in the code but is not the path for the public site.
+- Publishing path for reviewed real data (`snapshot --export / --approve / --check`); not yet used. For the public repository the export is `--export --archive-only` (`archive.json` and the manifest, no society table read); the full export, which also writes `overview.json`, stays in the code but is not the path for the public site.
 - Onboarding kit, participant rules, key-request issue form, resident skill.
 - The Origin (scripted guide) with `set-guide on|off`.
 - `openai-compatible` provider for local/free models (`docs/FREE-MODELS.md`, Part 1); untested against any real server.
@@ -60,7 +60,7 @@ For Claude, when asked: apply the proposed lines to `CLAUDE.md` and the skill fi
 2. Owner writes the first real tasks with `task-add` (the board is empty), and decides the wording left open by the task board: the `SET BY THE OPERATOR` label, the constitution line, the reward-wording and link refusals. The remaining culture proposals are in `docs/research/AGENT-CULTURE.md` (a local draft on the PC, not in git). The three changes landed together, so the next `cli health` reading cannot separate their effects; baseline before them: 3 of 10 agents had acted, 3 of 3 posts unanswered, 1 work action to 3 talk actions.
 3. Owner decisions left by the page batch: `profile/N.html` versus `agent/N.html`; whether the "WE ARE LIVE." line returns; the changed mode-label wording.
 4. A third round (owner's word needed), then `cli turns` and `cli health`.
-5. No society export to the public repository (owner decision): `published/` takes only the archive-only export, which holds no society data.
+5. No society export to the public repository (owner decision): `published/` takes only the archive-only export, which reads no society table (answers that outside agents submitted are part of the archive and are exported).
 6. Control study (`study-plan`, then `study-run` on the owner's word); one round with `set-guide off` for comparison.
 7. Open code items: per-author cap in agent prompts; old rows with hidden characters are blocked from publishing but not cleaned; look-alike characters accepted; public read routes have no per-address limit; `available_actions` ignores the minute/day windows and the cooldown; `app.js` has no executed test.
 8. Later page batch: search, filters, theme toggle, round digest. Later agent batch: sandbox world, JavaScript client, `curl` walkthrough.

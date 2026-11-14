@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import datetime
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -1836,7 +1837,7 @@ _SHAPE = {"schema": str, "question_set": str, "set_hash": str, "locked": bool, "
           "changed_rule": str, "groups": list, "questions": list, "trending": dict, "answerers": list, "runs": list,
           "answers": list, "answers_by_source": dict}
 _TRENDING_SHAPE = {"question_set": str, "set_hash": str, "version": int, "locked": bool, "groups": list, "questions": list}
-_DATE = re.compile(r"\d{4}-\d{2}-\d{2}T[0-9:.+Z-]{0,26}")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.+Z-]{0,26}")   # [0-9], not \d: \d also matches non-ASCII digits
 
 
 def _questions_problem(groups: list, questions: list, fields: tuple) -> str | None:
@@ -1913,6 +1914,119 @@ def export_problem(data: dict) -> str | None:
     if any(answer["run"] in several and answer["source"] != "api" and "samples" not in answer for answer in data["answers"]):
         return "an answer of a run with several samples lacks its sample counts"
     return None
+
+
+# ---- The exact shape of a published payload: every object holds the keys public_payload writes and no other ----
+
+_TOP_KEYS = ("schema", "question_set", "set_hash", "locked", "locked_at", "demo_only", "system_line", "changed_rule", "groups",
+             "questions", "trending", "answerers", "runs", "answers", "answers_by_source")
+_TRENDING_KEYS = ("question_set", "set_hash", "version", "locked", "locked_at", "updated_at", "groups", "questions")
+_RUN_KEYS = ("number", "date", "demo", "asked", "skipped")          # plus "samples" on a run that asked several
+_ANSWER_KEYS = ("id", "run", "question", "answerer", "model", "source", "state", "reason", "text", "changed",
+                "created_at") + PUBLIC_CALL_FIELDS                  # plus SAMPLE_FIELDS, all three or none
+_PLAIN_KEY = re.compile(r"[A-Za-z0-9_]{1,40}")
+
+
+def _keys_problem(place: str, node: dict, required: tuple, optional: tuple = ()) -> str | None:
+    """An unknown key is named (its value never is); a name that is not a plain word is not echoed."""
+    extra = sorted(str(key) for key in node if key not in required and key not in optional)
+    if extra:
+        return f"{place}: unexpected key " + (extra[0] if _PLAIN_KEY.fullmatch(extra[0]) else "(its name is not a plain word)")
+    missing = [key for key in required if key not in node]
+    return f"{place}: key {missing[0]} is missing" if missing else None
+
+
+def closed_problem(data: dict) -> str | None:
+    """For a file that is to be published: every object in it holds exactly the keys `public_payload`
+    writes, so nothing can ride along under a key no check and no page reads. The two maps keyed by
+    data are checked by value elsewhere (`asked` by track and `skipped` by model label, in
+    payload_problem), as are the entries of `others` (_samples_problem). The values the code itself
+    derives are compared with what it would write: the system line, the changed rule, the list of
+    answerers, the counts by source and `demo_only`. `data` already passed payload_problem and
+    export_problem and holds no mock or scripted demo row."""
+    trending = data["trending"]
+    checks = [("top level", data, _TOP_KEYS, ()), ("trending", trending, _TRENDING_KEYS, ())]
+    checks += [("a group", g, ("name", "why"), ()) for g in data["groups"]]
+    checks += [("a trending group", g, ("name", "why"), ()) for g in trending["groups"]]
+    checks += [(f"question {q['id']}", q, CORE_FIELDS, ()) for q in data["questions"]]
+    checks += [(f"trending question {q['id']}", q, TRENDING_FIELDS, ()) for q in trending["questions"]]
+    checks += [(f"run {run['number']}", run, _RUN_KEYS, ("samples",)) for run in data["runs"]]
+    checks += [(f"answer id {a['id']}", a, _ANSWER_KEYS, SAMPLE_FIELDS) for a in data["answers"]]
+    for place, node, required, optional in checks:
+        problem = _keys_problem(place, node, required, optional)
+        if problem:
+            return problem
+    if data["locked_at"] is not None and not isinstance(data["locked_at"], str):
+        return "top level: key locked_at has the wrong type"
+    if data["system_line"] != SYSTEM_LINE or data["changed_rule"] != CHANGED_RULE:
+        return ("its system_line or changed_rule is not the text this version of the code writes "
+                "(it was edited, or the export was made by another version; export and review again)")
+    labels: list[str] = []
+    for answer in data["answers"]:
+        if answer["answerer"] not in labels:
+            labels.append(answer["answerer"])
+    if data["answerers"] != labels:
+        return "answerers is not the list of the answers' own answerers, in order"
+    by_source = data["answers_by_source"]
+    if set(by_source) != set(PUBLIC_SOURCES) or any(
+            type(by_source[s]) is not int or by_source[s] != sum(1 for a in data["answers"] if a["source"] == s) for s in PUBLIC_SOURCES):
+        return "answers_by_source does not match the answers"
+    if data["demo_only"] != (not data["runs"]):   # no scripted run can be here, so every run is a recorded one
+        return "demo_only does not fit the runs in the file"
+    return None
+
+
+SET_HASH_MISMATCH = "set_hash does not match the questions and groups in the file (a question or a group was changed)"
+
+
+def set_hash_problem(data: dict) -> str | None:
+    """Recompute `set_hash` from the questions and groups of a payload that is to be published, where
+    the published fields allow it, so a question's wording cannot be edited under an unchanged hash.
+
+    core: the hash covers the set name, the file's groups and the questions with their positions. A
+    locked payload lists its groups in order of first use, the file in its own order, so every order
+    is tried; a locked payload with fewer than GROUP_COUNT groups (a file group no question uses) cannot
+    be recomputed and is not checked. trending: a draft is hashed like the core list; the first lock
+    (version 1) is the chain hash of all its questions; a later version's hash chains over the earlier
+    locks, whose boundaries are not published, so it cannot be recomputed here and is not checked.
+    `data` already passed payload_problem and closed_problem."""
+    def numbered(questions: list, fields: tuple) -> list[dict]:
+        return [{"position": n, **{key: q[key] for key in fields}} for n, q in enumerate(questions, 1)]
+
+    def plain(holder: dict, fields: tuple) -> bool:
+        if len(holder["groups"]) > GROUP_COUNT:
+            return False
+        questions = numbered(holder["questions"], fields)
+        return any(hashlib.sha256(_canonical({"question_set": holder["question_set"], "groups": list(order), "questions": questions})
+                                  ).hexdigest() == holder["set_hash"] for order in itertools.permutations(holder["groups"]))
+    if (not data["locked"] or len(data["groups"]) == GROUP_COUNT) and not plain(data, CORE_FIELDS):
+        return SET_HASH_MISMATCH
+    trending = data["trending"]
+    if not trending["locked"]:
+        matches = plain(trending, TRENDING_FIELDS)
+    elif trending["version"] == 1:
+        why = {g["name"]: g["why"] for g in trending["groups"]}
+        matches = chain_hash("", trending["question_set"], [{**q, "group_why": why[q["group"]]} for q in
+                                                            numbered(trending["questions"], TRENDING_FIELDS)]) == trending["set_hash"]
+    else:
+        matches = True
+    return None if matches else "trending: " + SET_HASH_MISMATCH
+
+
+def run_states(readonly: bool = True) -> list[dict]:
+    """Each recorded (real) run as stored, for the exporter: its number, its status as archive-status
+    shows it (`running`, `complete`, `complete_with_gaps`, `incomplete`) and the answer rows recorded
+    (one per sample). A run that was killed stays `running`: nothing ever closes it."""
+    with core.connect(readonly=readonly) as cx:
+        tables = {r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'archive_%'")}
+        if "archive_runs" not in tables:
+            return []
+        runs = [dict(r) for r in cx.execute(
+            "SELECT r.id,r.number,r.status,COUNT(a.id) AS answers FROM archive_runs r LEFT JOIN archive_answers a ON a.run_id=r.id "
+            "WHERE r.kind='real' GROUP BY r.id ORDER BY r.number")]
+        return [{"number": r["number"], "answers": int(r["answers"]),
+                 "status": shown_status(r["status"], _answerer_rows(cx, r["id"]) if "archive_run_answerers" in tables else [])}
+                for r in runs]
 
 
 def payload_problem(data: object) -> str | None:
