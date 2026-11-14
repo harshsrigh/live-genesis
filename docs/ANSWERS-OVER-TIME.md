@@ -282,3 +282,11 @@ Back up first (`python -m live_genesis.cli backup NEW-FILE`). Any CLI command or
 - A trending question says what people were searching for, not what is true or important. The trend list is someone else's data, read once by hand.
 - Cost figures are local estimates.
 - An `entered by hand` reply is what a person says a chat app wrote. There is no receipt. It also shows one reply on one day under the recorded conditions, not what the app "thinks": the same app can answer differently for another account, country or day.
+
+## The one removal (14 November 2026)
+
+The rule above stands: a locked question never changes and is never removed, and no command removes one. One exception was made by hand, on the owner's instruction, the day after the first lock. The trending question "Who is the president of the United States?" (then T004) was political, which the owner keeps off the site, and a model had answered it wrongly.
+
+What was done, outside the software, on the owner's PC: the real database was backed up; on a copy, the append-only triggers were dropped inside one transaction, the question and its 15 recorded answers (5 answer cells of 3 samples) were deleted, the eight later questions moved up one id (T005 to T012 became T004 to T011, in the answers too), the trending lock was recorded again as version 1 over the 11 remaining questions, and the triggers were put back; the copy was checked (question list against the file, hashes, counts, an export) and then replaced the real database. The operator audit log holds one line saying so. `archive_trending.json` was changed in the same commit, and the published export was replaced by a new one that the owner approved.
+
+What this did not do: the question and its answers remain in the git history of this repository (the first published export), in earlier backups on the owner's PC, and in any copy someone made of the site while it was public. Ids published before the removal (T005 to T012) now name different questions than they did for those few hours.

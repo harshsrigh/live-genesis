@@ -757,9 +757,11 @@ def test_cli_understands_both_sets(ready, tmp_path, monkeypatch, capsys):
 
 def test_a_hidden_question_has_no_page_no_card_and_is_in_no_list(ready, monkeypatch):
     # The owner keeps politics off the site: the locked question stays in the data, the pages leave it out.
-    assert 'T004' in archive_pages.HIDDEN
+    # The one question hidden so far (who holds an office) was then removed outright; nothing is hidden now.
+    assert archive_pages.HIDDEN == {}
     checked_in = json.loads((REPO / 'live_genesis' / 'archive_trending.json').read_text(encoding='utf-8'))
-    assert [q['text'] for q in checked_in['questions'] if q['id'] == 'T004'] == ['Who is the president of the United States?']
+    assert not any('president' in q['text'].lower() for q in checked_in['questions'])
+    assert [q['id'] for q in checked_in['questions']] == [f'T{n:03d}' for n in range(1, len(checked_in['questions']) + 1)]
     archive.demo_archive()
     payload = archive.public_payload()
     shown = archive_pages.render_site(payload)

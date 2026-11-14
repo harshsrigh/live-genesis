@@ -102,7 +102,7 @@ def _plural(n: int, word: str) -> str:
 # question can never leave its list or the data file, so hiding is all the pages can do: a hidden question has
 # no page and no card, is in no list and no count, and its answers are not rendered. `archive.json` still
 # holds it, and so does the repository's history.
-HIDDEN = {"T004": "political (who holds an office); the owner keeps politics off the site, 14 November 2026"}
+HIDDEN: dict[str, str] = {}   # id -> reason. Empty: the one question hidden so far was removed outright on 14 November 2026.
 
 
 class _Chat:
