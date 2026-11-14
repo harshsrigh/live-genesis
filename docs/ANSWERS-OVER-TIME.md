@@ -170,6 +170,57 @@ Per server call the database keeps: the endpoint **name** (never the URL), the r
 ### Pinning a local model
 An Ollama tag such as `model-a:4b` is a movable name: pulling it again can fetch different weights under the same tag. Pull each model once and never re-pull it while the archive runs. Before each model's first question, a loopback endpoint is asked once for its model list (`GET <origin>/api/tags`, loopback only, 2 second timeout, no proxy, no redirect) and the model's sha256 digest is stored with every answer; a failure is silent and the digest is recorded as not known. If the digest changes between runs, the pages say so.
 
+## The chat-app track (asked by hand)
+A third track, next to the core list and the trending list: the same questions typed into consumer chat apps **by hand**. The apps are ChatGPT (OpenAI), Gemini (Google), Grok (xAI) and Copilot (Microsoft). The owner opens each app, asks ten questions, pastes the replies into a file, and the software imports that file. One reply per question and app.
+
+**Why by hand.** The terms of these services forbid automated access to their apps. So the software never contacts them, in any form: no program opens, reads or copies from a chat app, and nothing in this repository may be changed to do so. `archive-chatbot-template` writes a file; `archive-chatbot-import` reads a file. Neither opens a network connection, calls a model or needs a key, and neither is a paid command.
+
+**What is fixed.** `live_genesis/archive_chatbots.json` names the four apps (label, name, maker, and an optional `attribution` line a maker's brand guidance asks for; only Grok has one, "Written with Grok") and ten question **ids**. The ids refer to locked questions in the two existing files; the text and the exact prompt come from there and are never copied or reworded. The ten are Q11, Q12, Q13, T002 (things that move with time), Q16, Q17, Q18 (what the app says about itself), Q03 (a plain fact), T005 and T012 (the playful ones). The file says `"status": "draft"`: until the first real import the owner may change the ten. After the first import an id that has a hand-entered answer can never be dropped; ids may only be added (the import refuses otherwise). Every import records the id list and the hash of the configuration.
+
+### The monthly routine
+1. **Read the terms first.** Before every session, read each service's current terms on using the app and on publishing what it wrote. They change. See "Terms: what was and was not checked" below.
+2. **Template.** `python -m live_genesis.cli archive-chatbot-template --out chatbots-2026-12.json` (free). It holds today's date as `collected_on`, and for each app an empty `conditions` object and one entry per question with the exact prompt to paste and an empty `answer`. It never overwrites a file.
+3. **Ask by hand.** For each app: fill in its `conditions`. Then, for every question, start a **new chat**, paste the `prompt` exactly, and copy the **whole** reply into `answer`. Do not edit, shorten or fix it. A reply with line breaks or quotation marks is awkward inside a JSON file: save it as a plain text file next to the template and put that file's name in `"answer_file"` instead. If the app refused or you could not ask, leave `answer` empty and add `"skipped": "a short reason"`. Optionally keep a screenshot and name it in `"screenshot"`: only its sha256 fingerprint is stored, never the picture or its path. If you did not ask one app that day, remove its whole block.
+4. **Dry run.** `python -m live_genesis.cli archive-chatbot-import chatbots-2026-12.json --dry-run` checks the whole file and prints what would be stored: counts and lengths per app, never the text of a reply. Nothing is stored.
+5. **Import.** The same command without `--dry-run` (free, audited). One import is one run dated `collected_on`; both that date and the import time are kept.
+6. **Publish.** As for every recorded answer: `python -m live_genesis.snapshot --export --archive-only`, read `published/archive.json`, `--approve --i-have-read-it`, `--check`, commit, push. An archive that holds only hand-entered replies can be exported.
+
+### Keep the conditions the same
+A chat app's reply depends on how it is asked. Record the conditions every time, and keep them the same from month to month:
+- **Account:** a logged-in **free** account is recommended (`free_account`). `logged_out` and `paid_account` are accepted, but do not switch between them.
+- **Temporary chat:** use the app's temporary or private chat where it has one: ChatGPT "Temporary Chat", Gemini "Temporary chat", Grok "Private Chat". Copilot has none: switch memory and personalisation off and start a new chat (`temporary_chat: false`, `memory_off: true`).
+- **Memory off**, same **country**, same kind of **app** (web, mobile or desktop).
+- **Search:** if the reply shows a "Sources" or citations indicator, search was on: record `web_search: "on"`. If you switched it off, `"off"`. If you cannot tell, `"unknown"`.
+- **Shown model:** the model name the app displays, or `"not shown"`.
+- `fresh_chat` must be `true`: a file with `false` is refused.
+
+When an app's recorded conditions differ from its date before, the pages mark that date (a dot on its square, and "conditions changed · search: off → on" in the cell): a changed reply there may not mean the app changed. A different shown model is reported separately ("new shown model").
+
+### What the importer checks and refuses
+- The whole file is checked before anything is written; every problem is named by place and rule. Strict JSON, closed keys, complete conditions with closed choices, exactly the configured questions for each app, every prompt unchanged, exactly one of `answer`, `answer_file` or `skipped`.
+- `collected_on` may not be in the future and may not be more than 14 days old (`--allow-old` lifts the second rule).
+- One run per app and day, and an app's dates only move forward: a second import for the same `collected_on` and app is refused, and so is a date before one already recorded. A stored reply is never replaced.
+- Both question sets must be locked in the database and their files must match the locks.
+- A database that holds scripted demo answers is refused. There is no override: test in a scratch database (`LIVE_DB=...`) where you lock both sets.
+- Every reply passes the content guards and the character rule. A failing reply is stored as **withheld** with the category only, as for a model answer. A reply of up to 2000 characters is stored in full, as pasted (markdown and citation markers included); a longer one is stored as "no answer".
+- "Changed" compares a reply with that app's previous hand-entered reply to the same question, by the same plain text comparison as for models.
+
+### Where it is kept and shown
+Hand-entered replies live in three append-only tables of their own (`archive_chatbot_runs`, `archive_chatbot_conditions`, `archive_chatbot_answers`). They are never rows of the model grids or strips and never take part in a model's "changed". In `archive.json` they are the `chatbots` block, and a file that holds it is marked `live-genesis-archive/4`; a file without it is still `live-genesis-archive/3`, exactly as before. `--check` refuses an answer to a question outside its run's recorded id list, an app that is not in `archive_chatbots.json` (or not under the name, maker and attribution that file gives), an answer without recorded conditions, and any key it does not know. The guards run again on export. A screenshot is exported as its hash only.
+
+Pages: `archive/chatbots.html` (the ten questions, one strip per app, how each app was asked, the method), a second grid "Chat apps, entered by hand" on each of the ten question pages, and share cards `archive/card/<ID>-chatbots.html` (up to four apps) and `archive/card/<ID>-<app label>.html` (one app, larger text, its conditions). The label **entered by hand** means a person typed the question into the app and pasted the reply: there is no receipt, so it cannot be verified. Product names appear as plain text only, never as a logo and never larger than the question; every Grok cell and panel says "Written with Grok". Where real replies are shown the page says: "These answers were generated by AI: each was typed by hand into the named app on the date and under the conditions shown, and copied unedited. This site is independent and is not affiliated with, sponsored by or endorsed by OpenAI, Google, xAI or Microsoft; product names are their owners' trademarks. The answers may be inaccurate and are not advice."
+
+The scripted demo (`demo-archive`) shows this track under made-up names only (`chat-app-a` to `chat-app-d`, "Chat app A" ...), every cell labelled scripted demo. It never puts words in a real product's mouth; a test checks that no demo page or payload holds one of the four real names.
+
+### Terms: what was and was not checked
+- The owner must read each service's current terms about publishing its output before posting or pushing. This project has not verified them for you, and they change: read them again before each monthly session.
+- Copilot's consumer terms limit use to "your own personal use". Copilot may therefore have to be dropped from the track before the project earns any money.
+- The wording attributed here to OpenAI and xAI (including xAI's request for the "Written with Grok" attribution) was not verified on the live pages. Check it yourself.
+- Nothing here is legal advice.
+
+### Upgrading a database from before this track
+Back up first (`python -m live_genesis.cli backup NEW-FILE`), as before every upgrade. Any CLI command or the app then adds the three tables in place. Nothing recorded is rewritten or rebuilt, and an existing export still passes `--check`.
+
 ## Human voting (not built)
 The plan, recorded so it is not built by accident:
 - **First step: the platforms' own polls.** A TikTok or Instagram post of a share card can carry the platform's poll sticker ("Which answer is right?"). Nothing has to be built, and the votes stay on the platform.
@@ -187,7 +238,10 @@ python -m live_genesis.cli archive-status     # free: lock state, file state, ru
 python -m live_genesis.cli archive-check-endpoints   # free, no model call: each named endpoint's host, key set yes/no, rates, basis
 python -m live_genesis.cli archive-lock       # free, audited, once: the core list
 python -m live_genesis.cli archive-lock --set trending   # free, audited: lock the trending questions added since the last lock
-python -m live_genesis.cli demo-archive       # free: scripted sample (3 fictional models, 8 dated runs, 3 scripted trending questions); demo database only
+python -m live_genesis.cli demo-archive       # free: scripted sample (3 fictional models, 8 dated runs, 3 scripted trending questions, 4 made-up chat apps); demo database only
+python -m live_genesis.cli archive-chatbot-template --out FILE [--date YYYY-MM-DD]   # free: the file to fill in BY HAND for the chat apps
+python -m live_genesis.cli archive-chatbot-import FILE --dry-run                     # free: check a filled-in file, store nothing
+python -m live_genesis.cli archive-chatbot-import FILE [--allow-old]                 # free, audited: store it as one hand-entered run
 # PAID. Only on the owner's explicit word:
 python -m live_genesis.cli archive-run --max-usd 0.02
 python -m live_genesis.cli archive-run --max-usd 0.05 --samples 3   # each question three times; three times the calls and cost
@@ -227,3 +281,4 @@ Back up first (`python -m live_genesis.cli backup NEW-FILE`). Any CLI command or
 - Scripted demo answers and their dates were written by hand. They are not model output. The demo's trending questions are scripted too and are not taken from any real trend list.
 - A trending question says what people were searching for, not what is true or important. The trend list is someone else's data, read once by hand.
 - Cost figures are local estimates.
+- An `entered by hand` reply is what a person says a chat app wrote. There is no receipt. It also shows one reply on one day under the recorded conditions, not what the app "thinks": the same app can answer differently for another account, country or day.

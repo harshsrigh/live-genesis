@@ -1,0 +1,12 @@
+{
+ "format": "live-genesis-chatbots/1",
+ "status": "draft",
+ "note": "The chat-app track of Answers Over Time: the owner asks each app BY HAND and imports the replies from a file (cli archive-chatbot-template, cli archive-chatbot-import). No software ever contacts these apps. The ids below refer to locked questions in archive_questions.json and archive_trending.json; the text and the exact prompt come from there. Until the first real import the ten may be changed; after it, ids may only be added. Names are used only to say which app was asked; this project is not affiliated with their makers.",
+ "chatbots": [
+  {"label": "chatgpt", "name": "ChatGPT", "maker": "OpenAI"},
+  {"label": "gemini", "name": "Gemini", "maker": "Google"},
+  {"label": "grok", "name": "Grok", "maker": "xAI", "attribution": "Written with Grok"},
+  {"label": "copilot", "name": "Copilot", "maker": "Microsoft"}
+ ],
+ "questions": ["Q11", "Q12", "Q13", "T002", "Q16", "Q17", "Q18", "Q03", "T005", "T012"]
+}

@@ -706,9 +706,12 @@ def test_snapshot_holds_trending_pages_and_cards_at_the_same_addresses(ready, tm
     snapshot.build(out)
     names = sorted(str(p.relative_to(out / 'archive')) for p in (out / 'archive').rglob('*.html'))
     assert names == sorted(['index.html', 'trending.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)] + [f't/T00{n}.html' for n in (1, 2, 3)]
-                           + [f'card/Q{n:02d}.html' for n in range(1, 21)] + [f'card/T00{n}.html' for n in (1, 2, 3)])
+                           + [f'card/Q{n:02d}.html' for n in range(1, 21)] + [f'card/T00{n}.html' for n in (1, 2, 3)]
+                           + ['chatbots.html'] + [f'card/{q}-{s}.html' for q in ('Q03', 'Q11', 'Q12', 'Q16', 'Q17', 'T003')
+                                                  for s in ('chatbots', 'chat-app-a', 'chat-app-b', 'chat-app-c', 'chat-app-d')])
     payload = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
-    assert payload['schema'] == 'live-genesis-archive/3' and len(payload['trending']['questions']) == 3
+    # /4: the scripted archive also holds the scripted chat-app track
+    assert payload['schema'] == 'live-genesis-archive/4' and len(payload['trending']['questions']) == 3
     assert (out / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8') == archive_pages.render_card(payload, 'T001')
     assert (out / 'archive' / 'trending.html').read_text(encoding='utf-8') == archive_pages.render_trending(payload)
     for html in (out / 'archive').rglob('*.html'):                               # every relative address resolves inside the snapshot

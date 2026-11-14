@@ -28,7 +28,7 @@ html { -webkit-text-size-adjust: 100%; }
 body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.55; min-height: 100vh; }
 a { color: var(--ink); }
 a:hover { color: var(--accent); }
-a:focus-visible, .grid-scroll:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+a:focus-visible, .grid-scroll:focus-visible, .cell-scroll:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 h1, h2, p, pre { margin: 0; }
 .mono { font-family: var(--mono); }
 .small { font-size: 14px; }
@@ -177,6 +177,20 @@ h1, h2, p, pre { margin: 0; }
 .trend-none { padding: 24px 0; }
 .share { margin-left: auto; font-size: 14px; font-weight: 600; padding: 4px 0; }
 
+/* ---- chat apps: replies entered by hand (chatbots.html, the second grid of a question page) ---- */
+.sq-cond { position: relative; }
+.sq-cond::after { content: ""; position: absolute; top: -5px; right: -5px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); border: 2px solid var(--ground); }
+.chat-head { margin-top: 44px; }
+.cell-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.cond-tag { align-self: flex-start; border: 1px solid var(--accent); color: var(--accent); background: var(--ground); border-radius: 4px; padding: 0 6px; font-size: 11px; font-weight: 700; }
+.cell-chat .cell-meta { line-height: 1.45; }
+.cell-scroll { max-height: 17.5em; overflow-y: auto; padding-right: 6px; }
+.card-links { display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline; }
+.card-links a { font-weight: 600; padding: 4px 0; }
+.app-row { display: flex; flex-wrap: wrap; gap: 8px 40px; padding: 20px 0; border-bottom: 1px solid var(--line); }
+.app-name { flex: 1 1 200px; display: flex; flex-direction: column; gap: 2px; font-size: 18px; }
+.app-how { flex: 3 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 4px; font-size: 15px; overflow-wrap: anywhere; }
+
 /* ---- share card: one 9:16 portrait panel (card/<ID>.html) ----
    Made for a 540 by 960 window (1080 by 1920 at double density). Every size inside is in cqw,
    a hundredth of the card's width, so the card is the same picture at any size and nothing in
@@ -211,6 +225,32 @@ h1, h2, p, pre { margin: 0; }
 .card-foot { flex: none; display: flex; flex-direction: column; gap: 0.8cqw; border-top: 0.2cqw solid var(--line); padding-top: 2.6cqw; font-size: 2.15cqw; line-height: 1.3; color: var(--muted); }
 .card-foot span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-foot span:first-child { color: var(--ink); font-weight: 600; font-size: 2.5cqw; }
+
+/* ---- chat-app share cards (card/<ID>-chatbots.html, card/<ID>-<app>.html) ----
+   Video apps cover parts of a 1080 by 1920 image with their own buttons and captions. On that canvas
+   everything a viewer must read sits inside x 65-940, y 270-1440: in cqw (1080 px = 100cqw) the top band
+   is 25cqw, the body 108.33cqw, left 6.1cqw, right 13cqw. The wordmark is above, the honesty line below.
+   Smallest text on the 1080 canvas: question 73 px, reply 32 px (four apps) or 46 px (one app). */
+.card-safe .card-in { padding: 0; gap: 0; }
+.card-safe .card-top { height: 25cqw; padding: 0 13cqw 0 6.1cqw; }
+.card-safe .card-body { flex: none; height: 108.33cqw; padding: 0 13cqw 0 6.1cqw; display: flex; flex-direction: column; gap: 3cqw; overflow: hidden; }
+.card-safe .card-q-xl { font-size: 11.4cqw; -webkit-line-clamp: 3; line-clamp: 3; }
+.card-safe .card-q-l { font-size: 9.2cqw; -webkit-line-clamp: 4; line-clamp: 4; }
+.card-safe .card-q-m { font-size: 7.4cqw; -webkit-line-clamp: 4; line-clamp: 4; }
+.card-safe .card-q-s { font-size: 6.8cqw; -webkit-line-clamp: 4; line-clamp: 4; }
+.card-safe .card-panels { justify-content: flex-start; gap: 1.5cqw; }
+.card-safe .card-panel { padding: 2.2cqw 3cqw 2.4cqw; gap: 0.9cqw; border-radius: 2.6cqw; }
+.card-safe .card-meta { font-size: 2.5cqw; }
+.card-safe .card-answer { font-size: 3cqw; line-height: 1.3; -webkit-line-clamp: 2; line-clamp: 2; }
+.card-safe .n-3 .card-answer { font-size: 3.3cqw; -webkit-line-clamp: 3; line-clamp: 3; }
+.card-safe .n-2 .card-answer { font-size: 3.8cqw; -webkit-line-clamp: 5; line-clamp: 5; }
+.card-safe .n-1 .card-answer, .card-safe .one .card-answer { font-size: 4.3cqw; line-height: 1.34; -webkit-line-clamp: 9; line-clamp: 9; }
+.card-safe .one .card-panel { padding: 3.4cqw 4cqw 3.6cqw; gap: 1.8cqw; border-radius: 3.4cqw; }
+.card-cond, .card-credit { font-size: 2.4cqw; line-height: 1.35; color: var(--muted); overflow-wrap: anywhere; }
+.card-credit { font-weight: 700; color: var(--ink-soft); }
+.card-panel-changed .card-cond, .card-panel-changed .card-credit { color: var(--on-dark-soft); }
+.card-safe .card-foot { flex: 1 1 0; min-height: 0; margin: 0 7cqw; padding-top: 2.6cqw; justify-content: flex-start; }
+.card-safe .card-foot span:first-child { font-size: 2.3cqw; white-space: normal; }
 
 @media (max-width: 640px) {
   :root { --gutter: 20px; }

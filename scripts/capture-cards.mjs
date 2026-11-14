@@ -4,6 +4,11 @@
 //   node scripts/capture-cards.mjs --site ./site --out ./cards
 //   node scripts/capture-cards.mjs --url https://example.org/project/ --out ./cards --ids Q11,T001
 //   node scripts/capture-cards.mjs --site ./site --out ./cards --set trending
+//   node scripts/capture-cards.mjs --site ./site --out ./cards --ids Q11-chatbots,Q11-grok
+//
+// Chat-app cards (replies the owner typed in by hand) are archive/card/<ID>-chatbots.html (all apps)
+// and archive/card/<ID>-<app label>.html (one app). They are captured like any other card; this script
+// only photographs pages of the site it is given and never opens a chat app.
 //
 // Opens archive/card/<ID>.html at 540 x 960 CSS pixels with a device scale factor of 2 and writes
 // <out>/<ID>.png. It reads the local site folder (--site) or the one base URL given (--url) and
@@ -23,14 +28,14 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 const WIDTH = 540, HEIGHT = 960, SCALE = 2;
-const ID = /^(Q[0-9]{2}|T[0-9]{3})$/;
+const ID = /^(Q[0-9]{2}|T[0-9]{3})(-[a-z][a-z0-9-]{1,23})?$/;
 const SETS = { core: 'Q', trending: 'T' };
 const USAGE = `Usage: node scripts/capture-cards.mjs (--site DIR | --url BASE) --out DIR [--ids Q11,T001] [--set core|trending]
 
   --site DIR   a built site folder (the output of: python -m live_genesis.snapshot DIR)
   --url BASE   the address of a served site, e.g. http://127.0.0.1:8000/ or the published site
   --out DIR    where the PNG files go (created if missing)
-  --ids LIST   comma-separated question ids; default: every card of the site
+  --ids LIST   comma-separated card names (Q11, T001, Q11-chatbots, Q11-grok); default: every card of the site
   --set NAME   core (Q..) or trending (T..) only`;
 
 class Problem extends Error {}
@@ -54,7 +59,7 @@ function parseArgs(argv) {
   if (options.ids !== undefined) {
     options.ids = options.ids.split(',').map((id) => id.trim()).filter(Boolean);
     const bad = options.ids.filter((id) => !ID.test(id));
-    if (bad.length || !options.ids.length) throw new Problem(`--ids takes ids such as Q11 or T001${bad.length ? `; not: ${bad.join(', ')}` : ''}`);
+    if (bad.length || !options.ids.length) throw new Problem(`--ids takes ids such as Q11, T001 or Q11-chatbots${bad.length ? `; not: ${bad.join(', ')}` : ''}`);
     options.ids = [...new Set(options.ids)];
   }
   return options;
@@ -151,6 +156,14 @@ async function main() {
         }
         const trending = data.trending && Array.isArray(data.trending.questions) ? data.trending.questions : [];
         ids = [...data.questions, ...trending].map((q) => String(q && q.id)).filter((id) => ID.test(id));
+        // The chat-app track, when the site has one: per question, one card for all apps and one per app.
+        const chat = data.chatbots && Array.isArray(data.chatbots.questions) && Array.isArray(data.chatbots.apps) ? data.chatbots : null;
+        if (chat) {
+          for (const question of chat.questions) {
+            for (const suffix of ['chatbots', ...chat.apps.map((app) => String(app && app.label))]) ids.push(`${question}-${suffix}`);
+          }
+          ids = ids.filter((id) => ID.test(id));
+        }
       }
     }
     if (options.set) ids = ids.filter((id) => id.startsWith(SETS[options.set]));

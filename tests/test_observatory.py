@@ -41,7 +41,7 @@ def test_route_allow_list():
         seen.add(route.path)
     assert seen == {'/', '/stats.html', '/post/{name}', '/profile/{name}', '/static', '/health', '/api/overview',
                     '/archive', '/archive/', '/archive/index.html', '/archive/q/{name}',
-                    '/archive/trending.html', '/archive/t/{name}', '/archive/card/{name}'}
+                    '/archive/trending.html', '/archive/chatbots.html', '/archive/t/{name}', '/archive/card/{name}'}
     assert not any('agent' in path for path in seen)
     assert app.openapi_url is None and app.docs_url is None and app.redoc_url is None
 

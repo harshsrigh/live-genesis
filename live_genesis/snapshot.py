@@ -25,6 +25,12 @@ The export also carries `archive.json` (Answers Over Time: questions, runs and a
 answers are never in it) under the same hash, manifest, guard and ASCII rules, and every
 snapshot holds the archive pages under `archive/` (archive_pages.py; plain HTML, no script).
 
+Replies the owner collected from chat apps BY HAND (archive_chatbots.py) are part of `archive.json`
+(its optional `chatbots` block, payload schema /4): they pass the same guards, the closed key sets and
+`--check`, which also refuses a chat app that is not in `archive_chatbots.json`, an answer to a question
+outside its run's recorded id list and an answer without recorded conditions. A screenshot is exported
+as its sha256 only. An archive that holds only such replies can be exported.
+
 `--export --archive-only` writes `archive.json` and `MANIFEST.json` and nothing else: no society
 table is read (no post, document, proposal, game or profile) and no `overview.json` exists. An answer
 an outside agent submitted over the API is part of the archive and is exported with that agent's name
@@ -52,7 +58,7 @@ import re
 import shutil
 from pathlib import Path
 
-from . import agentkit, archive, archive_pages, guards, pages, tasks
+from . import agentkit, archive, archive_chatbots, archive_pages, guards, pages, tasks
 from .core import overview, utcnow
 from .web import CONTENT_SECURITY_POLICY
 
@@ -408,10 +414,18 @@ def _counts(data: dict) -> tuple[dict, dict]:
 def _archive_counts(answers: dict) -> dict:
     by_source = {name: sum(1 for a in answers["answers"] if a.get("source") == name) for name in archive.SOURCES}
     trending = answers["trending"]
-    return {"file": ARCHIVE_FILE, "answers_by_source": by_source, "runs": len(answers["runs"]),
-            "questions": len(answers["questions"]), "question_set": answers["question_set"], "set_hash": answers["set_hash"],
-            "trending": {"questions": len(trending["questions"]), "question_set": trending["question_set"],
-                         "set_hash": trending["set_hash"], "version": trending["version"]}}
+    counts = {"file": ARCHIVE_FILE, "answers_by_source": by_source, "runs": len(answers["runs"]),
+              "questions": len(answers["questions"]), "question_set": answers["question_set"], "set_hash": answers["set_hash"],
+              "trending": {"questions": len(trending["questions"]), "question_set": trending["question_set"],
+                           "set_hash": trending["set_hash"], "version": trending["version"]}}
+    if "chatbots" in answers:   # only for a file that holds the hand-entered chat-app track: any other manifest is unchanged
+        chat = answers["chatbots"]
+        counts["chatbots"] = {"runs": len(chat["runs"]), "answers": len(chat["answers"]), "apps": [app["label"] for app in chat["apps"]]}
+    return counts
+
+
+def _chat_answers(answers: dict) -> list:
+    return answers.get("chatbots", {}).get("answers", [])
 
 
 def _archive_problem(answers: object) -> str | None:
@@ -427,6 +441,14 @@ def _archive_problem(answers: object) -> str | None:
         return problem
     if any(a["source"] == "demo" for a in answers["answers"]) or any(run["demo"] for run in answers["runs"]):
         return "it holds scripted demo answers; the demo is published without review"
+    if "chatbots" in answers:
+        # Hand-entered chat-app replies: never scripted ones, only apps of the checked-in configuration, closed keys,
+        # and both question sets locked (the importer requires that too).
+        problem = archive_chatbots.export_problem(answers["chatbots"])
+        if problem:
+            return problem
+        if not (answers["locked"] and answers["trending"]["locked"]):
+            return "it holds hand-entered chat-app answers but a question list is not locked"
     if answers["answers"] and not answers["locked"] and not answers["trending"]["locked"]:
         return "it holds answers but the question list is not locked"
     for track, ids in (("core", {q["id"] for q in answers["questions"]}), ("trending", {q["id"] for q in answers["trending"]["questions"]})):
@@ -481,7 +503,7 @@ def export_published(target: str | Path | None = None, *, replace: bool = False,
         if data["snapshot"]["demo_only"]:
             raise RuntimeError("Export refused; nothing was written. This database holds scripted demo data only, "
                                "so there is nothing to review: the scripted demo is already the public site.")
-    problem = _archive_problem(answers) or (NO_ANSWERS if archive_only and not answers["answers"] else None)
+    problem = _archive_problem(answers) or (NO_ANSWERS if archive_only and not answers["answers"] and not _chat_answers(answers) else None)
     if problem:
         raise RuntimeError(f"Export refused; nothing was written. Answers Over Time: {problem}.")
     hits = ([] if archive_only else _scan(data)) + [f"archive {hit}" for hit in _scan(answers)]
@@ -638,7 +660,7 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
         raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is not an exported answer archive") from None
     problem = _archive_problem(answers)
     if not problem and not full:   # with no overview beside it, the archive must itself be recorded data
-        problem = (NO_ANSWERS if not answers["answers"] else
+        problem = (NO_ANSWERS if not answers["answers"] and not _chat_answers(answers) else
                    "it is scripted demo data only; the demo is published without review" if answers["demo_only"] is not False else None)
     if problem:
         raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is refused: {problem}")
@@ -710,6 +732,9 @@ def _describe(manifest: dict) -> str:
             + ", ".join(f"{name} {n}" for name, n in answered["answers_by_source"].items())
             + (f"\n  NOTE: {outside} answer(s) in {ARCHIVE_FILE} were submitted by outside agents over the API. Each one "
                "carries that agent's name and its self-declared model." if outside else "")
+            + (f"\n  NOTE: {answered['chatbots']['answers']} row(s) in {ARCHIVE_FILE} are chat-app replies ENTERED BY HAND "
+               f"({', '.join(answered['chatbots']['apps'])}; {answered['chatbots']['runs']} run(s)). They cannot be verified. Read "
+               "each service's current terms about publishing its output before you push." if "chatbots" in answered else "")
             + f"\n  {ARCHIVE_FILE} sha256 {answered['sha256']}")
 
 
