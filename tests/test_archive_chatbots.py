@@ -789,7 +789,7 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     assert ('<details><summary>Exactly what we asked</summary><pre class="prompt mono">' + archive_pages.esc(PREFIX)
             + '\n\nIs a hot dog a sandwich?</pre>') in page
     assert page.count('<details>') == 3 and '<details open' not in page
-    assert 'href="../card/C001.html">Everyone</a>' in page and 'href="../card/C001-grok.html">Grok</a>' in page
+    assert 'href="../card/C001.html">All answers</a>' in page and 'href="../card/C001-grok.html">Grok</a>' in page
     assert 'href="../card/C001-human.html">Human</a>' in page
     # A refusal, a skipped reply: stored, in the payload, on no page; the page says so once, plainly.
     four = pages['c/C004.html']

@@ -974,7 +974,7 @@ def _more(ids: _Ids, text: str, classes: str, clamp: str, what: str, prop: str =
         return body
     box = ids.next()
     return (f'<input class="more-box {clamp[6:]}" type="checkbox" id="{box}" aria-label="{esc(what)}" />{body}'
-            f'<label class="more {clamp[6:]}" for="{box}"><span class="more-open">More</span><span class="more-close">Less</span></label>')
+            f'<label class="more {clamp[6:]}" for="{box}"><span class="more-open">Show more</span><span class="more-close">Show less</span></label>')
 
 
 def _author(column: dict, sample: bool) -> str:
@@ -1147,7 +1147,7 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
                             for column in board["columns"] if _latest(board, column["key"]))
             body.append(f'<p class="under muted">{esc(line)}</p>\n'
                         f'<p class="card-links small"><span class="muted">Share cards:</span>'
-                        f'<a href="../card/{esc(question_id)}.html">Everyone</a>{cards}</p>\n')
+                        f'<a href="../card/{esc(question_id)}.html">All answers</a>{cards}</p>\n')
         else:
             body.append(f'<p class="card-links card-links-one small"><a href="../card/{esc(question_id)}.html">Share card</a></p>\n')
         body.append(_table(board))

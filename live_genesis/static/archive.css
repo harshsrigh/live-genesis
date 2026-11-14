@@ -48,6 +48,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .bar nav::-webkit-scrollbar { display: none; }
 .bar nav a { flex: none; line-height: 46px; text-decoration: none; border-bottom: 3px solid transparent; border-top: 3px solid transparent; }
 .bar nav a[aria-current="page"] { border-bottom-color: var(--accent); }
+.bar nav a:focus-visible { outline-offset: -3px; }
 
 .wrap { max-width: 1280px; margin: 0 auto; padding: 0 var(--gutter); }
 .wrap-foot { padding-bottom: 3rem; }
@@ -318,6 +319,12 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .src .mono { font-size: 0.75rem; font-weight: 700; color: var(--accent); margin-right: 0.3rem; }
 
 @media (max-width: 699px) {
+  /* Keep every destination visible, including at enlarged text sizes. */
+  .bar-in { height: auto; min-height: 52px; flex-wrap: wrap; padding-top: 0.75rem; }
+  .bar nav { flex: 1 1 100%; flex-wrap: wrap; gap: 0 1.25rem; overflow: visible; white-space: normal; }
+  .bar nav a { min-height: 2.75rem; line-height: 1.4; padding: 0.6rem 0; }
+  .month-strip label, .more, .card-links a { min-height: 2.75rem; display: inline-flex; align-items: center; }
+  .hist summary, .more-info summary { min-height: 2.75rem; padding: 0.65rem 0; }
   :root { --gutter: 1rem; }
   .bar-in { gap: 1rem; }
   .wordmark { font-size: 1rem; gap: 0.4rem; }
