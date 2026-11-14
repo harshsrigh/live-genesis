@@ -241,7 +241,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .before { display: flex; flex-direction: column; gap: 0.1rem; padding-top: 0.3rem; border-top: 1px solid var(--line); }
 .before-when { font-size: 0.75rem; font-weight: 700; color: var(--ink-soft); margin-right: 0.4rem; }
 .before-text { font-size: 0.875rem; line-height: 1.4; color: var(--muted); white-space: pre-line; }
-.before .clamp { -webkit-line-clamp: 3; line-clamp: 3; }
+.before .clamp { -webkit-line-clamp: 2; line-clamp: 2; }
 .credit { font-size: 0.75rem; font-weight: 600; color: var(--ink-soft); }
 .hist summary, .more-info summary { cursor: pointer; font-size: 0.8125rem; font-weight: 600; color: var(--ink-soft); }
 .hist-list { list-style: none; padding: 0.4rem 0 0; display: flex; flex-direction: column; gap: 0.5rem; }
@@ -261,6 +261,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .q-hero .tag { padding: 0.15rem 0.5rem; }
 }
 @media (min-width: 700px) {
+  .card-links-one { display: none; }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cards.n-1 { grid-template-columns: minmax(0, 40rem); }
   .ans { font-size: 1rem; line-height: 1.5rem; }
@@ -287,8 +288,8 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .history caption { text-align: left; font-size: 0.8125rem; color: var(--muted); padding-bottom: 0.5rem; }
 .history th, .history td { text-align: left; vertical-align: top; padding: 0.5rem 0.75rem 0.5rem 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .history thead th { font-family: var(--mono); font-size: 0.75rem; font-weight: 700; color: var(--ink-soft); border-top: 2px solid var(--ink); }
-.history thead th:first-child, .history tbody th { width: 7.5rem; }
-.history tbody th { font-family: var(--display); font-weight: 700; font-size: 0.9375rem; white-space: nowrap; }
+.history thead th:first-child, .history tbody th { width: 8rem; }
+.history tbody th { font-family: var(--display); font-weight: 700; font-size: 0.9375rem; }
 .t-same, .t-none { color: var(--muted); font-size: 0.8125rem; }
 .t-word { display: block; font-size: 0.75rem; font-weight: 700; color: var(--accent); }
 .t-text { display: block; white-space: pre-line; }
@@ -413,9 +414,9 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .card-q-l { font-size: 8.2cqw; line-height: 1; -webkit-line-clamp: 3; line-clamp: 3; }
   .card-q-m { font-size: 6cqw; line-height: 1.02; -webkit-line-clamp: 4; line-clamp: 4; }
   .card-q-s { font-size: 5cqw; line-height: 1.05; -webkit-line-clamp: 6; line-clamp: 6; }
-  /* Four panels leave the question about 17cqw: two lines at 7 (up to 34 characters), three at 4.8, four at 3.9. */
+  /* Four panels leave the question about 17cqw: two lines at 7 (up to 34 characters), three at 5.6, four at 3.9. */
   .card-four .card-q-f1 { font-size: 7cqw; line-height: 1.02; -webkit-line-clamp: 2; line-clamp: 2; }
-  .card-four .card-q-f2 { font-size: 4.8cqw; line-height: 1.05; -webkit-line-clamp: 3; line-clamp: 3; }
+  .card-four .card-q-f2 { font-size: 5.6cqw; line-height: 1.05; -webkit-line-clamp: 3; line-clamp: 3; }
   .card-four .card-q-f3 { font-size: 3.9cqw; line-height: 1.08; -webkit-line-clamp: 4; line-clamp: 4; }
   .card-panels { flex: 0 1 auto; min-height: 0; justify-content: flex-start; gap: 1.2cqw; overflow: hidden; }
   .card-panel { flex: none; border-radius: 2.6cqw; border-width: 0.3cqw; border-left-width: 0.9cqw; padding: 1.6cqw 2.8cqw 1.8cqw 2.2cqw; gap: 0.5cqw; }

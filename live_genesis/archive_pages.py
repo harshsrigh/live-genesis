@@ -88,7 +88,7 @@ CARD_CLAMP_CHARS = {1: 160, 2: 115, 3: 100, 4: 110}   # panels on a card -> char
 # Server-side thresholds for the "More" control: longer than the first is clamped on a phone, than the second also on
 # a tablet, than the third everywhere. Chosen so that a shorter text always fits the clamp of that width.
 CLAMP_PHONE, CLAMP_TABLET, CLAMP_DESKTOP = 140, 240, 300
-BEFORE_CLAMP = 85
+BEFORE_CLAMP = 140
 TABLE_CLAMP = 320
 MAX_PANELS = 24                # month panels on a question page (the stylesheet has rules for this many); the table has all
 # Why a model has no answers in a run it was dropped from (archive.SKIP_REASONS), in plain words.
@@ -1124,7 +1124,7 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
                         f'<p class="card-links small"><span class="muted">Share cards:</span>'
                         f'<a href="../card/{esc(question_id)}.html">Everyone</a>{cards}</p>\n')
         else:
-            body.append(f'<p class="card-links small"><a href="../card/{esc(question_id)}.html">Share card</a></p>\n')
+            body.append(f'<p class="card-links card-links-one small"><a href="../card/{esc(question_id)}.html">Share card</a></p>\n')
         body.append(_table(board))
     else:
         body.append('<p class="muted">No answers have been recorded for this question yet.</p>\n')
