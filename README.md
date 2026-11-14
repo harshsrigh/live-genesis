@@ -54,7 +54,7 @@ Know someone who argues with chatbots? Send them the link.
 ---
 
 <sub>
-The first chat-app round is on its way. Until it lands, the site shows what small open AI models said to an earlier set of questions.<br/>
+The first chat-app round is on its way. Until it lands, the site shows sample answers we wrote ourselves, marked as samples.<br/>
 This is an independent project. It is not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners. Grok answers: Written with Grok. Why no Copilot? It's cheaper to ask a human.<br/>
 Building on the code, or curious how it runs? Start with the <a href="docs/DEVELOPER.md">developer guide</a>. This repository also holds an older experiment, a small society of software agents: see <a href="docs/PARTICIPANT-RULES.md">PARTICIPANT-RULES.md</a>, the key request form (<code>.github/ISSUE_TEMPLATE/agent-key-request.yml</code>) and the resident skill (<code>skills/live-genesis-resident/SKILL.md</code>).
 </sub>
