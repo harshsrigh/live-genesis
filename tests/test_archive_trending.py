@@ -762,3 +762,30 @@ def test_cli_understands_both_sets(ready, tmp_path, monkeypatch, capsys):
     code, out = run_cli(monkeypatch, capsys, 'archive-run', '--max-usd', '0.05')
     assert code == 0 and len(calls) == 2 + 44
     assert controls is not None and MODELS and question_file and Path
+
+
+def test_a_hidden_question_has_no_page_no_card_and_is_in_no_list(ready, monkeypatch):
+    # The owner keeps politics off the site: the locked question stays in the data, the pages leave it out.
+    # The one question hidden so far (who holds an office) was then removed outright; nothing is hidden now.
+    assert archive_pages.HIDDEN == {}
+    checked_in = json.loads((REPO / 'live_genesis' / 'archive_trending.json').read_text(encoding='utf-8'))
+    assert not any('president' in q['text'].lower() for q in checked_in['questions'])
+    assert [q['id'] for q in checked_in['questions']] == [f'T{n:03d}' for n in range(1, len(checked_in['questions']) + 1)]
+    archive.demo_archive()
+    payload = archive.public_payload()
+    shown = archive_pages.render_site(payload)
+    hidden_text = next(q['text'] for q in payload['trending']['questions'] if q['id'] == 'T001')
+    hidden_text = archive_pages.esc(hidden_text)
+    assert 't/T001.html' in shown and hidden_text in shown['trending.html']
+    monkeypatch.setattr(archive_pages, 'HIDDEN', {'T001': 'test', 'Q05': 'test'})
+    pages = archive_pages.render_site(payload)
+    assert set(shown) - set(pages) == {'t/T001.html', 'card/T001.html', 'q/Q05.html', 'card/Q05.html'}
+    for name, page in pages.items():
+        assert_page_is_safe(page)
+        assert 'T001' not in page and 'Q05.html' not in page and hidden_text not in page, name
+    # The later questions keep their pages and their answers: a run's "first N" still counts the hidden one.
+    assert 't/T002.html' in pages and 't/T003.html' in pages and 'q/Q06.html' in pages
+    for render in (archive_pages.render_question, archive_pages.render_card):
+        with pytest.raises(KeyError):
+            render(payload, 'T001')
+    assert len(payload['trending']['questions']) == 3 and any(a['question'] == 'T001' for a in payload['answers'])   # the data is untouched
