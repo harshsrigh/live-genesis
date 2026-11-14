@@ -158,7 +158,7 @@ def _text_or_none(value: Any) -> str | None:
 
 
 def _chat(client: Any, model: str, system: str, prompt: str, max_output_tokens: int, *, json_mode: bool,
-          reasoning_effort: str | None, sampling: dict | None) -> Completion:
+          reasoning_effort: str | None, sampling: dict | None, free_openrouter: bool = False) -> Completion:
     """One Chat Completions request on a client that is already built. Shared by the single
     `openai-compatible` provider and the named archive endpoints."""
     request: dict[str, Any] = {'model': model, 'max_tokens': max_output_tokens,
@@ -169,6 +169,14 @@ def _chat(client: Any, model: str, system: str, prompt: str, max_output_tokens: 
         request['reasoning_effort'] = reasoning_effort
     sent = {key: sampling[key] for key in ('temperature', 'seed') if sampling and key in sampling}
     request.update(sent)
+    if free_openrouter:
+        from .openrouter_setup import FREE_ID
+        if not FREE_ID.fullmatch(model):
+            raise ProviderNotReady('Free-only OpenRouter requires an explicit :free model ID')
+        request['extra_body'] = {'provider': {
+            'allow_fallbacks': False,
+            'max_price': {'prompt': 0, 'completion': 0, 'request': 0, 'image': 0},
+        }}
     response = client.chat.completions.create(**request)
     usage = getattr(response, 'usage', None)
     tokens = (getattr(usage, 'prompt_tokens', None), getattr(usage, 'completion_tokens', None))
@@ -241,7 +249,8 @@ def infer(provider: str, model: str, prompt: str, *, system: str | None = None, 
         with httpx.Client(follow_redirects=False, timeout=timeout, trust_env=_trust_env(endpoint.base_url)) as http:
             client = OpenAI(base_url=endpoint.base_url, api_key=endpoint_key, timeout=timeout, max_retries=0, http_client=http)
             return _chat(client, model, system, prompt, max_output_tokens, json_mode=False,
-                         reasoning_effort=endpoint.reasoning_effort, sampling=sampling)
+                         reasoning_effort=endpoint.reasoning_effort, sampling=sampling,
+                         free_openrouter=(endpoint.host == 'openrouter.ai' and endpoint.basis == providers.BASIS_FREE))
     if compat:
         # Any server speaking the OpenAI Chat Completions API (local or hosted). The base URL and key are
         # passed explicitly, never taken from OPENAI_* variables. Exceptions from here on are caught by the
