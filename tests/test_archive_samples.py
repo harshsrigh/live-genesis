@@ -442,7 +442,7 @@ def test_export_check_and_tampering_with_sample_fields(ready, tmp_path, monkeypa
     archive.run_archive(max_usd=1, samples=3)
     out = tmp_path / 'published'
     manifest = snapshot.export_published(out)
-    assert manifest['schema'] == 'live-genesis-published/4' and manifest['archive']['answers_by_source']['engine'] == 40
+    assert manifest['schema'] == 'live-genesis-published/5' and manifest['archive']['answers_by_source']['engine'] == 40
     exported = json.loads((out / 'archive.json').read_bytes())
     assert exported['schema'] == 'live-genesis-archive/3' and exported == json.loads(json.dumps(archive.public_payload()))
     assert exported['runs'][0]['samples'] == 3 and cell(exported)['others'] == [{'text': 'Six.', 'count': 1}]

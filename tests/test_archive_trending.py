@@ -421,7 +421,7 @@ def test_export_and_check_understand_both_sets(ready, tmp_path, monkeypatch):
     manifest = snapshot.export_published(out)
     assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']        # still one archive file
     trend_hash = rows("SELECT sha256 FROM archive_set_versions WHERE question_set='trending'")[0]['sha256']
-    assert manifest['schema'] == 'live-genesis-published/4' and manifest['archive']['runs'] == 2
+    assert manifest['schema'] == 'live-genesis-published/5' and manifest['archive']['runs'] == 2
     assert manifest['archive']['trending'] == {'questions': 2, 'question_set': 'trending', 'set_hash': trend_hash, 'version': 1}
     assert manifest['archive']['answers_by_source'] == {'engine': 84, 'api': 0, 'demo': 0, 'mock': 0}
     exported = json.loads((out / 'archive.json').read_bytes())
@@ -470,7 +470,7 @@ def test_export_and_check_understand_both_sets(ready, tmp_path, monkeypatch):
         snapshot.check_published(out)
     manifest = json.loads(good['MANIFEST.json']); manifest['schema'] = 'live-genesis-published/2'
     (out / 'MANIFEST.json').write_text(json.dumps(manifest))
-    with pytest.raises(RuntimeError, match='not a live-genesis-published/4 manifest'):                       # an export made before the upgrade
+    with pytest.raises(RuntimeError, match='not a live-genesis-published/5 manifest'):                       # an export made before the upgrade
         snapshot.check_published(out)
 
 
