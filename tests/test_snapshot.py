@@ -317,7 +317,7 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
     assert lines and {line['answerer_kind'] for line in lines} == {'chat-app', 'human'}
     assert {line['question_id'] for line in lines} == set(CHAT_DEMO_IDS) and {line['provenance'] for line in lines} == {'scripted-sample'}
     readme = (out / 'archive' / 'data' / 'README.txt').read_text(encoding='utf-8')
-    assert readme == archive_pages.README_CHAT != archive_pages.README and 'scripted-sample' in readme and 'typed-by-hand' in readme
+    assert readme == archive_pages.README_CHAT != archive_pages.README and 'scripted-sample' in readme and 'typed-by-hand' not in readme and 'by hand' not in readme
     assert 'chat-app | human' in readme and 'not affiliated' in readme and 'It may be wrong.' in readme
     bodies = [post['body'] for post in snapshot._capture()['posts']]
     assert len(bodies) > 3 and all(len(body) > 20 for body in bodies)

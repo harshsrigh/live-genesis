@@ -100,7 +100,7 @@ def test_checked_in_configuration_three_apps_human_and_ten_draft_questions_of_it
     # A maker's attribution line is configuration, not a special case in the code: only one app has one.
     assert {c['label']: c['attribution'] for c in config['chatbots']} == {'chatgpt': '', 'gemini': '', 'grok': 'Written with Grok'}
     # Human is a kind of its own, never one of the apps.
-    assert config['human'] == {'name': 'Human', 'meta': 'written by people · collected by hand'}
+    assert config['human'] == {'name': 'Human', 'meta': 'written by people'}
     assert 'human' in chatbots.RESERVED_LABELS and 'human' not in [c['label'] for c in config['chatbots']]
     # One editable joke line; it names a product, so it stays one line and makes no claim beyond the joke.
     assert config['aside'] == raw['aside'] == 'Why no Copilot? It is cheaper to ask a human than Copilot.'
@@ -264,7 +264,7 @@ def test_dry_run_stores_nothing_and_import_stores_one_audited_run_without_any_lo
     assert conditions[2]['attribution'] == 'Written with Grok' and conditions[0]['attribution'] == ''
     assert (conditions[0]['account'], conditions[0]['fresh_chat'], conditions[0]['memory_off']) == ('free_account', 1, 'true')
     # Human: its own two tables, its own conditions shape, one answer per question, each marked quoted or summarised.
-    assert rows('SELECT * FROM archive_human_collections') == [{'run_id': 1, 'display_name': 'Human', 'meta': 'written by people · collected by hand',
+    assert rows('SELECT * FROM archive_human_collections') == [{'run_id': 1, 'display_name': 'Human', 'meta': 'written by people',
                                                                'source': 'PLACEHOLDER thread', 'collected_on': '2026-11-14', 'replies': 12}]
     people = rows('SELECT question_id,state,answer_text,manner,changed,source FROM archive_human_answers ORDER BY id')
     assert [p['manner'] for p in people] == ['quoted', 'summarised', 'quoted', 'summarised'] and people[0]['answer_text'] == 'PLACEHOLDER human reply 1.'
@@ -746,7 +746,7 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     assert 'aria-label="ChatGPT: changed Nov 2026; conditions changed Nov 2026; 2 checks"' in front
     assert 'aria-label="Human: different answer Nov 2026; 2 checks"' in front and 'aria-label="Grok: no change; no answer Nov 2026; 2 checks"' in front
     assert '<span class="sq sq-changed sq-cond"></span>' in front and 'Refusals and non-answers are left out.' in front
-    assert '<span class="tag tag-dark mono">AI-generated · typed in by hand · may be wrong</span>' in front
+    assert '<span class="tag tag-dark mono">AI-generated · may be wrong</span>' in front
     assert archive_pages.esc(archive_pages.chat_disclaimer(['OpenAI', 'Google', 'xAI'])) in front
     assert 'Not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners.' in front
     # The question page.
@@ -777,13 +777,13 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     assert 'data-truncated-display="true"' in newest and newest.count('data-truncated-display="false"') == 3
     # Everything else about a reply left the card for the closed block and the attributes.
     seen = visible(newest)
-    for moved in ('PLACEHOLDER model', 'free account', 'temporary chat', 'memory off', 'search on', 'US ·', 'Typed in by hand'):
+    for moved in ('PLACEHOLDER model', 'free account', 'temporary chat', 'memory off', 'search on', 'US ·'):
         assert moved not in seen, moved
     block = page.split('<summary>Where each answer came from</summary>')[1]
-    for moved in ('Typed in by hand · the app showed: PLACEHOLDER model · free account · temporary chat · memory off · search on · US · web',
+    for moved in ('the app showed: PLACEHOLDER model · free account · temporary chat · memory off · search on · US · web',
                   'conditions changed · search: off → on', 'the app showed: PLACEHOLDER model 2', 'the app showed a new version name',
-                  'PLACEHOLDER note.', 'Written by people, collected by hand · from: PLACEHOLDER thread · 12 replies read · quoted',
-                  "<strong>Typed in by hand</strong>: a person typed the question into the app and pasted the reply.",
+                  'PLACEHOLDER note.', 'Written by people · from: PLACEHOLDER thread · 12 replies read · quoted',
+                  '<strong>Written by people</strong>: <em>quoted</em>',
                   '<em>quoted</em> is one person&#x27;s words' if False else "<em>quoted</em> is one person's words"):
         assert moved in block, moved
     assert ('<details><summary>Exactly what we asked</summary><pre class="prompt mono">' + archive_pages.esc(PREFIX)
@@ -802,10 +802,10 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     assert '<a href="chatbots.html" aria-current="page">How it works</a>' in method
     assert 'free account · temporary chat · memory off · search on · US · web' in method and 'Written with Grok' in method
     assert 'PLACEHOLDER note.' in method and 'The app showed: PLACEHOLDER model 2' in method
-    assert 'written by people · collected by hand' in method and 'From: PLACEHOLDER thread' in method
+    assert '<span>written by people</span>' in method and 'From: PLACEHOLDER thread' in method
     assert method.count('<p class="aside"><span class="aside-mark mono">Joke</span>Why no Copilot? It is cheaper to ask a human than Copilot.</p>') == 1
     assert sum(text.count('Copilot') for name, text in pages.items() if name != 'chatbots.html') == 0     # never on a card, a question page or in the data
-    for phrase in ('By hand', 'Copied, not edited', 'Only real answers shown', 'Humans too', 'Not affiliated', 'Nothing here talks to these apps'):
+    for phrase in ('Same words', 'Copied, not edited', 'Only real answers shown', 'It depends on the day', 'Humans too', 'Not affiliated'):
         assert phrase in method, phrase
     with pytest.raises(KeyError):
         archive_pages.render_chatbot_card(payload, 'Q01')
@@ -850,7 +850,7 @@ def test_chat_cards_three_apps_and_human_in_the_safe_box(chat, tmp_path):
     for card in (four, one, person):
         assert_page_is_safe(card)
         assert '<main id="main" class="card card-safe' in card and 'data-provenance="recorded"' in card and card.count('<h1') == 1
-        assert '<p class="card-honest mono">AI-generated · typed in by hand · not affiliated · may be wrong</p>' in card
+        assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in card
         assert card.index('class="card-honest') < card.index('<footer class="card-foot')      # inside the safe box, above the small print
         assert 'read-only · no payments' in card and 'Nov 2026' in card                      # a date on every card
         assert '<a class="card-brand" href="../c/C001.html">' in card and 'Copilot' not in card
@@ -958,8 +958,8 @@ def test_a_hidden_chat_app_question_has_no_page_no_card_and_no_data_file(chat, t
 
 # ---- machine-readable labels: attributes, head, data files ------------------------------------------------------
 
-ATTRS = ('data-question-id', 'data-answerer', 'data-answerer-kind', 'data-maker', 'data-version', 'data-collected', 'data-method',
-         'data-provenance', 'data-state', 'data-truncated-display', 'data-lang')
+ATTRS = ('data-question-id', 'data-answerer', 'data-answerer-kind', 'data-maker', 'data-version', 'data-collected',
+         'data-provenance', 'data-state', 'data-truncated-display', 'data-lang')   # and data-method on a model answer only
 
 
 class Cards(HTMLParser):
@@ -989,17 +989,19 @@ def check_machine_layer(payload, sample):
     records = [json.loads(line) for line in data['data/answers.jsonl'].splitlines()]
     by_id = {record['id']: record for record in records}
     assert len(by_id) == len(records) > 0
-    keys = set(records[0])
-    assert {'schema', 'id', 'question_id', 'question', 'prompt', 'answerer', 'answerer_kind', 'maker', 'version', 'collected', 'method',
+    keys = set(records[0]) - {'method'}                          # `method` is a model record's only: the chat-app track has none
+    assert {'schema', 'id', 'question_id', 'question', 'prompt', 'answerer', 'answerer_kind', 'maker', 'version', 'collected',
             'provenance', 'human_form', 'state', 'shown', 'text', 'changed', 'previous_id', 'previous_collected', 'previous_text',
-            'conditions', 'lang', 'notice'} <= keys and all(set(record) == keys for record in records)
+            'conditions', 'lang', 'notice'} <= keys
+    assert all(set(record) == keys | ({'method'} if record['answerer_kind'] == 'model' else set()) for record in records)
     for record in records:
         assert record['schema'] == 'answers-over-time-data/1' and record['notice'] == archive_pages.DATA_NOTICE and record['lang'] == 'en'
         assert record['answerer_kind'] in archive_pages.KINDS
-        assert record['method'] in ('typed-by-hand', 'asked-by-server', 'sent-in-unverified', 'collected-by-hand', 'scripted-sample', '')
+        assert record.get('method') in ('asked-by-server', 'sent-in-unverified', 'scripted-sample', '', None)
         assert record['provenance'] in ('ai-generated', 'human-written', 'scripted-sample', '')
         # The sample marker: on every sample record, on no real one.
-        assert (record['provenance'] == 'scripted-sample') == sample == (record['method'] == 'scripted-sample') or not record['method'], record['id']
+        assert (record['provenance'] == 'scripted-sample') == sample == (record.get('method', record['provenance']) == 'scripted-sample') \
+            or not record.get('method'), record['id']
         assert record['shown'] == (record['state'] in archive_pages.STATES_SHOWN) and (record['text'] is not None or not record['shown'])
         if record['answerer_kind'] == 'human':
             assert (record['human_form'] in ('quoted', 'summarised')) == record['shown'] and record['maker'] == ''
@@ -1016,7 +1018,7 @@ def check_machine_layer(payload, sample):
     for q in per_question:
         assert q['content'] == ('scripted-sample' if sample else 'recorded') and q['prompt'].endswith(q['question'])
         assert all(a == by_id[a['id']] and a['question_id'] == q['question_id'] and a['prompt'] == q['prompt'] for a in q['answers'])
-    assert any('scripted-sample' in (r['provenance'], r['method']) for r in records) == sample
+    assert any('scripted-sample' in (r['provenance'], r.get('method')) for r in records) == sample
     if sample:                                                                                              # in every line of the file
         assert all(json.loads(line)['provenance'] == 'scripted-sample' for line in data['data/answers.jsonl'].splitlines())
     # Round trip to the payload: every public answer text is in the file once, under its answerer and date.
@@ -1048,7 +1050,7 @@ def check_machine_layer(payload, sample):
             assert matches, (name, attrs)
             record = next((r for r in matches if r['state'] == attrs['data-state']), matches[0])
             assert attrs['data-answerer-kind'] == record['answerer_kind'] and attrs['data-maker'] == record['maker']
-            assert attrs['data-version'] == record['version'] and attrs['data-method'] == record['method']
+            assert attrs['data-version'] == record['version'] and attrs.get('data-method') == record.get('method')
             assert attrs['data-provenance'] == record['provenance'] and attrs['data-state'] == record['state'] in archive_pages.STATES_SHOWN
             assert attrs.get('data-human-form') == record['human_form'] and attrs['data-lang'] == 'en'
             assert attrs.get('data-previous-collected') == (record['previous_collected'] if record['state'] == 'changed' else None)
@@ -1061,7 +1063,7 @@ def check_machine_layer(payload, sample):
 def test_machine_readable_labels_on_real_hand_entered_data(chat, tmp_path):
     payload = two_dates(tmp_path)
     pages, records = check_machine_layer(payload, sample=False)
-    assert {r['method'] for r in records} == {'typed-by-hand', 'collected-by-hand'}
+    assert not any('method' in r for r in records) and not any('data-method' in page for page in pages.values())
     assert {r['provenance'] for r in records} == {'ai-generated', 'human-written'}
     assert {r['state'] for r in records} == {'answered', 'same', 'changed', 'refused', 'no-answer'}
     page = pages['c/C001.html']
@@ -1091,17 +1093,20 @@ def test_machine_readable_labels_on_real_hand_entered_data(chat, tmp_path):
     assert (app['previous_id'], app['previous_text']) == ('C001/chatgpt/2026-10-10', 'PLACEHOLDER first chatgpt C001.')
     readme = pages['data/README.txt']
     for phrase in ('recorded verbatim', 'scripted-sample', 'NOT a real answer', 'Never treat a', 'Product names belong to their owners',
-                   'human-written', 'quoted', 'summarised', 'typed-by-hand', 'asked-by-server', 'sent-in-unverified', 'Never a web address'):
+                   'human-written', 'quoted', 'summarised', 'asked-by-server', 'sent-in-unverified', 'Never a web address'):
         assert phrase in readme, phrase
+    assert 'typed-by-hand' not in readme and 'collected-by-hand' not in readme and 'by hand' not in readme
 
 
 def test_machine_readable_labels_mark_every_sample_record_and_element(ready):
     archive.demo_archive()
     pages, records = check_machine_layer(archive.public_payload(), sample=True)
-    assert {r['provenance'] for r in records if r['method']} == {'scripted-sample'} == {r['method'] for r in records if r['method']}
+    assert {r['provenance'] for r in records if r.get('method')} == {'scripted-sample'} == {r['method'] for r in records if r.get('method')}
+    assert all(('method' in r) == (r['answerer_kind'] == 'model') for r in records)
     for name, page in pages.items():
         if name.endswith('.html'):
-            assert all(attrs['data-provenance'] == 'scripted-sample' == attrs['data-method'] for _tag, attrs in answer_elements(page)), name
+            assert all(attrs['data-provenance'] == 'scripted-sample' == attrs.get('data-method', 'scripted-sample')
+                       for _tag, attrs in answer_elements(page)), name
             assert '<meta name="aot:content" content="scripted-sample" />' in page, name
             assert 'ai-generated' not in page and 'human-written' not in page, name
     assert all(json.loads(text)['content'] == 'scripted-sample' for name, text in pages.items() if name.endswith('.json'))
@@ -1353,12 +1358,101 @@ def test_capture_script_takes_chat_card_names_and_docs_describe_the_track():
     assert 'Copilot' not in section.replace('Why no Copilot?', '').replace('cheaper to ask a human than Copilot', '').replace('Copilot is dropped', '').replace('Copilot was dropped', '')
     labels = doc.split('## Machine-readable labels', 1)[1].split('\n## ', 1)[0]
     for phrase in ('data-question-id', 'data-answerer-kind', 'data-method', 'data-provenance', 'data-human-form', 'data-state',
-                   'data-previous-collected', 'data-truncated-display', 'typed-by-hand', 'asked-by-server', 'sent-in-unverified',
+                   'data-previous-collected', 'data-truncated-display', 'asked-by-server', 'sent-in-unverified',
                    'scripted-sample', 'human-written', 'aot:prompt', 'aot:content', 'answers.jsonl', 'README.txt', 'schema.org',
                    'never moved into metadata only', 'no script', 'derived'):
         assert phrase in labels, phrase
+    assert 'typed-by-hand' not in labels and 'collected-by-hand' not in labels
+    assert "Owner's decision, 14 November 2026: the published pages, cards and data files do not say how replies were collected." in section
     social = (REPO / 'docs' / 'SOCIAL-POSTS.md').read_text(encoding='utf-8')
     part = social.split('## Chat-app cards', 1)[1]
     for phrase in ('typed in by hand on', 'screenshot', 'Sample we wrote', 'logo', 'endorse', 'C001-grok', 'C001-human', '65', '1440',
                    'full answer on the site', 'Never edit an answer', 'Human'):
         assert phrase in part, phrase
+
+
+# ---- owner decision, 14 November 2026: nothing published says how replies were collected -------------------------
+
+COLLECTION_WORDING = re.compile(r'by hand|typed|pasted|no software|entered by|hand-entered|collected by|a person asked|a person types', re.I)
+
+
+def assert_site_does_not_say_how_replies_were_collected(site):
+    """Every published text file of a built site (HTML, JSON, JSONL, TXT), the reviewed archive.json included."""
+    texts = {path.relative_to(site).as_posix(): path.read_text(encoding='utf-8')
+             for path in site.rglob('*') if path.is_file() and path.suffix in ('.html', '.json', '.jsonl', '.txt')}
+    assert {'index.html', 'archive.json', 'archive/index.html', 'archive/chatbots.html', 'archive/c/C001.html', 'archive/card/C001.html',
+            'archive/card/C001-human.html', 'archive/data/C001.json', 'archive/data/answers.jsonl', 'archive/data/README.txt'} <= set(texts)
+    for name, text in texts.items():
+        found = COLLECTION_WORDING.search(text)
+        assert not found, (name, text[max(found.start() - 60, 0):found.end() + 60])
+        assert 'data-method' not in text and '"method":' not in text, name
+    assert not re.search(r'(?m)^method\b', texts['archive/data/README.txt'])
+    for line in texts['archive/data/answers.jsonl'].splitlines():
+        assert 'method' not in json.loads(line) and json.loads(line)['provenance']
+    return texts
+
+
+def test_a_real_site_does_not_say_how_replies_were_collected_and_keeps_its_other_labels(chat, tmp_path, monkeypatch):
+    # A database whose human collection was imported under the earlier wording: the row stays, the public payload drops it.
+    config_file(tmp_path, monkeypatch, edit=lambda d: d['human'].update(meta='written by people · collected by hand'))
+    two_dates(tmp_path)
+    config_file(tmp_path, monkeypatch)
+    assert rows('SELECT DISTINCT meta FROM archive_human_collections') == [{'meta': 'written by people · collected by hand'}]
+    assert archive.public_payload()['chatbots']['human'] == {'name': 'Human', 'meta': 'written by people'} == chatbots.load_config()['human']
+    out, site = tmp_path / 'published', tmp_path / 'site'
+    snapshot.export_published(out, archive_only=True)
+    snapshot.approve_published(out, confirmed=True)
+    snapshot.build_from_data(site, out, archive_only=True)
+    texts = assert_site_does_not_say_how_replies_were_collected(site)
+    front, page, how = texts['archive/index.html'], texts['archive/c/C001.html'], texts['archive/chatbots.html']
+    card, readme = texts['archive/card/C001.html'], texts['archive/data/README.txt']
+    # What an answer is, the notices and the recorded setting are all still there.
+    for kept in ('<span class="tag tag-dark mono">AI-generated · may be wrong</span>', 'They may be wrong and are not advice.',
+                 'Not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners.',
+                 'Read-only archive.', 'No payments · nothing can be changed from this page', 'Refusals and non-answers are left out.'):
+        assert kept in front and kept in page and kept in how, kept
+    assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in card and 'read-only · no payments' in card
+    assert 'Written with Grok' in card and 'Written with Grok' in page and 'Nov 2026' in card
+    block = page.split('<summary>Where each answer came from</summary>')[1]
+    for kept in ('the app showed: PLACEHOLDER model · free account · temporary chat · memory off · search on · US · web',
+                 'Written by people · from: PLACEHOLDER thread · 12 replies read · quoted', '<strong>Written by people</strong>: <em>quoted</em>'):
+        assert kept in block, kept
+    assert 'Asked in a new chat each time. The first line is why the replies are short.' in page
+    assert 'Asked again every month. Tap a question to see who changed their answer.' in front
+    # How it works: what is compared and the rules that are left; six rules, none about who or what did the asking.
+    assert f'<meta name="description" content="{archive_pages.CHATBOTS_DESCRIPTION}" />' in how
+    assert 'Each app gets the same questions in the same words every month, each in a new chat, and every reply is kept.' in how
+    assert re.findall(r'<div><strong>([^<]+)</strong>', how.split('<section id="method"')[1]) == [
+        'Same words', 'Copied, not edited', 'Only real answers shown', 'It depends on the day', 'Humans too', 'Not affiliated']
+    assert 'trusting' not in how and 'receipt' not in how and 'written by people' in how and 'From: PLACEHOLDER thread' in how
+    assert 'free account · temporary chat · memory off · search on · US · web' in how and 'The app showed: PLACEHOLDER model 2' in how
+    for kept in ('recorded verbatim', 'It may be wrong. It is not advice.', '"human-written" was written by people.', 'not affiliated'):
+        assert kept in readme, kept
+    records = [json.loads(line) for line in texts['archive/data/answers.jsonl'].splitlines()]
+    assert {r['provenance'] for r in records} == {'ai-generated', 'human-written'} and all(r['collected'] and r['conditions'] for r in records)
+
+
+def test_the_sample_site_does_not_say_how_replies_were_collected_and_still_says_it_is_scripted(ready, tmp_path, monkeypatch):
+    from live_genesis import cli
+    monkeypatch.setattr(cli, 'ROOT', tmp_path)
+    core.seed_agents()
+    cli.demo()
+    archive.demo_archive()
+    site = tmp_path / 'site'
+    assert snapshot.build(site, archive_only=True)['demo_only'] is True
+    texts = assert_site_does_not_say_how_replies_were_collected(site)
+    for name, text in texts.items():
+        if name.startswith('archive/') and name.endswith('.html'):
+            assert 'Sample we wrote, not a real AI answer' in text, name
+            assert '<meta name="aot:content" content="scripted-sample" />' in text, name
+    for name in ('archive/index.html', 'archive/c/C001.html', 'archive/chatbots.html'):
+        for kept in ('Everything here is a sample we wrote. No AI and no person was asked.', 'Read-only archive.',
+                     'No payments · nothing can be changed from this page', 'Refusals and non-answers are left out.'):
+            assert kept in texts[name], (name, kept)
+    assert 'On this sample site the apps are made up and the replies are ours.' in texts['archive/chatbots.html']
+    assert 'sample we wrote · no person was asked' in texts['archive/chatbots.html']
+    assert ('<strong>Sample</strong>: we wrote the answer and its date ourselves to show how the page works. Nothing was asked.'
+            in texts['archive/c/C001.html'])
+    assert 'No AI and no person was asked.' in texts['archive/data/README.txt'] and 'NOT a real answer' in texts['archive/data/README.txt']
+    lines = [json.loads(line) for line in texts['archive/data/answers.jsonl'].splitlines()]
+    assert lines and {line['provenance'] for line in lines} == {'scripted-sample'}
