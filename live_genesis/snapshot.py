@@ -25,6 +25,11 @@ The export also carries `archive.json` (Answers Over Time: questions, runs and a
 answers are never in it) under the same hash, manifest, guard and ASCII rules, and every
 snapshot holds the archive pages under `archive/` (archive_pages.py; plain HTML, no script).
 
+`--export --archive-only` writes `archive.json` and `MANIFEST.json` and nothing else: the society
+tables are not read and no `overview.json` exists, so no society text can reach the repository.
+The manifest says which kind it is (`"contents": "full"` or `"archive"`); `--approve`, `--check`
+and `--from-data` read it there. An archive export renders with `--from-data ... --archive-only` only.
+
 `--archive-only` (with a database or with `--from-data`; what the public site is built with) writes
 Answers Over Time and nothing of the society: `archive/`, `archive.json`, the stylesheet, mark, icon
 and fonts those pages use, and a root `index.html` that sends the visitor to `archive/index.html`.
@@ -47,9 +52,16 @@ from .web import CONTENT_SECURITY_POLICY
 
 STATIC = Path(__file__).resolve().parent / "static"
 PUBLISHED = Path(__file__).resolve().parent.parent / "published"   # reviewed data, committed by the owner
-SCHEMA = "live-genesis-published/4"   # /2: the folder also holds archive.json; /3: archive.json carries the trending track; /4: per answer, endpoint name, reported model, digest, pricing basis
+SCHEMA = "live-genesis-published/5"   # /2: the folder also holds archive.json; /3: archive.json carries the trending track; /4: per answer, endpoint name, reported model, digest, pricing basis; /5: the manifest says what the folder holds ("contents": "full" or "archive")
 DATA_FILE, ARCHIVE_FILE, MANIFEST_FILE = "overview.json", "archive.json", "MANIFEST.json"
 FILES = (DATA_FILE, ARCHIVE_FILE, MANIFEST_FILE)
+# What an export folder holds, by the manifest's "contents": the whole observatory plus the answer
+# archive, or the answer archive alone (no society data was read to make it).
+FULL, ARCHIVE = "full", "archive"
+KINDS = (FULL, ARCHIVE)
+ARCHIVE_MANIFEST_KEYS = {"schema", "contents", "file", "exported_at", "archive", "reviewed", "reviewed_at"}
+_EXPORTED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T[0-9:.+Z-]{0,26}")
+NO_ANSWERS = "it holds no answers, so there is nothing to publish"
 SOURCES = ("demo", "api", "engine", "unknown")
 # Relative address of the other published snapshot (demo <-> recorded); nothing else is accepted.
 SIBLING = re.compile(r"(?:\.\./|[a-z0-9-]+/)")
@@ -372,6 +384,8 @@ def published_non_ascii(target: str | Path | None = None) -> list[str]:
     folder = Path(target) if target is not None else PUBLISHED
     lines: list[str] = []
     for name in (DATA_FILE, ARCHIVE_FILE):
+        if name == DATA_FILE and not (folder / name).exists():   # an archive export has no overview.json
+            continue
         data = _loads((folder / name).read_bytes())
         prefix = "" if name == DATA_FILE else "archive "
         lines += [prefix + line for kind, value in data.items() for line in non_ascii_report(value, kind, None, kind)]
@@ -425,71 +439,67 @@ def _is_file(path: Path) -> bool:
     return path.is_file() and not path.is_symlink()
 
 
-def export_published(target: str | Path | None = None, *, replace: bool = False) -> dict:
-    """Database (read-only) -> published/overview.json + archive.json + MANIFEST.json, unreviewed."""
+def _read_first(folder: Path, kind: str) -> str:
+    """The files of an export the owner has to read, by kind."""
+    return f"{folder / ARCHIVE_FILE}" if kind == ARCHIVE else f"{folder / DATA_FILE} and {folder / ARCHIVE_FILE}"
+
+
+def export_published(target: str | Path | None = None, *, replace: bool = False, archive_only: bool = False) -> dict:
+    """Database (read-only) -> published/overview.json + archive.json + MANIFEST.json, unreviewed.
+    With archive_only: archive.json + MANIFEST.json, and the society tables are never read."""
     out = Path(target) if target is not None else PUBLISHED
     if out.is_symlink() or (out.exists() and not out.is_dir()):
         raise RuntimeError(f"{out} exists and is not a plain folder")
     if out.exists() and any(out.iterdir()) and not replace:
         raise RuntimeError(f"{out} already holds an export. Pass --replace to overwrite it "
                            "(the new export starts unreviewed).")
-    data = _capture()
+    data = None if archive_only else _capture()   # archive only: the society tables are not read at all
     answers = _capture_archive()
-    data["snapshot"]["demo_only"] = data["snapshot"]["demo_only"] and answers["demo_only"]
-    if data["snapshot"]["demo_only"]:
-        raise RuntimeError("Export refused; nothing was written. This database holds scripted demo data only, "
-                           "so there is nothing to review: the scripted demo is already the public site.")
-    problem = _archive_problem(answers)
+    if archive_only:
+        if answers["demo_only"]:
+            raise RuntimeError("Export refused; nothing was written. Answers Over Time holds no recorded answers "
+                               "(scripted demo answers and mock answers are never exported), so there is nothing to "
+                               "review: the scripted demo is already the public site.")
+    else:
+        data["snapshot"]["demo_only"] = data["snapshot"]["demo_only"] and answers["demo_only"]
+        if data["snapshot"]["demo_only"]:
+            raise RuntimeError("Export refused; nothing was written. This database holds scripted demo data only, "
+                               "so there is nothing to review: the scripted demo is already the public site.")
+    problem = _archive_problem(answers) or (NO_ANSWERS if archive_only and not answers["answers"] else None)
     if problem:
         raise RuntimeError(f"Export refused; nothing was written. Answers Over Time: {problem}.")
-    hits = _scan(data) + [f"archive {hit}" for hit in _scan(answers)]
+    hits = ([] if archive_only else _scan(data)) + [f"archive {hit}" for hit in _scan(answers)]
     if hits:
         raise RuntimeError("Export refused; nothing was written. Content guards matched:\n  " + "\n  ".join(hits))
-    payload = _encode(data)
     archive_payload = _encode(answers)
-    by_source, records = _counts(data)
-    manifest = {"schema": SCHEMA, "file": DATA_FILE, "sha256": hashlib.sha256(payload).hexdigest(),
-                "exported_at": data["snapshot"]["generated_at"], "mode": data.get("mode"),
-                "actions_by_source": by_source, "records": records,
-                "archive": {**_archive_counts(answers), "sha256": hashlib.sha256(archive_payload).hexdigest()},
-                "reviewed": False, "reviewed_at": None}
+    listed = {**_archive_counts(answers), "sha256": hashlib.sha256(archive_payload).hexdigest()}
+    if archive_only:
+        # No top-level sha256: the one data file is archive.json and its hash is in the "archive" block.
+        # archive.json carries no export time of its own, so exported_at is a note here, not a checked value.
+        manifest = {"schema": SCHEMA, "contents": ARCHIVE, "file": ARCHIVE_FILE, "exported_at": utcnow(),
+                    "archive": listed, "reviewed": False, "reviewed_at": None}
+    else:
+        payload = _encode(data)
+        by_source, records = _counts(data)
+        manifest = {"schema": SCHEMA, "contents": FULL, "file": DATA_FILE, "sha256": hashlib.sha256(payload).hexdigest(),
+                    "exported_at": data["snapshot"]["generated_at"], "mode": data.get("mode"),
+                    "actions_by_source": by_source, "records": records, "archive": listed,
+                    "reviewed": False, "reviewed_at": None}
     out.mkdir(parents=True, exist_ok=True)
-    for stale in list(out.iterdir()):   # only reached with --replace: the folder holds the three files and nothing else
+    for stale in list(out.iterdir()):   # only reached with --replace: an earlier export of either kind is removed whole
         if stale.is_dir() and not stale.is_symlink():
             shutil.rmtree(stale)
         else:
             stale.unlink()
-    (out / DATA_FILE).write_bytes(payload)
+    if not archive_only:
+        (out / DATA_FILE).write_bytes(payload)
     (out / ARCHIVE_FILE).write_bytes(archive_payload)
     _write_manifest(out, manifest)
     return manifest
 
 
-def check_published(target: str | Path | None = None, *, require_reviewed: bool = True) -> dict:
-    """The one gate used by `--check` (CI), `--approve` and `--from-data`. Raises RuntimeError.
-
-    Hash, folder contents, counts and the content guards are all re-checked here, so a
-    hand-edited manifest cannot carry text past the regex floor."""
-    folder = Path(target) if target is not None else PUBLISHED
-    if folder.is_symlink() or not folder.is_dir():
-        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (not a plain folder)")
-    names = sorted(entry.name for entry in folder.iterdir())
-    extra = [name for name in names if name not in FILES]
-    if extra:
-        raise RuntimeError(f"{folder}: unexpected entries ({len(extra)}); it must hold only {DATA_FILE}, {ARCHIVE_FILE} and {MANIFEST_FILE}")
-    if not _is_file(folder / MANIFEST_FILE) or not _is_file(folder / DATA_FILE):
-        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (must be regular files)")
-    if not _is_file(folder / ARCHIVE_FILE):
-        raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is missing or unreadable (must be a regular file). An export made "
-                           "before Answers Over Time has none; export and review again.")
-    try:
-        manifest = _loads((folder / MANIFEST_FILE).read_bytes())
-        payload = (folder / DATA_FILE).read_bytes()
-        archive_payload = (folder / ARCHIVE_FILE).read_bytes()
-    except (OSError, ValueError) as err:
-        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable ({type(err).__name__})") from None
-    if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA or manifest.get("file") != DATA_FILE:
-        raise RuntimeError(f"{folder}: manifest is not a {SCHEMA} manifest")
+def _check_overview(folder: Path, manifest: dict, payload: bytes) -> dict:
+    """overview.json of a full export against its manifest: hash, ASCII, strict JSON, shape, counts."""
     if hashlib.sha256(payload).hexdigest() != manifest.get("sha256"):
         raise RuntimeError(f"{folder}: {DATA_FILE} does not match the sha256 in the manifest. "
                            "It changed after export; export and review again.")
@@ -519,6 +529,59 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
         raise RuntimeError(f"{folder}: {DATA_FILE} is not an exported overview") from None
     if manifest.get("actions_by_source") != by_source or manifest.get("records") != records:
         raise RuntimeError(f"{folder}: the counts in the manifest do not match {DATA_FILE}")
+    return data
+
+
+def check_published(target: str | Path | None = None, *, require_reviewed: bool = True) -> dict:
+    """The one gate used by `--check` (CI), `--approve` and `--from-data`. Raises RuntimeError.
+
+    Hash, folder contents, counts and the content guards are all re-checked here, so a
+    hand-edited manifest cannot carry text past the regex floor. The manifest's "contents" picks
+    the rules: "full" needs overview.json, "archive" refuses it, so changing the word by hand fails
+    either way and every file in the folder is always checked."""
+    folder = Path(target) if target is not None else PUBLISHED
+    if folder.is_symlink() or not folder.is_dir():
+        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (not a plain folder)")
+    names = sorted(entry.name for entry in folder.iterdir())
+    extra = [name for name in names if name not in FILES]
+    if extra:
+        raise RuntimeError(f"{folder}: unexpected entries ({len(extra)}); it must hold only {DATA_FILE}, {ARCHIVE_FILE} and {MANIFEST_FILE}")
+    if not _is_file(folder / MANIFEST_FILE):
+        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (must be regular files)")
+    try:
+        manifest = _loads((folder / MANIFEST_FILE).read_bytes())
+    except (OSError, ValueError) as err:
+        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable ({type(err).__name__})") from None
+    if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
+        raise RuntimeError(f"{folder}: manifest is not a {SCHEMA} manifest (an export made by an earlier version "
+                           "must be exported and reviewed again)")
+    kind = manifest.get("contents")
+    if not isinstance(kind, str) or kind not in KINDS:
+        raise RuntimeError(f"{folder}: the manifest does not say what the export holds (\"contents\" must be "
+                           f"\"{FULL}\" or \"{ARCHIVE}\")")
+    full = kind == FULL
+    if manifest.get("file") != (DATA_FILE if full else ARCHIVE_FILE):
+        raise RuntimeError(f"{folder}: manifest is not a {SCHEMA} manifest")
+    if not full:
+        if DATA_FILE in names:   # whatever it is (file, folder, link): an archive export never holds one
+            raise RuntimeError(f"{folder}: unexpected entries (1); an export of Answers Over Time only must hold only "
+                               f"{ARCHIVE_FILE} and {MANIFEST_FILE}, and {DATA_FILE} is there")
+        if set(manifest) != ARCHIVE_MANIFEST_KEYS:
+            raise RuntimeError(f"{folder}: the manifest of an export of Answers Over Time only must hold exactly "
+                               + ", ".join(sorted(ARCHIVE_MANIFEST_KEYS)))
+        if not isinstance(manifest["exported_at"], str) or not _EXPORTED_AT.fullmatch(manifest["exported_at"]):
+            raise RuntimeError(f"{folder}: the manifest's exported_at is not a timestamp")
+    elif not _is_file(folder / DATA_FILE):
+        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable (must be regular files)")
+    if not _is_file(folder / ARCHIVE_FILE):
+        raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is missing or unreadable (must be a regular file). An export made "
+                           "before Answers Over Time has none; export and review again.")
+    try:
+        payload = (folder / DATA_FILE).read_bytes() if full else b""
+        archive_payload = (folder / ARCHIVE_FILE).read_bytes()
+    except OSError as err:
+        raise RuntimeError(f"{folder}: {MANIFEST_FILE} or {DATA_FILE} is missing or unreadable ({type(err).__name__})") from None
+    data = _check_overview(folder, manifest, payload) if full else None
     # ---- archive.json: the same rules (hash, ASCII, strict JSON, shape, counts, guards) ----
     listed = manifest.get("archive")
     if not isinstance(listed, dict) or listed.get("file") != ARCHIVE_FILE:
@@ -536,15 +599,19 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
     except ValueError:
         raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is not an exported answer archive") from None
     problem = _archive_problem(answers)
+    if not problem and not full:   # with no overview beside it, the archive must itself be recorded data
+        problem = (NO_ANSWERS if not answers["answers"] else
+                   "it is scripted demo data only; the demo is published without review" if answers["demo_only"] is not False else None)
     if problem:
         raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is refused: {problem}")
     if {k: v for k, v in listed.items() if k != "sha256"} != _archive_counts(answers):
         raise RuntimeError(f"{folder}: the counts in the manifest do not match {ARCHIVE_FILE}")
-    hits = _scan(data) + [f"archive {hit}" for hit in _scan(answers)]
+    hits = (_scan(data) if full else []) + [f"archive {hit}" for hit in _scan(answers)]
     if hits:
         raise RuntimeError(f"{folder}: refused. Content guards matched:\n  " + "\n  ".join(hits))
     if require_reviewed and manifest.get("reviewed") is not True:
-        raise RuntimeError(f"{folder}: not approved (\"reviewed\" is not true). Read {DATA_FILE} and {ARCHIVE_FILE}, then run "
+        raise RuntimeError(f"{folder}: not approved (\"reviewed\" is not true). Read "
+                           f"{f'{DATA_FILE} and {ARCHIVE_FILE}' if full else ARCHIVE_FILE}, then run "
                            "python -m live_genesis.snapshot --approve --i-have-read-it")
     return manifest
 
@@ -554,7 +621,7 @@ def approve_published(target: str | Path | None = None, *, confirmed: bool = Fal
     folder = Path(target) if target is not None else PUBLISHED
     manifest = check_published(folder, require_reviewed=False)
     if not confirmed:
-        raise RuntimeError(f"Not approved. Read {folder / DATA_FILE} and {folder / ARCHIVE_FILE} in full, then repeat with --i-have-read-it")
+        raise RuntimeError(f"Not approved. Read {_read_first(folder, manifest['contents'])} in full, then repeat with --i-have-read-it")
     manifest.update(reviewed=True, reviewed_at=utcnow())
     _write_manifest(folder, manifest)
     return manifest
@@ -563,7 +630,8 @@ def approve_published(target: str | Path | None = None, *, confirmed: bool = Fal
 def build_from_data(outdir: str | Path, published: str | Path | None = None, *, api_base: str | None = None,
                     sibling: str | None = None, archive_only: bool = False) -> dict:
     """Render the site from reviewed, committed data. No database is opened. With archive_only the
-    whole export is still checked, but only its archive.json is rendered and copied."""
+    whole export is still checked, but only its archive.json is rendered and copied. An export of
+    Answers Over Time only (manifest "contents": "archive") renders with archive_only and no other way."""
     out = Path(outdir)
     folder = Path(published) if published is not None else PUBLISHED
     if archive_only:
@@ -572,8 +640,14 @@ def build_from_data(outdir: str | Path, published: str | Path | None = None, *, 
         api_base, kit, include_client = _kit(api_base)
     _check_outdir(out, sibling)
     manifest = check_published(folder)
-    payload = (folder / DATA_FILE).read_bytes()   # published byte for byte, so anyone can re-check the hash
-    info = _loads(payload)["snapshot"]
+    if manifest["contents"] == ARCHIVE:
+        if not archive_only:
+            raise RuntimeError(f"{folder}: this export holds Answers Over Time only; "
+                               "render it with --archive-only")
+        payload, info = b"", {"generated_at": manifest["exported_at"], "demo_only": False}
+    else:
+        payload = (folder / DATA_FILE).read_bytes()   # published byte for byte, so anyone can re-check the hash
+        info = _loads(payload)["snapshot"]
     if archive_only:
         _render_archive_only(out, sibling, (folder / ARCHIVE_FILE).read_bytes())
     else:
@@ -582,12 +656,15 @@ def build_from_data(outdir: str | Path, published: str | Path | None = None, *, 
 
 
 def _describe(manifest: dict) -> str:
-    counts = ", ".join(f"{name} {manifest['actions_by_source'].get(name, 0)}" for name in SOURCES)
-    records = ", ".join(f"{name} {n}" for name, n in manifest["records"].items())
     answered = manifest["archive"]
-    return (f"  exported {manifest['exported_at']} · data mode {manifest['mode']}\n"
-            f"  actions by source: {counts}\n  records in file: {records}\n  sha256 {manifest['sha256']}\n"
-            f"  {ARCHIVE_FILE}: {answered['runs']} run(s), answers by source: "
+    if manifest["contents"] == ARCHIVE:
+        head = f"  exported {manifest['exported_at']} · Answers Over Time only (the society data was not read)\n"
+    else:
+        counts = ", ".join(f"{name} {manifest['actions_by_source'].get(name, 0)}" for name in SOURCES)
+        records = ", ".join(f"{name} {n}" for name, n in manifest["records"].items())
+        head = (f"  exported {manifest['exported_at']} · data mode {manifest['mode']}\n"
+                f"  actions by source: {counts}\n  records in file: {records}\n  sha256 {manifest['sha256']}\n")
+    return (head + f"  {ARCHIVE_FILE}: {answered['runs']} run(s), answers by source: "
             + ", ".join(f"{name} {n}" for name, n in answered["answers_by_source"].items())
             + f"\n  {ARCHIVE_FILE} sha256 {answered['sha256']}")
 
@@ -606,37 +683,42 @@ def main() -> None:
                         help="Relative link to the other published snapshot (demo/ or ../), shown on the page")
     parser.add_argument("--archive-only", action="store_true",
                         help="Write Answers Over Time only (archive/, its static files, a root page that leads to it): "
-                             "no observatory page, no overview.json, no script, no agent kit")
+                             "no observatory page, no overview.json, no script, no agent kit. With --export: write "
+                             "archive.json and MANIFEST.json only, without reading the society tables")
     steps = parser.add_mutually_exclusive_group()
     steps.add_argument("--export", metavar="DIR", nargs="?", const=str(PUBLISHED), default=None,
-                       help="Write overview.json, archive.json and MANIFEST.json for review (default folder: published/)")
+                       help="Write overview.json, archive.json and MANIFEST.json for review (default folder: published/); "
+                            "with --archive-only, archive.json and MANIFEST.json only")
     steps.add_argument("--approve", metavar="DIR", nargs="?", const=str(PUBLISHED), default=None,
-                       help="Mark an export as reviewed; needs --i-have-read-it")
+                       help="Mark an export of either kind as reviewed; needs --i-have-read-it")
     steps.add_argument("--check", metavar="DIR", nargs="?", const=str(PUBLISHED), default=None,
-                       help="Exit non-zero unless the export is intact and approved (used by CI)")
+                       help="Exit non-zero unless the export (of either kind, as its manifest says) is intact and approved (used by CI)")
     parser.add_argument("--replace", action="store_true", help="With --export: overwrite an existing export")
     parser.add_argument("--i-have-read-it", action="store_true", help="With --approve: confirm the review")
     args = parser.parse_args()
     try:
         if args.export or args.approve or args.check:
-            if args.outdir or args.from_data or args.archive_only:
-                parser.error("--export, --approve and --check take no OUTDIR, no --from-data and no --archive-only")
+            if args.outdir or args.from_data:
+                parser.error("--export, --approve and --check take no OUTDIR and no --from-data")
+            if args.archive_only and not args.export:
+                parser.error("--approve and --check take no --archive-only: the manifest says what the export holds")
             if args.export:
-                manifest = export_published(args.export, replace=args.replace)
+                manifest = export_published(args.export, replace=args.replace, archive_only=args.archive_only)
                 print(f"Export written to {args.export} (NOT yet approved). No model was called.\n{_describe(manifest)}")
-                print(f"Next: read {Path(args.export) / DATA_FILE} and {Path(args.export) / ARCHIVE_FILE} in full, then run\n"
+                print(f"Next: read {_read_first(Path(args.export), manifest['contents'])} in full, then run\n"
                       "  python -m live_genesis.snapshot --approve --i-have-read-it")
             elif args.approve:
-                print(_describe(check_published(args.approve, require_reviewed=False)))
+                checked = check_published(args.approve, require_reviewed=False)
+                print(_describe(checked))
                 marked = published_non_ascii(args.approve)
                 if marked:
                     print(f"Non-ASCII characters (written as \\uXXXX escapes in the file; counts per Unicode category, "
                           f"the server's own \u00b7 and \u2192 left out) in {len(marked)} text(s):\n  " + "\n  ".join(marked))
                 else:
                     print("No non-ASCII characters in the file besides the server's own separators.")
-                print("The guards are regular expressions and do not understand meaning. Approving means you "
-                      f"read every agent-written text in {Path(args.approve) / DATA_FILE} and every answer in "
-                      f"{Path(args.approve) / ARCHIVE_FILE}.\n"
+                print("The guards are regular expressions and do not understand meaning. Approving means you read "
+                      + ("" if checked["contents"] == ARCHIVE else f"every agent-written text in {Path(args.approve) / DATA_FILE} and ")
+                      + f"every answer in {Path(args.approve) / ARCHIVE_FILE}.\n"
                       "Once pushed, the data stays in git history even if you withdraw it later.")
                 manifest = approve_published(args.approve, confirmed=args.i_have_read_it)
                 print(f"Approved at {manifest['reviewed_at']}. Commit the folder to publish it.")
