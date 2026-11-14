@@ -374,8 +374,9 @@ def test_three_endpoints_one_rate_limited_the_others_complete_and_nothing_leaks(
     assert {key: first[key] for key in archive.PUBLIC_CALL_FIELDS} == {
         'endpoint': 'ollama', 'reported_model': 'gemma3:4b', 'model_digest': None, 'pricing_basis': 'local', 'sampling_pinned': True, 'local': True}
     page = archive_pages.render_question(payload, 'Q05')
-    assert 'gemma3:4b · run locally · server call' in page and '@cf/meta/llama-3.3-70b-instruct-fp8-fast · via cf · server call' in page
-    assert 'this model was skipped after a failed call (the service limited the number of requests)' in page
+    assert 'We asked it ourselves · version gemma3:4b · run locally' in page
+    assert 'We asked it ourselves · version @cf/meta/llama-3.3-70b-instruct-fp8-fast · via cf' in page
+    assert 'No answer this time: the service limited the number of requests' in page
     assert "not the same as its maker's own chat app" in page and 'open model' not in page and ' says' not in page.replace(' says where', '')
     out = tmp_path / 'published'
     snapshot.export_published(out)
@@ -465,11 +466,13 @@ def test_reported_model_and_digest_are_recorded_and_fire_model_changed(three, mo
     assert [a['model_digest'] for a in payload['answers'] if a['answerer'] == 'gemma' and a['question'] == 'Q01'] == ['a' * 12, 'a' * 12, 'b' * 12]
     page = archive_pages.render_question(payload, 'Q01')
     # The REQUESTED ids never changed; the change is seen in what the service reported and in the local file's digest.
-    assert "gem&#x27;s model ID reported by the service changed from gemini-2.5-flash-001 to gemini-2.5-flash-002; the answer stayed the same." in page
-    assert f"gemma&#x27;s local model file (digest) changed from {'a' * 12} to {'b' * 12}; the answer stayed the same." in page
-    assert page.count('gemini-flash-latest · via goog · server call · new model ID') == 1
-    assert page.count('gemma3:4b · run locally · server call · new model file') == 1
-    assert 'gem gave the same answer in every run recorded.' in page
+    assert page.count('new version: version reported by the service changed from gemini-2.5-flash-001 to gemini-2.5-flash-002') == 1
+    assert page.count(f"new model file: local model file (digest) changed from {'a' * 12} to {'b' * 12}") == 1
+    assert 'We asked it ourselves · version gemini-flash-latest · the service called it gemini-2.5-flash-002 · via goog' in page
+    assert f"version gemma3:4b · run locally · model file {'b' * 12}" in page
+    # The answers themselves stayed the same: no card is marked changed, and the table says so.
+    assert 'acard is-changed' not in page and '>same as before</td>' in page
+    assert 'data-version="gemini-2.5-flash-002"' in page
 
 
 def test_what_a_provider_says_about_itself_is_untrusted(three, monkeypatch):
@@ -740,7 +743,8 @@ def test_a_database_from_before_named_endpoints_migrates_in_place(ready, tmp_pat
     new = next(a for a in payload['answers'] if a['run'] == 2 and a['question'] == 'Q01')
     assert new['changed'] is True and new['endpoint'] == 'ollama' and new['local'] is True
     page = archive_pages.render_question(payload, 'Q01')
-    assert 'gpt-old-1 · server call' in page and 'gemma3:4b · run locally · server call · new model ID' in page
+    assert 'We asked it ourselves · version gpt-old-1' in page
+    assert 'version gemma3:4b · run locally · new version: version changed from gpt-old-1 to gemma3:4b' in page
     assert status_of(page) == 'ok'
 
 

@@ -92,7 +92,7 @@ CARD_CLAMP_CHARS = {1: 160, 2: 115, 3: 100, 4: 110}   # panels on a card -> char
 # Server-side thresholds for the "More" control: longer than the first is clamped on a phone, than the second also on
 # a tablet, than the third everywhere. Chosen so that a shorter text always fits the clamp of that width.
 CLAMP_PHONE, CLAMP_TABLET, CLAMP_DESKTOP = 140, 240, 300
-BEFORE_CLAMP = 60
+BEFORE_CLAMP = 85
 TABLE_CLAMP = 320
 MAX_PANELS = 24                # month panels on a question page (the stylesheet has rules for this many); the table has all
 # Why a model has no answers in a run it was dropped from (archive.SKIP_REASONS), in plain words.
@@ -446,7 +446,7 @@ def _model_board(view: _View, question_id: str) -> dict:
                 facts.append(f"{change[0]}: {change[1]} changed from {change[2]} to {change[3]}")
             cell["facts"] = facts
             if answer["state"] == "withheld":
-                cell.update(state="hidden", why_not=HIDDEN_WORDS)
+                cell.update(state="hidden", why_not=f"{HIDDEN_WORDS} ({answer['reason']})")
             elif answer["state"] != "answered":
                 cell["why_not"] = f"No answer this time: {answer['reason'] or 'none given'}"
             else:
@@ -1312,7 +1312,8 @@ def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], 
         out.append(f'    <section class="card-panel{" card-panel-changed" if changed else ""}{" card-panel-human" if human else ""}"'
                    f'{data_attrs(record(board, column, period, cell))}>'
                    f'<div class="card-meta mono"><span class="card-label">{esc(column["name"])}</span>'
-                   f'<span class="card-when">{esc(credit)}{esc(period["label"])}{esc(form)}{" · " + word if changed else ""}</span></div>'
+                   f'<span class="card-when">{esc(credit)}{esc(period["label"])}{esc(form)}{" · " + word if changed else ""}'
+                   f'{" · mixed answers" if cell["state"] == "mixed" else ""}</span></div>'
                    f'<p class="card-answer">{esc(cell["text"])}</p>{before}</section>\n')
     if not panels:
         out.append(f'    <section class="card-panel"><p class="card-answer card-empty">{esc(empty)}</p></section>\n')

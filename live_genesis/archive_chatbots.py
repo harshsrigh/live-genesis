@@ -1104,7 +1104,13 @@ def public_block(cx, tables: set[str]) -> dict | None:
     path; a screenshot is its sha256 only."""
     if not set(TABLE_NAMES) <= tables:
         return None
-    runs = [dict(r) for r in cx.execute("SELECT * FROM archive_chatbot_runs ORDER BY collected_on,number")]
+    questions = [{key: row[key] for key in QUESTION_KEYS}
+                 for row in cx.execute("SELECT * FROM archive_chatbot_questions ORDER BY position")]
+    own = {q["id"] for q in questions}
+    # A run from the track's first shape (its ids referred to the core and trending lists) stays in the database and is
+    # never shown: it has no question of this track's own list.
+    runs = [dict(r) for r in cx.execute("SELECT * FROM archive_chatbot_runs ORDER BY collected_on,number")
+            if set(json.loads(r["question_ids"])) <= own]
     if not runs:
         return None
     number = {r["id"]: r["number"] for r in runs}
@@ -1113,6 +1119,8 @@ def public_block(cx, tables: set[str]) -> dict | None:
     for row in cx.execute("SELECT c.* FROM archive_chatbot_conditions c JOIN archive_chatbot_runs r ON r.id=c.run_id "
                           "ORDER BY r.collected_on,r.number,c.rowid"):
         row = dict(row)
+        if row["run_id"] not in number:
+            continue
         memory = row["memory_off"]
         conditions.setdefault(row["run_id"], {})[row["chatbot"]] = {
             "account": row["account"], "fresh_chat": bool(row["fresh_chat"]), "temporary_chat": bool(row["temporary_chat"]),
@@ -1125,15 +1133,13 @@ def public_block(cx, tables: set[str]) -> dict | None:
                           "ORDER BY r.collected_on,r.number"):
         collected[row["run_id"]] = {"source": row["source"], "collected_on": row["collected_on"], "count": row["replies"]}
         human = {"name": row["display_name"], "meta": row["meta"]}                                   # the newest run's wording
-    questions = [{key: row[key] for key in QUESTION_KEYS}
-                 for row in cx.execute("SELECT * FROM archive_chatbot_questions ORDER BY position")]
     answers = [{"id": a["id"], "run": number[a["run_id"]], "question": a["question_id"], "chatbot": a["chatbot"],
                 "source": a["source"], "state": a["state"], "reason": a["reason"], "text": a["answer_text"],
                 "changed": None if a["changed"] is None else bool(a["changed"]), "screenshot_hash": a["screenshot_sha256"],
                 "refused": bool(a["refused"])}
                for a in (dict(r) for r in cx.execute(
                    "SELECT a.* FROM archive_chatbot_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id "
-                   "ORDER BY r.collected_on,r.number,a.id"))]
+                   "ORDER BY r.collected_on,r.number,a.id")) if a["run_id"] in number]
     human_answers = [{"id": a["id"], "run": number[a["run_id"]], "question": a["question_id"], "source": a["source"],
                       "state": a["state"], "reason": a["reason"], "text": a["answer_text"], "manner": a["manner"],
                       "changed": None if a["changed"] is None else bool(a["changed"])}

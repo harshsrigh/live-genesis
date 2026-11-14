@@ -89,10 +89,10 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .minis.n-1 { grid-template-columns: minmax(0, 40rem); }
 .minis.n-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .minis.n-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.mini { min-width: 0; background: var(--panel); border-radius: 8px; border-left: 4px solid var(--panel); padding: 0.4rem 0.7rem 0.5rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.15rem 0.5rem; align-items: center; }
+.mini { min-width: 0; background: var(--panel); border-radius: 8px; border: 1px solid var(--panel); border-left-width: 4px; padding: 0.4rem 0.7rem 0.5rem; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.15rem 0.5rem; align-items: center; }
 .mini.is-changed { border-left-color: var(--accent); }
-.mini.kind-human { background: var(--ground); box-shadow: inset 0 0 0 1px var(--ink-soft); border-left-width: 0; padding-left: calc(0.7rem + 4px); }
-.mini.kind-human.is-changed { box-shadow: inset 0 0 0 1px var(--ink-soft), inset 4px 0 0 var(--accent); }
+.mini.kind-human { background: var(--ground); border-color: var(--ink-soft); border-left-width: 1px; padding-left: calc(0.7rem + 3px); }
+.mini.kind-human.is-changed { border-left: 4px solid var(--accent); padding-left: 0.7rem; }
 .mini-name { font-size: 0.75rem; font-weight: 600; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-text { grid-column: 1 / -1; font-size: 0.9375rem; line-height: 1.4; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 .list-note { margin: 0 0 2rem; font-size: 0.875rem; }
@@ -214,12 +214,12 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 
 /* ---- this month's answers: cards at the full width of the page ---- */
 .cards { display: grid; gap: 0.75rem; grid-template-columns: minmax(0, 1fr); }
-.acard { min-width: 0; background: var(--panel); border-radius: 12px; border-left: 4px solid var(--panel); padding: 0.7rem 0.9rem 0.8rem 0.75rem; display: flex; flex-direction: column; gap: 0.3rem; overflow-wrap: anywhere; }
+.acard { min-width: 0; background: var(--panel); border-radius: 12px; border: 1px solid var(--panel); border-left-width: 4px; padding: 0.7rem 0.9rem 0.8rem 0.75rem; display: flex; flex-direction: column; gap: 0.3rem; overflow-wrap: anywhere; }
 .acard.is-changed { border-left-color: var(--accent); }
 .acard.is-mixed { border-left-color: var(--accent); border-left-style: double; }
-.acard.kind-human { background: var(--ground); box-shadow: inset 0 0 0 1px var(--ink-soft); border-left-width: 0; padding-left: calc(0.75rem + 4px); }
-.acard.kind-human.is-changed { box-shadow: inset 0 0 0 1px var(--ink-soft), inset 4px 0 0 var(--accent); }
-.acard-none { background: var(--ground); box-shadow: inset 0 0 0 1px var(--line); border-left-width: 0; padding-left: calc(0.75rem + 4px); }
+.acard.kind-human { background: var(--ground); border-color: var(--ink-soft); border-left-width: 1px; padding-left: calc(0.75rem + 3px); }
+.acard.kind-human.is-changed { border-left: 4px solid var(--accent); padding-left: 0.75rem; }
+.acard-none { background: var(--ground); border-color: var(--line); border-left-width: 1px; padding-left: calc(0.75rem + 3px); }
 .acard-head { display: flex; flex-wrap: wrap; gap: 0.2rem 0.6rem; align-items: center; justify-content: space-between; min-height: 1.25rem; }
 .acard-name { font-size: 0.8125rem; font-weight: 700; color: var(--ink); }
 .tags { display: inline-flex; flex-wrap: wrap; gap: 0.3rem; }
@@ -241,7 +241,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .before { display: flex; flex-direction: column; gap: 0.1rem; padding-top: 0.3rem; border-top: 1px solid var(--line); }
 .before-when { font-size: 0.75rem; font-weight: 700; color: var(--ink-soft); margin-right: 0.4rem; }
 .before-text { font-size: 0.875rem; line-height: 1.4; color: var(--muted); white-space: pre-line; }
-.before .clamp { -webkit-line-clamp: 2; line-clamp: 2; }
+.before .clamp { -webkit-line-clamp: 3; line-clamp: 3; }
 .credit { font-size: 0.75rem; font-weight: 600; color: var(--ink-soft); }
 .hist summary, .more-info summary { cursor: pointer; font-size: 0.8125rem; font-weight: 600; color: var(--ink-soft); }
 .hist-list { list-style: none; padding: 0.4rem 0 0; display: flex; flex-direction: column; gap: 0.5rem; }
@@ -293,7 +293,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .t-word { display: block; font-size: 0.75rem; font-weight: 700; color: var(--accent); }
 .t-text { display: block; white-space: pre-line; }
 .t-long { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; line-clamp: 6; overflow: hidden; }
-.history td.t-changed { box-shadow: inset 3px 0 0 var(--accent); padding-left: 0.6rem; }
+.history td.t-changed { border-left: 3px solid var(--accent); padding-left: 0.6rem; }
 @media (max-width: 1099px) {
   .history, .history tbody, .history tr, .history td, .history tbody th { display: block; }
   .history caption { display: block; }
@@ -330,7 +330,8 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .key-note { display: none; }
   .method { padding: 1.5rem 1.25rem; }
   .acard { padding: 0.5rem 0.75rem 0.55rem 0.6rem; gap: 0.2rem; border-radius: 10px; }
-  .acard.kind-human, .acard-none { padding-left: calc(0.6rem + 4px); }
+  .acard.kind-human, .acard-none { padding-left: calc(0.6rem + 3px); }
+  .acard.kind-human.is-changed { padding-left: 0.6rem; }
   .cards { gap: 0.5rem; }
   /* The month heading sits under the cards on a phone: the strip above already names the month. */
   .panel { padding-top: 0.5rem; }
@@ -339,9 +340,9 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .month-strip label { padding: 0.2rem 0.7rem; }
   /* A list row on a phone: one line per answerer, cut with an ellipsis. */
   .minis, .minis.n-1, .minis.n-2, .minis.n-4 { grid-template-columns: minmax(0, 1fr); gap: 0.2rem; }
-  .mini, .mini.kind-human, .mini.kind-human.is-changed { background: none; box-shadow: none; border-radius: 0; padding: 0 0 0 0.5rem; border-left-width: 3px; border-left-color: var(--line); grid-template-columns: 6.25rem minmax(0, 1fr) auto; gap: 0 0.5rem; }
-  .mini.kind-human { border-left-color: var(--ink-soft); }
-  .mini.is-changed, .mini.kind-human.is-changed { border-left-color: var(--accent); }
+  .mini, .mini.kind-human, .mini.kind-human.is-changed { background: none; border-radius: 0; padding: 0 0 0 0.5rem; border-width: 0 0 0 3px; border-color: var(--line); grid-template-columns: 6.25rem minmax(0, 1fr) auto; gap: 0 0.5rem; }
+  .mini.kind-human { border-color: var(--ink-soft); }
+  .mini.is-changed, .mini.kind-human.is-changed { border-color: var(--accent); }
   .mini .timeline { order: 3; }
   .mini-text { grid-column: auto; display: block; white-space: nowrap; text-overflow: ellipsis; font-size: 0.875rem; }
   .mini .sq { width: 8px; height: 8px; border-radius: 2px; }
@@ -378,9 +379,10 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .card-hook { font-size: 0.875rem; font-weight: 700; color: var(--accent); }
 .card-q { font-family: var(--display); font-weight: 800; font-size: 1.75rem; line-height: 1.05; letter-spacing: -0.03em; overflow-wrap: anywhere; }
 .card-panels { display: flex; flex-direction: column; gap: 0.5rem; }
-.card-panel { background: var(--panel); border-radius: 12px; border-left: 4px solid var(--panel); padding: 0.6rem 0.8rem 0.7rem; display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; overflow-wrap: anywhere; }
+.card-panel { background: var(--panel); border-radius: 12px; border: 1px solid var(--panel); border-left-width: 4px; padding: 0.6rem 0.8rem 0.7rem; display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; overflow-wrap: anywhere; }
 .card-panel-changed { border-left-color: var(--accent); }
-.card-panel-human { background: var(--ground); box-shadow: inset 0 0 0 1px var(--ink-soft); border-left-color: transparent; }
+.card-panel-human { background: var(--ground); border-color: var(--ink-soft); }
+.card-panel-human.card-panel-changed { border-left-color: var(--accent); }
 .card-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0 0.75rem; font-size: 0.75rem; line-height: 1.4; color: var(--muted); }
 .card-label { font-weight: 700; color: var(--accent); }
 .card-answer { font-size: 1rem; line-height: 1.45; font-weight: 500; white-space: pre-line; }
@@ -416,8 +418,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .card-four .card-q-f2 { font-size: 4.8cqw; line-height: 1.05; -webkit-line-clamp: 3; line-clamp: 3; }
   .card-four .card-q-f3 { font-size: 3.9cqw; line-height: 1.08; -webkit-line-clamp: 4; line-clamp: 4; }
   .card-panels { flex: 0 1 auto; min-height: 0; justify-content: flex-start; gap: 1.2cqw; overflow: hidden; }
-  .card-panel { flex: none; border-radius: 2.6cqw; border-left-width: 0.9cqw; padding: 1.6cqw 2.8cqw 1.8cqw 2.2cqw; gap: 0.5cqw; }
-  .card-panel-human { box-shadow: inset 0 0 0 0.3cqw var(--ink-soft); }
+  .card-panel { flex: none; border-radius: 2.6cqw; border-width: 0.3cqw; border-left-width: 0.9cqw; padding: 1.6cqw 2.8cqw 1.8cqw 2.2cqw; gap: 0.5cqw; }
   .card-meta { flex-wrap: nowrap; gap: 3cqw; font-size: 2.3cqw; line-height: 1.3; }
   .card-label { flex: none; white-space: nowrap; }
   .card-when { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
