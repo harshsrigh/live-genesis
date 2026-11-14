@@ -2,6 +2,13 @@
 
 Independent review, 2026-11-13. Base: c441cdf0531d22539e44d0187ade835ccc8b32a6. Documentation only; no certification. Read the five requested project documents and repository development instructions. No model endpoint was contacted; no paid CLI command was run. Reproductions used disposable SQLite files outside the repository and replaced inference with local Python stubs. Provider readiness was stubbed in the interruption reproduction; it does not test credential validity.
 
+## Resolution (main at 4b1c7c0, 13 November 2026)
+
+Added when this review was merged. The findings below describe c441cdf; this section says what happened to them. Checked by reading the code and by the tests named, not by repeating the reproductions.
+
+- **P2, interrupted priced call: fixed for `archive-run`.** A priced call interrupted between its reservation and its settlement closes its hold as `unconfirmed`, and the next run is refused until `cli reconcile` (`tests/test_archive.py::test_an_interrupted_priced_call_is_unconfirmed_and_blocks_the_next_run`). Still open: `round` and `study-run` were not checked for the same gap, and a hold left `held` by a process that was killed outright is not recovered at startup.
+- **P2, ambient proxies: fixed for loopback base URLs.** The HTTP client of a named endpoint or of the single compatible endpoint ignores environment proxies when its base URL is loopback (`engine._trust_env`; `tests/test_open_items.py::test_a_loopback_base_url_never_goes_through_an_environment_proxy`). A hosted base URL still follows the environment's proxy settings, by design. A forwarding service the operator runs on loopback cannot be detected.
+
 ## P2 — An interrupted priced call does not activate the reconciliation gate
 
 Location: `live_genesis/archive.py:1338-1376,1403-1415`; subsequent-run check at 1277-1280.

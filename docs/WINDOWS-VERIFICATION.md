@@ -2,6 +2,13 @@
 
 Reviewed fresh clone of main c441cdf0531d22539e44d0187ade835ccc8b32a6 on Windows, using a new Python 3.12 virtual environment under sibling work/review-nov13-runtime/.venv. The old outputs checkout/environment was not used. Installed requirements-lock.txt and requirements-anthropic.txt (exit 0). Read the five requested project documents and development instructions. No application edits, real database access, model requests, sign-ups or merges.
 
+## Resolution (main at 4b1c7c0, 13 November 2026)
+
+Added when this review was merged. The findings below describe c441cdf; this section says what happened to them. Checked by reading the code and by the tests named, not by repeating the reproductions.
+
+- **P2, symlink fallback leaves the archive fixture missing: fixed.** `tests/test_archive.py::test_published_archive_tamper_guard_and_mock_are_refused` writes `archive.json` back when the link cannot be created, so the remaining tamper checks run. Not re-run on Windows.
+- **Full suite and HTTP probes on Windows: still open.** The asyncio socket-pair stall was not investigated. The suite runs on Linux (CI and WSL): 1226 passed at 4b1c7c0.
+
 ## Result: incomplete full verification
 
 **1112 tests collected; the full suite is NOT passing or fully verified.**

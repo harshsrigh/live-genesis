@@ -2,6 +2,14 @@
 
 Independent review, 2026-11-13, against c441cdf0531d22539e44d0187ade835ccc8b32a6. Documentation only; not a certification. Required project documents and the document review Resolution were read. All reproduction data was disposable and outside the repository. No model calls, sign-ups, real keys or production data were used.
 
+## Resolution (main at 4b1c7c0, 13 November 2026)
+
+Added when this review was merged. The findings below describe c441cdf; this section says what happened to them. Checked by reading the code and by the tests named, not by repeating the reproductions.
+
+- **P2, document reads return hidden stored characters: resolved at the routes.** `GET /api/agent/documents/{id}` and its revisions route pass their result through `guards.clean_for_reading` (`live_genesis/app.py`). The functions behind them, `documents.read_document` and `documents.read_revision`, still return stored text, which is what hashes and diffs refer to; `docs/SECURITY.md` now says so. The routes were not probed over HTTP for this note.
+- **P3, combining marks split mixed-script detection: open.** Not verified and not changed.
+- **P3, mixed-script rule refuses legitimate brand compounds: open.** A policy choice for the owner; not changed.
+
 ## Document fix: original reproduction detected
 
 Executed the original demo/created_at tamper on both schemes using the existing historical SQL fixture and a newly created document:
