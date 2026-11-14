@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from . import archive, archive_pages, controls, pages
@@ -189,7 +189,7 @@ def _archive_page(render) -> HTMLResponse | JSONResponse:
 
 
 def archive_redirect():
-    return RedirectResponse("/archive/trending.html", status_code=307)
+    return RedirectResponse(f"/archive/{archive_pages.FIRST_PAGE}", status_code=307)
 
 
 def archive_index():
@@ -218,13 +218,40 @@ def archive_chatbots():
     return _archive_page(archive_pages.render_chatbots)
 
 
+def archive_models():
+    return _archive_page(archive_pages.render_models)
+
+
+def archive_chat_question(name: str):
+    return _archive_item(name, archive_pages.CHAT_ID, archive_pages.render_question)
+
+
 def archive_card(name: str):
-    """`card/Q11.html` (models), `card/Q11-chatbots.html` (the chat apps together) and
-    `card/Q11-<app label>.html` (one chat app). An unknown question or app is a 404."""
+    """`card/Q11.html` (models), `card/C001.html` (the chat apps and Human together) and
+    `card/C001-<app label>.html` / `card/C001-human.html` (one of them). An unknown question or app is a 404."""
     chat = archive_pages.CARD_NAME.fullmatch(name[:-5]) if name.endswith(".html") else None
     if chat:
         return _archive_page(lambda payload: archive_pages.render_chatbot_card(payload, chat.group(1), chat.group(2)))
+    if name.endswith(".html") and archive_pages.CHAT_ID.fullmatch(name[:-5]):
+        return _archive_item(name, archive_pages.CHAT_ID, archive_pages.render_card)
     return _archive_item(name, archive.ANY_QUESTION_ID, archive_pages.render_card)
+
+
+DATA_TYPES = {".json": "application/json", ".jsonl": "application/x-ndjson", ".txt": "text/plain; charset=utf-8"}
+
+
+def archive_data(name: str):
+    """`data/<ID>.json`, `data/answers.jsonl`, `data/README.txt`: the pages' answers for machines, derived
+    from the same payload (archive_pages.render_data_file). Read-only; an unknown name is a 404."""
+    if not archive_pages.DATA_NAME.fullmatch(name):
+        return JSONResponse({"detail": "No such archive page"}, status_code=404)
+    try:
+        body = archive_pages.render_data_file(archive.public_payload(readonly=True), name)
+    except KeyError:
+        return JSONResponse({"detail": "No such archive page"}, status_code=404)
+    except (DatabaseUnavailable, sqlite3.Error, TypeError, ValueError, archive.ArchiveRefused):
+        return JSONResponse({"detail": UNAVAILABLE}, status_code=503)
+    return Response(body, media_type=DATA_TYPES[name[name.rindex("."):]])
 
 
 # ---- Per-address request limit for the public surface ---------------------------------------
@@ -280,6 +307,9 @@ def add_public_routes(application: FastAPI, *, readonly: bool = False) -> None:
     application.add_api_route("/archive/index.html", archive_index, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/trending.html", archive_trending, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/chatbots.html", archive_chatbots, methods=methods, include_in_schema=False)
+    application.add_api_route("/archive/models.html", archive_models, methods=methods, include_in_schema=False)
+    application.add_api_route("/archive/c/{name}", archive_chat_question, methods=methods, include_in_schema=False)
+    application.add_api_route("/archive/data/{name}", archive_data, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/q/{name}", archive_question, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/t/{name}", archive_trending_question, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/card/{name}", archive_card, methods=methods, include_in_schema=False)

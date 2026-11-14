@@ -1,12 +1,25 @@
 {
- "format": "live-genesis-chatbots/1",
+ "format": "live-genesis-chatbots/2",
  "status": "draft",
- "note": "The chat-app track of Answers Over Time: the owner asks each app BY HAND and imports the replies from a file (cli archive-chatbot-template, cli archive-chatbot-import). No software ever contacts these apps. The ids below refer to locked questions in archive_questions.json and archive_trending.json; the text and the exact prompt come from there. Until the first real import the ten may be changed; after it, ids may only be added. Names are used only to say which app was asked; this project is not affiliated with their makers.",
+ "note": "The chat-app track of Answers Over Time: the owner asks each app BY HAND and imports the replies from a file (cli archive-chatbot-template, cli archive-chatbot-import). No software ever contacts these apps. The questions below are this track's own list: it is not linked to archive_questions.json or archive_trending.json. Every prompt is prompt_prefix, a blank line, then the question. Until the first real import the list may be changed; after it a recorded question never changes or disappears and new ones are appended. No politics (a crude word check refuses obvious ones). `human` words the column of answers written by people, which the owner collects by hand. `aside` is one line of the owner's own, shown once on the chat-app method page and never on a card; it is a joke, not a claim. Names are used only to say which app was asked; this project is not affiliated with their makers.",
+ "prompt_prefix": "Answer in one short sentence, like you're texting a friend. Be funny if you can.",
  "chatbots": [
   {"label": "chatgpt", "name": "ChatGPT", "maker": "OpenAI"},
   {"label": "gemini", "name": "Gemini", "maker": "Google"},
-  {"label": "grok", "name": "Grok", "maker": "xAI", "attribution": "Written with Grok"},
-  {"label": "copilot", "name": "Copilot", "maker": "Microsoft"}
+  {"label": "grok", "name": "Grok", "maker": "xAI", "attribution": "Written with Grok"}
  ],
- "questions": ["Q11", "Q12", "Q13", "T002", "Q16", "Q17", "Q18", "Q03", "T005", "T012"]
+ "human": {"name": "Human", "meta": "written by people · collected by hand"},
+ "aside": "Why no Copilot? It is cheaper to ask a human than Copilot.",
+ "questions": [
+  {"id": "C001", "text": "Is a hot dog a sandwich?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nIs a hot dog a sandwich?", "hook": "Hot dog: sandwich or not?", "added": "2026-11-14"},
+  {"id": "C002", "text": "Roast the other AI apps in one sentence.", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nRoast the other AI apps in one sentence.", "hook": "AI vs AI: the roast", "added": "2026-11-14"},
+  {"id": "C003", "text": "Pineapple on pizza: defend it or destroy it.", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nPineapple on pizza: defend it or destroy it.", "hook": "Pineapple on pizza. Pick a side.", "added": "2026-11-14"},
+  {"id": "C004", "text": "What's the most overrated thing humans do?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nWhat's the most overrated thing humans do?", "hook": "Most overrated human habit?", "added": "2026-11-14"},
+  {"id": "C005", "text": "Which would you rather fight: one horse-sized duck or a hundred duck-sized horses?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nWhich would you rather fight: one horse-sized duck or a hundred duck-sized horses?", "hook": "Giant duck or tiny horses?", "added": "2026-11-14"},
+  {"id": "C006", "text": "Is Monday really necessary?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nIs Monday really necessary?", "hook": "Do we even need Monday?", "added": "2026-11-14"},
+  {"id": "C007", "text": "What's the most useless advice you can give me right now?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nWhat's the most useless advice you can give me right now?", "hook": "Give me your most useless advice", "added": "2026-11-14"},
+  {"id": "C008", "text": "Is cereal a soup?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nIs cereal a soup?", "hook": "Cereal: soup or not?", "added": "2026-11-14"},
+  {"id": "C009", "text": "Are you smarter than a ten-year-old?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nAre you smarter than a ten-year-old?", "hook": "Smarter than a ten-year-old?", "added": "2026-11-14"},
+  {"id": "C010", "text": "Toilet paper: over or under?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nToilet paper: over or under?", "hook": "Over or under? Settle it.", "added": "2026-11-14"}
+ ]
 }
