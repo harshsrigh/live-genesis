@@ -17,7 +17,7 @@ node scripts/capture-cards.mjs --site ./site --out ./cards                 # eve
 node scripts/capture-cards.mjs --site ./site --out ./cards --set trending  # T... only
 ```
 
-- Options: `--site DIR` or `--url BASE` (one of them), `--out DIR`, `--ids Q11,T001`, `--set core|trending`.
+- Options: `--site DIR` or `--url BASE` (one of them), `--out DIR`, `--ids Q11,T001` (also chat-app cards: `Q11-chatbots`, `Q11-grok`; see "Chat-app cards"), `--set core|trending`.
 - It opens each card at 540 x 960 CSS pixels with a device scale factor of 2, writes `<out>/<ID>.png`, and checks that the file is 1080 x 1920.
 - It reads the site folder or the one address given and blocks every other request. It calls no model and opens no database.
 - It needs Node and the `playwright` package with its Chromium, installed by the operator; the project gains no dependency: `npm install -g playwright`, then `npx playwright install chromium`. Without it the script stops with that hint.
@@ -93,6 +93,23 @@ The first step towards human voting is the platform's own poll (TikTok poll stic
 - Operator-only figures (`cli health`, `cli turns`, costs per call), keys, endpoint addresses, or screenshots of a terminal.
 - An answer that was withheld by the content check, retyped by hand.
 - Edited answers. A card is posted as captured or not at all.
+
+## Chat-app cards
+
+The chat-app track (`docs/ANSWERS-OVER-TIME.md`, "The chat-app track") has its own cards: `archive/card/<ID>-chatbots.html` shows the latest reply of up to four apps, and `archive/card/<ID>-<app label>.html` (for example `Q11-grok`) shows one app at a larger size with the conditions it was asked under.
+
+```bash
+node scripts/capture-cards.mjs --url https://harshsrigh.github.io/live-genesis/ --out ./cards --ids Q11-chatbots,Q11-grok
+```
+
+- **Say how it was collected.** The caption says "typed in by hand on <date>", with the date on the card. Do not write "<app> says" as if it were a standing fact: it is one reply on one day.
+- **Keep a screenshot** of the app's reply for your own records (the archive stores only its sha256). Do not post the screenshot: the app's interface is not ours to publish. Post the card.
+- **Never post a scripted demo card.** The demo cards of this track show made-up apps ("Chat app A") and say scripted demo in the bottom line.
+- **No logos.** Do not add a company's logo, icon or colours to the image or the video, and do not use a product name as the largest text. The names on the card are plain text and stay that way.
+- **Do not imply endorsement.** Nothing in the caption may suggest that the company made, approved or sponsors the post. Keep the bottom line of the card ("AI-generated · typed in by hand · not affiliated · may be wrong") visible in the image, and keep "Written with Grok" on a Grok panel.
+- **Use the platform's AI-content label** where its rules ask for one.
+- **The safe area.** TikTok and Instagram cover parts of a 1080 x 1920 image with their own buttons and captions. On these cards the question, the app names, the replies and the dates sit inside x 65 to 940 and y 270 to 1440. The wordmark is above that box and the honesty line below it: they may end up under the app's own interface, but they are in the image.
+- **Before each post, read the service's current terms** on publishing its output. They were not verified for this page, and they change. Copilot's consumer terms limit use to "your own personal use": leave Copilot cards out of anything that earns money.
 
 ## Not decided or not verified
 

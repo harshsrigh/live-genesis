@@ -55,6 +55,11 @@ the number of answers received, and the answer shown is the REPRESENTATIVE (larg
 sample index). `changed` compares representatives across runs. `stability` derives steady / changed /
 unsettled from that; with one sample nothing is ever unsettled and everything reads as before.
 
+A third track, the chat apps (archive_chatbots.py): the owner asks consumer chat apps BY HAND and imports
+the replies from a file. Its rows live in their own tables and reach the payload as the optional
+`chatbots` block; they are never rows of `archive_answers`, never in a model grid and never part of a
+model's `changed`. That module is imported lazily here (it imports this one).
+
 `live_genesis.core` imports this module for `SCHEMA`, so the engine is imported lazily: the
 web processes must never load the engine or a provider SDK.
 """
@@ -84,6 +89,9 @@ TRENDING_FILE = Path(__file__).resolve().parent / "archive_trending.json"
 # model name the provider reported, the local model digest, the pricing basis and whether sampling was pinned;
 # per run, the answerers that were skipped.
 PAYLOAD_SCHEMA = "live-genesis-archive/3"
+# /4: the payload also holds the hand-entered chat-app track (`chatbots`, archive_chatbots.py). Written only when
+# the database holds such a run: a payload without that track is still /3, byte for byte what it always was.
+PAYLOAD_SCHEMA_CHATBOTS = "live-genesis-archive/4"
 TRACKS = ("core", "trending")
 GROUP_COUNT = 4
 QUESTION_ID = re.compile(r"Q[0-9]{2}")
@@ -392,6 +400,8 @@ def migrate(cx) -> None:
     cx.execute("INSERT INTO archive_set_versions(question_set,version,sha256,questions,locked_at) "
                "SELECT question_set,1,sha256,questions,locked_at FROM archive_sets s WHERE NOT EXISTS "
                "(SELECT 1 FROM archive_set_versions v WHERE v.question_set=s.question_set)")
+    from . import archive_chatbots   # lazy: that module imports this one
+    archive_chatbots.migrate(cx)     # the chat-app track: three tables of its own, added in place
 
 
 class ArchiveRefused(RuntimeError):
@@ -1604,7 +1614,8 @@ def demo_archive() -> dict:
     """Offline SCRIPTED sample: three fictional answerers, eight runs dated a month apart, the core
     questions from the file plus the scripted trending questions (DEMO_TRENDING), each first asked
     in a later run. Every row is source `demo`; no model is called. Refused on a database with
-    real activity."""
+    real activity. Also scripts the chat-app track under made-up app names (archive_chatbots.demo)."""
+    from . import archive_chatbots
     data = load_questions()
     trending = demo_trending()
     with core.connect() as cx:
@@ -1613,7 +1624,7 @@ def demo_archive() -> dict:
                 or cx.execute("SELECT 1 FROM api_usage LIMIT 1").fetchone()):
             raise ArchiveRefused("Real activity, real archive answers or a locked question list found. To keep data honest, "
                                  "use a fresh DB for the scripted archive: LIVE_DB=demo.db")
-        if _has(cx, "demo"):
+        if _has(cx, "demo") or cx.execute("SELECT 1 FROM archive_chatbot_runs LIMIT 1").fetchone():
             raise ArchiveRefused("The scripted archive already exists in this database; use a fresh DB.")
         written = 0
         for number, date in enumerate(DEMO_DATES, 1):
@@ -1635,8 +1646,9 @@ def demo_archive() -> dict:
                            source="demo", state=state, reason=why, text=kept, created_at=date)
                     written += 1
             cx.execute("UPDATE archive_runs SET status='complete',finished_at=? WHERE id=?", (date, run_id))
+        chat = archive_chatbots.demo(cx, [data, trending])
     return {"runs": len(DEMO_DATES), "answerers": list(DEMO_MODELS), "answers": written,
-            "trending_questions": len(DEMO_TRENDING)}
+            "trending_questions": len(DEMO_TRENDING), **chat}
 
 
 # ---- Outside clients (POST /api/agent/archive-answer) ----------------------------------------------
@@ -1751,7 +1763,11 @@ def public_payload(readonly: bool = True) -> dict:
     One answer per (run, question, answerer). In a run with several samples it is the representative
     (`representative`), and it carries `samples` (answers received), `agree` (size of the largest group)
     and `others` (the other distinct answers with their counts); the run carries `samples` (asked).
-    None of these keys exists for a single-sample run."""
+    None of these keys exists for a single-sample run.
+
+    `chatbots` (and the schema marker /4) exists only when the database holds a chat-app run
+    (archive_chatbots.public_block): replies the owner collected by hand, kept apart from `answers`."""
+    from . import archive_chatbots
     with core.connect(readonly=readonly) as cx:
         tables = {r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'archive_%'")}
         current = {"archive_sets", "archive_set_versions", "archive_run_sets"} <= tables
@@ -1791,7 +1807,8 @@ def public_payload(readonly: bool = True) -> dict:
         if locked:
             rows = _locked_questions(cx, locked["question_set"])
             questions, groups = [_public_question(q) for q in rows], _groups_of(rows)
-        trending = _trending_public(cx, current, any(r["kind"] == "demo" for r in runs))
+        chat = archive_chatbots.public_block(cx, tables)
+        trending = _trending_public(cx, current, any(r["kind"] == "demo" for r in runs) or bool(chat and chat["runs"][0]["demo"]))
     if locked:
         name, digest = locked["question_set"], locked["sha256"]
     else:
@@ -1806,9 +1823,11 @@ def public_payload(readonly: bool = True) -> dict:
             labels.append(answer["answerer"])
     by_source = {source: sum(1 for a in answers if a["source"] == source) for source in PUBLIC_SOURCES}
     legacy = {"core": len(questions)}   # a run recorded before archive_run_sets existed asked the whole core set
-    return {"schema": PAYLOAD_SCHEMA, "question_set": name, "set_hash": digest, "locked": bool(locked),
+    hand_entered = bool(chat) and any(not run["demo"] for run in chat["runs"])
+    return {"schema": PAYLOAD_SCHEMA_CHATBOTS if chat else PAYLOAD_SCHEMA, "question_set": name, "set_hash": digest, "locked": bool(locked),
             "locked_at": locked["locked_at"] if locked else None,
-            "demo_only": not by_source["engine"] and not by_source["api"] and not any(r["kind"] == "real" for r in runs),
+            "demo_only": (not by_source["engine"] and not by_source["api"] and not any(r["kind"] == "real" for r in runs)
+                          and not hand_entered),
             "system_line": SYSTEM_LINE, "changed_rule": CHANGED_RULE,
             "groups": groups, "questions": questions, "trending": trending, "answerers": labels,
             "runs": [{"number": r["number"], "date": r["started_at"], "demo": r["kind"] == "demo",
@@ -1818,7 +1837,7 @@ def public_payload(readonly: bool = True) -> dict:
                       "skipped": {label: why for label, why in skipped.get(r["id"], {}).items() if label in labels},
                       # Present only on a run that asked each question more than once.
                       **({"samples": asked_samples[r["number"]]} if asked_samples[r["number"]] > 1 else {})} for r in runs],
-            "answers": answers, "answers_by_source": by_source}
+            "answers": answers, "answers_by_source": by_source, **({"chatbots": chat} if chat else {})}
 
 
 def empty_payload() -> dict:
@@ -1945,7 +1964,7 @@ def closed_problem(data: dict) -> str | None:
     answerers, the counts by source and `demo_only`. `data` already passed payload_problem and
     export_problem and holds no mock or scripted demo row."""
     trending = data["trending"]
-    checks = [("top level", data, _TOP_KEYS, ()), ("trending", trending, _TRENDING_KEYS, ())]
+    checks = [("top level", data, _TOP_KEYS, ("chatbots",)), ("trending", trending, _TRENDING_KEYS, ())]
     checks += [("a group", g, ("name", "why"), ()) for g in data["groups"]]
     checks += [("a trending group", g, ("name", "why"), ()) for g in trending["groups"]]
     checks += [(f"question {q['id']}", q, CORE_FIELDS, ()) for q in data["questions"]]
@@ -1971,7 +1990,8 @@ def closed_problem(data: dict) -> str | None:
     if set(by_source) != set(PUBLIC_SOURCES) or any(
             type(by_source[s]) is not int or by_source[s] != sum(1 for a in data["answers"] if a["source"] == s) for s in PUBLIC_SOURCES):
         return "answers_by_source does not match the answers"
-    if data["demo_only"] != (not data["runs"]):   # no scripted run can be here, so every run is a recorded one
+    # No scripted run can be here, so every run (a model run or a hand-entered chat-app run) is a recorded one.
+    if data["demo_only"] != (not data["runs"] and not data.get("chatbots", {}).get("runs")):
         return "demo_only does not fit the runs in the file"
     return None
 
@@ -2037,8 +2057,9 @@ def payload_problem(data: object) -> str | None:
     for key, kind in _SHAPE.items():
         if not isinstance(data.get(key), kind):
             return f"key {key} is missing or has the wrong type"
-    if data["schema"] != PAYLOAD_SCHEMA:
-        return "unknown schema"
+    if data["schema"] != (PAYLOAD_SCHEMA_CHATBOTS if "chatbots" in data else PAYLOAD_SCHEMA):
+        return "unknown schema" if data["schema"] not in (PAYLOAD_SCHEMA, PAYLOAD_SCHEMA_CHATBOTS) else \
+            "the schema marker does not fit the file (/4 exactly when it holds the chat-app track)"
     trending = data["trending"]
     for key, kind in _TRENDING_SHAPE.items():
         if not isinstance(trending.get(key), kind) or (kind is int and isinstance(trending[key], bool)):
@@ -2104,6 +2125,9 @@ def payload_problem(data: object) -> str | None:
         if key in seen:
             return "two answers share one run, question and answerer"
         seen.add(key)
+    if "chatbots" in data:
+        from . import archive_chatbots
+        return archive_chatbots.block_problem(data["chatbots"], set(place))
     return None
 
 
@@ -2146,6 +2170,8 @@ def status() -> dict:
                         "answerers": per_answerer}
         gaps = {r[0] for r in cx.execute("SELECT DISTINCT run_id FROM archive_run_answerers WHERE outcome='skipped'")}
         ids = {(r["kind"], r["number"]): r["id"] for r in cx.execute("SELECT id,kind,number FROM archive_runs")}
+        from . import archive_chatbots
+        chat = archive_chatbots.status(cx)
     file_state, matches = _file_state("core", locked)
     trending_file, trending_matches = _file_state("trending", trending)
     for run in runs:
@@ -2157,7 +2183,7 @@ def status() -> dict:
                          "versions": versions},
             "models_configured": os.getenv("LIVE_ARCHIVE_MODELS", "").strip() or None,
             "endpoints_configured": os.getenv(config.ENDPOINTS_VARIABLE, "").strip() or None, "runs": runs,
-            "last_run_answerers": last_run,
+            "last_run_answerers": last_run, "chatbots": chat,
             "samples_configured": os.getenv(SAMPLES_VARIABLE, "").strip() or None,
             "note": "mock runs are never published; `samples` is how many times a run asked each question of each model, and "
                     "`answers` counts one row per sample; estimated_usd is " + study.COST_CAVEAT
@@ -2184,15 +2210,20 @@ def add_parsers(sub) -> None:
                             help=f"Ask each question this many times of each model, 1-{MAX_SAMPLES} (default: {SAMPLES_VARIABLE}, else 1). "
                                  "It multiplies the calls and the cost; choose it before the first real run and keep it")
     sub.add_parser("archive-status", help="Answers Over Time: lock state, question file state and runs as JSON (free; read-only)")
-    sub.add_parser("demo-archive", help="Offline SCRIPTED answer archive (3 fictional models, 8 dated runs, scripted trending questions) on an empty/demo-only database (free; no model call)")
+    sub.add_parser("demo-archive", help="Offline SCRIPTED answer archive (3 fictional models, 8 dated runs, scripted trending questions, 4 made-up chat apps) on an empty/demo-only database (free; no model call)")
+    from . import archive_chatbots
+    archive_chatbots.add_parsers(sub)   # archive-chatbot-template, archive-chatbot-import (free; by hand; no model, no network)
 
 
 def handle_command(args, parser) -> bool:
     """CLI glue for the archive commands. Returns False for any other command."""
-    if args.command not in COMMANDS:
+    from . import archive_chatbots
+    if args.command not in COMMANDS + archive_chatbots.COMMANDS:
         return False
     try:
-        if args.command == "archive-lock":
+        if args.command in archive_chatbots.COMMANDS:
+            archive_chatbots.handle_command(args)
+        elif args.command == "archive-lock":
             done = lock(args.question_set)
             if done["track"] == "core":
                 print(f"Locked question set {done['question_set']}: {done['questions']} questions, sha256 {done['sha256']}.")

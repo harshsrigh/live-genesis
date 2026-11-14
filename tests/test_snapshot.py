@@ -255,7 +255,10 @@ def test_archive_only_writes_the_archive_and_nothing_of_the_society(isolated_db,
     payload = archive.public_payload(readonly=True)
     ids = [q['id'] for q in payload['questions']] + [q['id'] for q in payload['trending']['questions']]
     assert payload['questions'] and payload['trending']['questions']
-    expected = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/trending.html'} | ARCHIVE_STATIC
+    chat = payload['chatbots']
+    ids += [f'{question}-{suffix}' for question in chat['questions'] for suffix in ['chatbots'] + [app['label'] for app in chat['apps']]]
+    expected = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/trending.html', 'archive/chatbots.html'}
+                | ARCHIVE_STATIC
                 | {f'archive/q/{q["id"]}.html' for q in payload['questions']}
                 | {f'archive/t/{q["id"]}.html' for q in payload['trending']['questions']}
                 | {f'archive/card/{name}.html' for name in ids})

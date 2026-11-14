@@ -441,7 +441,9 @@ def test_demo_archive_is_scripted_dated_monthly_and_separate(ready, monkeypatch)
     monkeypatch.setattr(engine, 'infer', fake(AssertionError('the demo calls no model')))
     done = archive.demo_archive()
     assert done == {'runs': 8, 'answerers': ['model-a', 'model-b', 'model-c'], 'answers': 8 * 20 * 3 - 2 + (6 + 4 + 2) * 3,
-                    'trending_questions': 3}
+                    'trending_questions': 3,
+                    # the chat-app track, scripted under made-up names (tests/test_archive_chatbots.py)
+                    'chatbot_runs': 4, 'chatbots': ['chat-app-a', 'chat-app-b', 'chat-app-c', 'chat-app-d'], 'chatbot_answers': 90}
     runs = rows('SELECT number,kind,status,started_at FROM archive_runs ORDER BY number')
     assert [r['started_at'][:7] for r in runs] == [f'2026-{m:02d}' for m in range(4, 12)]
     assert {(r['kind'], r['status']) for r in runs} == {('demo', 'complete')}
@@ -558,8 +560,10 @@ def test_pages_for_the_demo_archive(ready):
     payload = archive.public_payload()
     pages = archive_pages.render_site(payload)
     core_ids, trend_ids = [f'Q{n:02d}' for n in range(1, 21)], ['T001', 'T002', 'T003']
-    assert set(pages) == ({'index.html', 'trending.html'} | {f'q/{i}.html' for i in core_ids} | {f't/{i}.html' for i in trend_ids}
-                          | {f'card/{i}.html' for i in core_ids + trend_ids})
+    chat_cards = {f'card/{q}-{s}.html' for q in ('Q03', 'Q11', 'Q12', 'Q16', 'Q17', 'T003')
+                  for s in ('chatbots', 'chat-app-a', 'chat-app-b', 'chat-app-c', 'chat-app-d')}
+    assert set(pages) == ({'index.html', 'trending.html', 'chatbots.html'} | {f'q/{i}.html' for i in core_ids}
+                          | {f't/{i}.html' for i in trend_ids} | {f'card/{i}.html' for i in core_ids + trend_ids} | chat_cards)
     index, date = pages['index.html'], pages['q/Q11.html']
     for page in pages.values():
         assert_page_is_safe(page)
@@ -580,9 +584,11 @@ def test_pages_for_the_demo_archive(ready):
     assert 'This list of twenty questions is a draft' in index
     # The question page: newest first, one column per answerer, every cell labelled as scripted.
     assert date.index('Nov 2026') < date.index('Oct 2026') < date.index('Apr 2026')
-    assert date.count('class="cell cell-changed"') == 3 and date.count('>CHANGED<') == 3
-    assert date.count('class="cell cell-same"') == 20 and date.count('class="cell cell-none"') == 1
-    assert date.count('· scripted demo') == 23 and 'server call</span>' not in date
+    models = date.split('<div id="chat-apps"')[0]          # the model grid; the chat-app grid below it has its own tests
+    assert len(models) < len(date)
+    assert models.count('class="cell cell-changed"') == 3 and models.count('>CHANGED<') == 3
+    assert models.count('class="cell cell-same"') == 20 and models.count('class="cell cell-none"') == 1
+    assert models.count('· scripted demo') == 23 and 'server call</span>' not in date
     assert 'model-a-2 · scripted demo · new model ID' in date and '1 Nov 2026' in date
     assert '<pre class="prompt mono">Answer in one or two sentences.\n\nWhat is today&#x27;s date?</pre>' in date
     assert 'This list is generated from the comparison. No model wrote it.' in date
