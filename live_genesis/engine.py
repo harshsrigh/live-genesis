@@ -197,6 +197,18 @@ def parse_object(text: str) -> dict:
     return result
 
 
+def _trust_env(base_url: str) -> bool:
+    """False for a loopback base URL: its client then ignores HTTP_PROXY / HTTPS_PROXY / ALL_PROXY, so a request
+    to a server on this machine is never handed to a proxy somewhere else (the zero rate and the word "local"
+    rest on that). A hosted base URL keeps the environment's proxy settings, which may be how it is reached."""
+    from urllib.parse import urlsplit
+    try:
+        host = urlsplit(base_url).hostname
+    except ValueError:
+        return True
+    return not providers.is_loopback_host(host)
+
+
 def infer(provider: str, model: str, prompt: str, *, system: str | None = None, max_output_tokens: int | None = None,
           endpoint: Any = None, sampling: dict | None = None) -> Completion:
     """One provider request. `system` and `max_output_tokens` default to the resident turn's values
@@ -226,7 +238,7 @@ def infer(provider: str, model: str, prompt: str, *, system: str | None = None, 
         # redirect followed (a redirect would carry the prompt, and could carry the key, to a host nobody configured).
         import httpx
         from openai import OpenAI
-        with httpx.Client(follow_redirects=False, timeout=timeout) as http:
+        with httpx.Client(follow_redirects=False, timeout=timeout, trust_env=_trust_env(endpoint.base_url)) as http:
             client = OpenAI(base_url=endpoint.base_url, api_key=endpoint_key, timeout=timeout, max_retries=0, http_client=http)
             return _chat(client, model, system, prompt, max_output_tokens, json_mode=False,
                          reasoning_effort=endpoint.reasoning_effort, sampling=sampling)
@@ -238,7 +250,7 @@ def infer(provider: str, model: str, prompt: str, *, system: str | None = None, 
         # goes to the configured host or fails. A 3xx answer is an error for the caller, like any other.
         import httpx
         from openai import OpenAI
-        with httpx.Client(follow_redirects=False, timeout=timeout) as http:
+        with httpx.Client(follow_redirects=False, timeout=timeout, trust_env=_trust_env(compat.base_url)) as http:
             client = OpenAI(base_url=compat.base_url, api_key=compat_key, timeout=timeout, max_retries=0, http_client=http)
             return _chat(client, model, system, prompt, max_output_tokens, json_mode=compat.json_mode,
                          reasoning_effort=compat.reasoning_effort, sampling=sampling)
