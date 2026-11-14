@@ -415,7 +415,7 @@ def test_the_real_sdk_client_follows_no_redirect_and_a_key_reaches_its_own_host_
     class Client(real_client):               # the SDK checks isinstance(http_client, httpx.Client)
         def __init__(self, **kwargs):
             built.append(kwargs)
-            super().__init__(transport=httpx.MockTransport(handler), trust_env=False, **kwargs)
+            super().__init__(transport=httpx.MockTransport(handler), **{**kwargs, 'trust_env': False})
     monkeypatch.setattr(httpx, 'Client', Client)
     found = providers.endpoints()
     with pytest.raises(Exception) as err:

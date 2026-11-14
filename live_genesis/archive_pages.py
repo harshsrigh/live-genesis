@@ -212,21 +212,22 @@ def _bar(up: str, base: str, versions: dict[str, str], current: str = "", *, sta
     goes to the observatory; a standalone archive has none, so it is left out there (or, when the build
     names the other published snapshot, replaced by a link to that snapshot's archive)."""
     index_href = f"{base}index.html"
+    first_href = f"{base}{FIRST_PAGE}"   # the page a visitor lands on: the wordmark and the first link lead to it
     if not standalone:
         last = f'    <a href="{up}">Observatory</a>\n'
     elif sibling:
         # A scripted page never calls the other snapshot (or itself) "recorded".
-        last = (f'    <a href="{esc(up + sibling)}archive/index.html">'
+        last = (f'    <a href="{esc(up + sibling)}archive/{FIRST_PAGE}">'
                 f'{"Main archive" if demo else "Scripted demo"}</a>\n')
     else:
         last = ""
     here = {name: ' aria-current="page"' if name == current else "" for name in ("questions", "trending")}
     return ('<div class="bar"><div class="bar-in">\n'
-            f'  <a class="wordmark" href="{index_href}"><img class="mark" src="{up}static/archive-mark.svg?v={versions["archive-mark.svg"]}" '
+            f'  <a class="wordmark" href="{first_href}"><img class="mark" src="{up}static/archive-mark.svg?v={versions["archive-mark.svg"]}" '
             'alt="" width="57" height="24" />Answers Over Time</a>\n'
             '  <nav aria-label="Archive navigation">\n'
-            f'    <a href="{index_href}"{here["questions"]}>Questions</a>\n'
             f'    <a href="{base}trending.html"{here["trending"]}>Trending</a>\n'
+            f'    <a href="{index_href}"{here["questions"]}>Questions</a>\n'
             f'    <a href="{index_href}#method">Method</a>\n'
             + last +
             '  </nav>\n'
@@ -258,22 +259,24 @@ def _last_change(view: _View, question_id: str) -> str:
     return f"Last change: {last['answerer']}, {month_year(view.run_date[last['run']])}"
 
 
+FIRST_PAGE = "trending.html"   # owner's decision: the trending page comes first; the 20 core questions stay at index.html
+
 HOME_DESCRIPTION = "The same simple questions, asked of AI models again every month, with every answer kept."
 
 
 def render_home(versions: dict[str, str] | None = None) -> str:
-    """`index.html` at the root of a standalone archive: sends the visitor to `archive/index.html`
+    """`index.html` at the root of a standalone archive: sends the visitor to `archive/trending.html`
     with a meta refresh and shows a plain link for a browser that does not follow it. No script."""
     versions = versions or asset_versions()
     head = _head("Answers Over Time", "", versions, HOME_DESCRIPTION)
     title = '  <title>'
     if head.count(title) != 1:
         raise ValueError("the page head must hold exactly one <title>")
-    head = head.replace(title, '  <meta http-equiv="refresh" content="0; url=archive/index.html" />\n' + title)
+    head = head.replace(title, f'  <meta http-equiv="refresh" content="0; url=archive/{FIRST_PAGE}" />\n' + title)
     return (head + '<div class="wrap">\n<header class="hero hero-small">\n  <div class="hero-copy">\n'
             '    <span class="tag tag-dark mono">Read-only archive · static snapshot</span>\n'
             '    <h1 class="display">Answers Over Time</h1>\n'
-            '    <p class="lede"><a href="archive/index.html">Open the archive</a></p>\n'
+            f'    <p class="lede"><a href="archive/{FIRST_PAGE}">Open the archive</a></p>\n'
             '  </div>\n</header>\n'
             '<footer class="foot"><span>Nothing is running behind this page.</span>'
             '<span class="mono small">No payments · nothing can be changed from this page</span></footer>\n'

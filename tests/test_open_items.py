@@ -469,7 +469,7 @@ def mock_transport(monkeypatch, handler):
     class Client(real):                      # the SDK checks isinstance(http_client, httpx.Client)
         def __init__(self, **kwargs):
             built.append(kwargs)
-            super().__init__(transport=httpx.MockTransport(handler), trust_env=False, **kwargs)
+            super().__init__(transport=httpx.MockTransport(handler), **{**kwargs, 'trust_env': False})
     monkeypatch.setattr(httpx, 'Client', Client)
     return built
 
@@ -497,7 +497,29 @@ def test_the_single_compatible_endpoint_follows_no_redirect(monkeypatch):
     assert getattr(err.value, 'status_code', None) == 307
     # One request, to the configured host, with the key; nothing (no prompt, no key) went to the redirect target.
     assert requests == [('compat.example.invalid', '/private-path/v1/chat/completions', 'Bearer fake-compatible-key')]
-    assert built == [{'follow_redirects': False, 'timeout': 35.0}]
+    assert built == [{'follow_redirects': False, 'timeout': 35.0, 'trust_env': True}]   # a hosted URL may need the proxy
+
+
+def test_a_loopback_base_url_never_goes_through_an_environment_proxy(monkeypatch):
+    # HTTP_PROXY / ALL_PROXY with an empty NO_PROXY would otherwise route http://127.0.0.1 through the proxy.
+    import httpx
+    for url, trusted in (('http://127.0.0.1:11434/v1', False), ('http://localhost:8080/v1', False), ('http://[::1]:1/v1', False),
+                         ('https://compat.example.invalid/v1', True), ('http://127.0.0.1.example.invalid/v1', True)):
+        assert engine._trust_env(url) is trusted
+    monkeypatch.setenv('HTTP_PROXY', 'http://proxy.example.invalid:3128')
+    monkeypatch.setenv('ALL_PROXY', 'http://proxy.example.invalid:3128')
+    monkeypatch.setenv('NO_PROXY', '')
+    with httpx.Client(follow_redirects=False, trust_env=True) as proxied,             httpx.Client(follow_redirects=False, trust_env=engine._trust_env('http://127.0.0.1:11434/v1')) as direct:
+        assert proxied._mounts and not direct._mounts   # the environment's proxies are mounted on the first only
+    # The adapter builds its client that way for a loopback base URL.
+    monkeypatch.setenv('LIVE_COMPAT_BASE_URL', 'http://127.0.0.1:11434/v1')
+    monkeypatch.setenv('OPENAI_COMPATIBLE_API_KEY', 'fake-compatible-key')
+    for name in ('LIVE_COMPAT_JSON_MODE', 'LIVE_COMPAT_REASONING_EFFORT', 'LIVE_INFER_TIMEOUT_SECONDS', 'OPENAI_BASE_URL'):
+        monkeypatch.delenv(name, raising=False)
+    built = mock_transport(monkeypatch, redirecting([], '127.0.0.1'))
+    with pytest.raises(Exception):
+        engine.infer('openai-compatible', 'model-x', 'the prompt', system='s', max_output_tokens=50)
+    assert built == [{'follow_redirects': False, 'timeout': 35.0, 'trust_env': False}]
 
 
 def test_the_native_openai_client_follows_no_redirect(monkeypatch):

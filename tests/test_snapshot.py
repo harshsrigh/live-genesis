@@ -300,11 +300,11 @@ def test_archive_only_root_page_leads_to_the_archive_without_script(isolated_db,
     out = tmp_path / 'site'
     snapshot.build(out, archive_only=True)
     home = (out / 'index.html').read_text(encoding='utf-8')
-    assert home.count('<meta http-equiv="refresh" content="0; url=archive/index.html" />') == 1
+    assert home.count('<meta http-equiv="refresh" content="0; url=archive/trending.html" />') == 1
     assert home.index('http-equiv="Content-Security-Policy"') < home.index('http-equiv="refresh"') < home.index('</head>')
-    assert body_of(home).count('<a href="archive/index.html">') == 1          # for a browser that does not follow the refresh
+    assert body_of(home).count('<a href="archive/trending.html">') == 1          # for a browser that does not follow the refresh
     assert '<script' not in home and 'data-overview' not in home and 'onload' not in home
-    assert sorted(set(addresses(home))) == sorted({'archive/index.html', *re.findall(r'"(static/archive[^"]+)"', home)})
+    assert sorted(set(addresses(home))) == sorted({'archive/trending.html', *re.findall(r'"(static/archive[^"]+)"', home)})
     assert 'Read-only archive · static snapshot' in home and 'Nothing is running behind this page.' in home
     assert not re.search(r'human|resident', visible_text(home), re.I) and not RULE_WORDING.search(visible_text(home))
     assert (out / 'archive' / 'index.html').is_file()                            # the existing archive address is unchanged
@@ -356,10 +356,10 @@ def test_archive_only_pair_links_each_other_as_the_workflow_builds_it(isolated_d
     assert files_of(site / 'demo') == {name for name in files_of(site) if not name.startswith('demo/')}
     # A scripted page calls the other snapshot the main archive, never "recorded".
     inner = (site / 'demo' / 'archive' / 'index.html').read_text(encoding='utf-8')
-    assert inner.count('<a href="../../archive/index.html">Main archive</a>') == 1
+    assert inner.count('<a href="../../archive/trending.html">Main archive</a>') == 1
     deep = (site / 'demo' / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
-    assert deep.count('<a href="../../../archive/index.html">Main archive</a>') == 1
-    assert '<a href="../demo/archive/index.html">' in (site / 'archive' / 'trending.html').read_text(encoding='utf-8')
+    assert deep.count('<a href="../../../archive/trending.html">Main archive</a>') == 1
+    assert '<a href="../demo/archive/trending.html">' in (site / 'archive' / 'trending.html').read_text(encoding='utf-8')
     assert 'Observatory' not in inner + deep and not re.search(r'>[^<]*recorded[^<]*</a>', inner + deep, re.I)
 
 

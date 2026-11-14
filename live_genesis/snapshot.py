@@ -38,7 +38,7 @@ marked `running` (an archive-run in progress, or one that was killed and so neve
 
 `--archive-only` (with a database or with `--from-data`; what the public site is built with) writes
 Answers Over Time and no page of the society: `archive/`, `archive.json`, the stylesheet, mark, icon
-and fonts those pages use, and a root `index.html` that sends the visitor to `archive/index.html`.
+and fonts those pages use, and a root `index.html` that sends the visitor to `archive/trending.html`.
 No overview, no post, profile or stats page, no script, no agent kit.
 
 See docs/FIRST-REAL-ROUND.md. Publishing is not reversible in practice: git history keeps the data.

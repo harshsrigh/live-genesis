@@ -377,6 +377,28 @@ def test_provider_not_ready_releases_and_bad_usage_is_unconfirmed(ready, monkeyp
     assert rows('SELECT COUNT(*) n FROM archive_answers')[0]['n'] == 0
 
 
+def test_an_interrupted_priced_call_is_unconfirmed_and_blocks_the_next_run(ready, monkeypatch):
+    # Ctrl+C while a priced request is out: it may have been sent and billed, so the hold must not stay merely `held`.
+    archive.lock()
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(engine, 'infer', interrupted)
+    monkeypatch.setattr(engine, 'REAL_INFER', interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        archive.run_archive(max_usd=1)
+    assert [r['status'] for r in rows('SELECT status FROM budget_reservations')] == ['unconfirmed']
+    run = rows('SELECT status,stop_reason FROM archive_runs')[0]
+    assert run['status'] == 'incomplete' and 'interrupted during a call' in run['stop_reason'] and 'cli reconcile' in run['stop_reason']
+    assert rows('SELECT outcome,reason,reservation_id FROM archive_run_answerers ORDER BY rowid LIMIT 1') == [
+        {'outcome': 'stopped', 'reason': 'other', 'reservation_id': 1}]
+    calls = []
+    as_real(monkeypatch, engine.Completion('Seven.', 40, 12, 'end'), calls)
+    with pytest.raises(archive.ArchiveRefused, match='Unconfirmed provider charge'):
+        archive.run_archive(max_usd=1)
+    assert calls == [] and rows('SELECT COUNT(*) n FROM archive_answers')[0]['n'] == 0
+
+
 def test_usage_above_the_hold_stops_the_run(ready, monkeypatch):
     archive.lock()
     as_real(monkeypatch, engine.Completion('Seven.', 5000, 5000, 'end'))
@@ -661,7 +683,7 @@ def test_both_web_apps_serve_the_same_pages(ready):
             assert index.status_code == 200 and index.text == archive_pages.render_index(payload)
             assert 'text/html' in index.headers['content-type'] and "default-src 'none'" in index.headers['content-security-policy']
             assert client.get('/archive/q/Q11.html').text == archive_pages.render_question(payload, 'Q11')
-            assert client.get('/archive', follow_redirects=False).headers['location'] == '/archive/index.html'
+            assert client.get('/archive', follow_redirects=False).headers['location'] == '/archive/trending.html'
             for missing in ('/archive/q/Q99.html', '/archive/q/Q11', '/archive/q/..%2Fx.html', '/archive/q/Q1.html'):
                 assert client.get(missing).status_code == 404, missing
             assert client.get('/static/archive.css').status_code == 200
@@ -768,8 +790,8 @@ def test_published_archive_tamper_guard_and_mock_are_refused(ready, tmp_path, mo
     (out / 'archive.json').unlink()
     try:
         (out / 'archive.json').symlink_to(outside)
-    except (OSError, NotImplementedError):   # Windows without the privilege: the remaining checks still run
-        pass
+    except (OSError, NotImplementedError):   # Windows without the privilege: put the file back so the remaining checks still run
+        (out / 'archive.json').write_bytes(good['archive.json'])
     else:
         refused('archive.json is missing or unreadable')
         assert outside.read_bytes() == good['archive.json'] and not (out / 'archive.json').is_symlink()

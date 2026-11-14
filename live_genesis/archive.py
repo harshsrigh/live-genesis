@@ -1293,6 +1293,7 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
     spent: list[float] = []
     unconfirmed = ("Check provider billing, then run: cli reconcile --receipt {0} --actual-usd <charged amount>")
     progress = {a["label"]: {"outcome": "not_asked", "reason": "", "recorded": 0, "reservation": None, "digest": None} for a in models}
+    open_hold: tuple[int, float, str] | None = None   # a priced call between its reservation and its settlement
 
     def skip(answerer: dict, reservation: int, category: str) -> None:
         """A failed call on a zero-priced endpoint: release the $0 hold, drop this model, go on (audited)."""
@@ -1335,6 +1336,9 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
                 except core.BudgetExceeded:
                     reason = "local estimated spending ceiling or run cap reached; no further calls made"
                     break
+                # A priced call that is interrupted (Ctrl+C, a kill signal) between here and its settlement may have
+                # been sent: the `finally` below then closes its hold as unconfirmed, so the next run stops for `cli reconcile`.
+                open_hold = None if zero else (reservation, hold, answerer["label"])
                 started = time.monotonic()
                 try:
                     result = engine.infer(answerer["provider"], answerer["model"], question["prompt"], system=SYSTEM_LINE,
@@ -1376,6 +1380,7 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
                               f"{reservation}). " + unconfirmed.format(reservation))
                     state_of.update(reason="no_usage", reservation=reservation)
                     break
+                open_hold = None   # settled
                 spent.append(usd)
                 state, why, kept = classify(text, stop)
                 with core.connect() as cx:
@@ -1402,7 +1407,17 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
             skipped = [f"{a['label']} ({progress[a['label']]['reason']})" for a in models if progress[a["label"]]["outcome"] == "skipped"]
             status, reason = "complete", ("skipped, no further question asked of: " + ", ".join(skipped)) if skipped else ""
     finally:
-        # Also on KeyboardInterrupt: a held reservation then stays counted, and each model's outcome is still written.
+        # Also on KeyboardInterrupt: each model's outcome is still written. A priced hold that was neither settled
+        # nor closed (the call was interrupted, so it may have been sent and billed) becomes unconfirmed.
+        if open_hold is not None:
+            try:
+                core.close_reservation(open_hold[0], "unconfirmed")
+            except ValueError:
+                pass   # already closed by one of the handlers above
+            else:
+                reason = (f"interrupted during a call; ${open_hold[1]:.6f} kept as unconfirmed (reservation {open_hold[0]}). "
+                          + unconfirmed.format(open_hold[0]))
+                progress[open_hold[2]].update(reason="other", reservation=open_hold[0])
         try:
             with core.connect() as cx:
                 cx.execute("BEGIN IMMEDIATE")

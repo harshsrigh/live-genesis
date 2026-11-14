@@ -189,7 +189,7 @@ def _archive_page(render) -> HTMLResponse | JSONResponse:
 
 
 def archive_redirect():
-    return RedirectResponse("/archive/index.html", status_code=307)
+    return RedirectResponse("/archive/trending.html", status_code=307)
 
 
 def archive_index():
