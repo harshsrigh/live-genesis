@@ -520,10 +520,6 @@ def _file(track: str) -> Path:
     return QUESTIONS_FILE if track == "core" else TRENDING_FILE
 
 
-def track_of(question_id: str) -> str:
-    return "trending" if TRENDING_ID.fullmatch(question_id) else "core"
-
-
 def trending_rule(text: str) -> str | None:
     """The first mechanical rule a trending question or topic breaks, or None (TRENDING_RULES)."""
     for name, pattern in TRENDING_RULES:
@@ -1991,7 +1987,7 @@ def set_hash_problem(data: dict) -> str | None:
 
 
 def run_states(readonly: bool = True) -> list[dict]:
-    """Each recorded (real) run as stored, for the exporter: its number, its status as archive-status
+    """Each recorded (real) run as stored: its number, its status as archive-status
     shows it (`running`, `complete`, `complete_with_gaps`, `incomplete`) and the answer rows recorded
     (one per sample). A run that was killed stays `running`: nothing ever closes it."""
     with core.connect(readonly=readonly) as cx:

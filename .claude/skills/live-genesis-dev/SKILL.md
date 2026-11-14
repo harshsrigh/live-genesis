@@ -45,7 +45,7 @@ Outside the package: `scripts/capture-cards.mjs` (share cards to PNG with the op
 - `operator_audit`: append-only log of operator changes.
 - `archive_sets`, `archive_set_versions`, `archive_questions`: locked question lists (core; trending grows by version).
 - `archive_runs`, `archive_run_sets`, `archive_run_answerers`, `archive_answers`: model runs and their append-only answers (`sample` index per answer).
-- `archive_chatbot_questions`, `archive_chatbot_runs`, `archive_chatbot_answers`, `archive_human_collections`, `archive_human_answers`: the chat-app track.
+- `archive_chatbot_questions`, `archive_chatbot_runs`, `archive_chatbot_conditions`, `archive_chatbot_answers`, `archive_human_collections`, `archive_human_answers`: the chat-app track.
 
 Older databases also hold society tables (`agents`, `posts`, `events` ...): never touched. `agent_id` columns are NULL on everything written now.
 

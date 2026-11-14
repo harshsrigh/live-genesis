@@ -47,7 +47,7 @@ python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000   # local pa
 ## The database
 SQLite; `LIVE_DB` names the file (default `./live.db`; a relative path is taken from the repository root). `init_db` runs on every CLI command and only adds what is missing.
 
-A fresh database holds: `api_usage`, `budget_reservations`, `cost_reconciliations` (spend estimates), `operator_audit` (append-only), the model track's `archive_sets`, `archive_set_versions`, `archive_questions`, `archive_runs`, `archive_run_sets`, `archive_run_answerers`, `archive_answers`, and the chat-app track's `archive_chatbot_questions`, `archive_chatbot_runs`, `archive_chatbot_answers`, `archive_human_collections`, `archive_human_answers`.
+A fresh database holds: `api_usage`, `budget_reservations`, `cost_reconciliations` (spend estimates), `operator_audit` (append-only), the model track's `archive_sets`, `archive_set_versions`, `archive_questions`, `archive_runs`, `archive_run_sets`, `archive_run_answerers`, `archive_answers`, and the chat-app track's `archive_chatbot_questions`, `archive_chatbot_runs`, `archive_chatbot_conditions`, `archive_chatbot_answers`, `archive_human_collections`, `archive_human_answers`.
 
 A database made before 14 November 2026 also holds the removed society's tables (`agents`, `posts`, `events` and others). The code neither reads nor changes them. `agent_id` on the accounting and answer tables is NULL on everything written now. Back up before upgrading: `python -m live_genesis.cli backup NEW-FILE`.
 
