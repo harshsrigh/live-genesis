@@ -2,6 +2,31 @@
 
 Written 14 November 2026. Owner's decision: lead with the consumer chat apps, not API models. This plan uses only what exists today; anything not yet built or not yet verified is marked.
 
+## Owner's decisions after this plan was written (14 November 2026)
+
+These override anything below that disagrees. Written down by the PC session from the owner's words.
+
+1. **Three apps, not four: ChatGPT, Gemini, Grok. Copilot is dropped.** The owner wants a joke line about it, along the lines of "it is cheaper to ask a human than Copilot".
+2. **A fourth column: Human.** Answers written by people, collected by asking the same questions on Reddit. It is always labelled as human-written and is never called a model.
+3. **No politics.** Do not add political questions. If one is ever shown, the page carries a line saying the site does not promote hate.
+4. **The chat-app question list is its own list.** It is not linked to the locked core list or the locked trending list.
+5. **The front page is the trending page, showing those questions with the chat apps' answers.**
+6. **Show only answers where the app actually answered.** A refusal or a non-answer is left out. The owner's words: this is a comparison for laughs, not a data-collection service.
+7. **Tone: short, punchy, made for people who scroll fast.** Headlines may be cheeky.
+8. **Ask logged in.**
+
+### State when these decisions were made
+
+The table under "What we have" was written before the PC session's work of 13 to 14 November. Since then: both question lists are locked in the real database; two real runs of four local models are recorded (run 1: phi4-mini only; run 2: all four, 384 answers, $0); the reviewed archive-only export was used and approved by the owner; and the public site shows those recorded answers, opening on the trending page, with the scripted demo under `demo/`. The line "No real answer of any kind has been recorded or published" is no longer true.
+
+### Points these decisions leave open (PC session's notes, not decisions)
+
+- **The locked trending list already holds a political question** (T004, "Who is the president of the United States?"), and a wrong model answer to it is public. A locked question cannot be removed from the list. Whether the pages may leave it out, or carry the no-hate line, is for the owner to say.
+- **Reddit answers are other people's writing.** Publishing them needs a rule before the first one is imported: say in the Reddit post that replies may be quoted, publish no usernames, run the same content guards as for model answers, and read each subreddit's rules on surveys and self-promotion. Posting on Reddit is outreach, so the owner posts; the software never does.
+- **The Copilot joke names a real product.** Keep it clearly a joke and make no factual claim about price or quality that could be read as one.
+- **"Only where the app answered" is a display rule.** The page should not suggest it shows everything; one plain line such as "refusals are left out" keeps it honest. Whether left-out replies are still stored is not decided.
+- **Cheeky headlines must still say what the app actually said.** The honesty labels (recorded, may be wrong, not affiliated, written with Grok) stay.
+
 ## The product in one paragraph
 
 Once a month the owner types the same ten questions, by hand, into **ChatGPT, Gemini, Grok and Copilot**, in a fresh chat each time, and pastes each reply unedited into a file. The site shows the four replies side by side, keeps every month, and marks when an app's answer changed. Each question also becomes portrait cards for TikTok and Instagram. The recurring hook is **"the answer changed since last month"**.
@@ -72,10 +97,12 @@ Nothing here calls a model or costs money. The exact command names are confirmed
 
 | Decision | Who | By when |
 |---|---|---|
-| The ten questions | Owner | Before the first import |
+| The ten questions (a list of their own; no politics) | Owner | Before the first import |
 | Name | Owner | Before the first post |
-| Keep Copilot despite the personal-use limit | Owner | Before any monetising |
-| Ask logged in (recommended) or logged out | Owner | Before the first import; then keep it |
+| ~~Keep Copilot~~ | Decided: dropped | 14 Nov |
+| ~~Logged in or out~~ | Decided: logged in | 14 Nov |
+| How Reddit answers are collected and quoted | Owner | Before the first human answer is imported |
+| What to do with the locked question T004 | Owner | Before the redesign ships |
 | Whether to build an on-site vote | Owner | After there are visitors |
 
 ## Risks
