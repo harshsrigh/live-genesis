@@ -412,7 +412,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .card-q-xl { font-size: 10cqw; line-height: 0.98; -webkit-line-clamp: 2; line-clamp: 2; }
   .card-q-l { font-size: 8.2cqw; line-height: 1; -webkit-line-clamp: 3; line-clamp: 3; }
   .card-q-m { font-size: 6cqw; line-height: 1.02; -webkit-line-clamp: 4; line-clamp: 4; }
-  .card-q-s { font-size: 4.6cqw; line-height: 1.05; -webkit-line-clamp: 6; line-clamp: 6; }
+  .card-q-s { font-size: 5cqw; line-height: 1.05; -webkit-line-clamp: 6; line-clamp: 6; }
   /* Four panels leave the question about 17cqw: two lines at 7 (up to 34 characters), three at 4.8, four at 3.9. */
   .card-four .card-q-f1 { font-size: 7cqw; line-height: 1.02; -webkit-line-clamp: 2; line-clamp: 2; }
   .card-four .card-q-f2 { font-size: 4.8cqw; line-height: 1.05; -webkit-line-clamp: 3; line-clamp: 3; }

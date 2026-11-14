@@ -415,14 +415,14 @@ def test_archive_only_render_from_data_publishes_no_society_content(isolated_db,
     assert '<script' not in everything and 'overview.json' not in everything
     front = (site / 'archive' / 'index.html').read_text(encoding='utf-8')
     assert 'No answers recorded yet' in front and 'Observatory' not in front
-    assert front.count('<a href="../demo/archive/trending.html">Scripted demo</a>') == 1
+    assert front.count('<a href="../demo/archive/index.html">Sample site</a>') == 1
     # Every address resolves, except the one that leads to the demo folder, which this test did not build.
     for page in site.rglob('*.html'):
         for url in re.findall(r'(?:href|src)="([^"]*)"', page.read_text(encoding='utf-8')):
             target = (page.parent / url.split('#')[0].split('?')[0]).resolve()
             assert site.resolve() in target.parents, url
-            assert target.is_file() or target == (site / 'demo' / 'archive' / 'trending.html').resolve(), (page.name, url)
-    assert '<meta http-equiv="refresh" content="0; url=archive/trending.html" />' in (site / 'index.html').read_text(encoding='utf-8')
+            assert target.is_file() or target == (site / 'demo' / 'archive' / 'index.html').resolve(), (page.name, url)
+    assert '<meta http-equiv="refresh" content="0; url=archive/index.html" />' in (site / 'index.html').read_text(encoding='utf-8')
     # A damaged overview.json still stops the build, although it would not have been shown.
     (published / 'overview.json').write_bytes((published / 'overview.json').read_bytes() + b'\n')
     with pytest.raises(RuntimeError, match='does not match the sha256'):

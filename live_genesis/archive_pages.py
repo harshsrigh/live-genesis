@@ -67,7 +67,8 @@ HUMAN_METHOD = "collected-by-hand"          # the Human column of a real collect
 KINDS = ("chat-app", "model", "human")
 STATES_SHOWN = ("answered", "changed", "same", "mixed")   # data-state of a visible answer; "answered" is a first answer
 SAMPLE = "scripted-sample"
-SAMPLE_LABEL = SOURCE_LABELS["demo"]
+SAMPLE_LABEL = SOURCE_LABELS["demo"]    # the one visible sample label of a page or card
+SAMPLE_WORD = "sample"                  # per line inside the closed "Where each answer came from" block
 HIDDEN_WORDS = "Hidden: broke our content rules"
 LEFT_OUT = "Refusals and non-answers are left out."
 DATA_SCHEMA = "answers-over-time-data/1"
@@ -415,7 +416,7 @@ def _model_board(view: _View, question_id: str) -> dict:
                         agreement=agreement, changed=answer["changed"],
                         conditions={key: answer.get(key) for key in ("model",) + archive.PUBLIC_CALL_FIELDS + archive.SAMPLE_FIELDS
                                     if key != "others" and answer.get(key) is not None})
-            facts = [SOURCE_LABELS[answer["source"]], f"version {answer['model']}"]
+            facts = [SAMPLE_WORD if sample else SOURCE_LABELS[answer["source"]], f"version {answer['model']}"]
             if answer.get("reported_model") and answer["reported_model"] != answer["model"]:
                 facts.append(f"the service called it {answer['reported_model']}")
             facts += [where] if where else []
@@ -475,7 +476,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
                     "form": None, "collected": date, "previous": None, "why_not": "left out", "tags": [], "facts": [],
                     "conditions": dict(conditions) if conditions else None, "agreement": "", "others": [], "changed": None}
             if human:
-                facts = [SAMPLE_LABEL if sample else "Written by people, collected by hand"]
+                facts = [SAMPLE_WORD if sample else "Written by people, collected by hand"]
                 if conditions:
                     facts.append(f"from: {conditions['source']}")
                     if conditions["collected_on"] != date:
@@ -484,7 +485,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
                         facts.append(f"{_replies(conditions['count'])} read")
             else:
                 moved = chat.conditions_changed(key, date)
-                facts = [SOURCE_LABELS["demo" if sample else "manual"], f"the app showed: {conditions['shown_model']}",
+                facts = [SAMPLE_WORD if sample else SOURCE_LABELS["manual"], f"the app showed: {conditions['shown_model']}",
                          conditions_line(conditions)]
                 if chat.shown_change(key, date):
                     facts.append("the app showed a new version name")
@@ -641,7 +642,7 @@ def _meta(view: _View, base: str, *, board: dict | None = None, track: str = "mo
     return "".join(out)
 
 
-def _bar(view: _View, up: str, base: str, versions: dict[str, str], current: str = "", *, standalone: bool = False,
+def _bar(view: _View, up: str, base: str, versions: dict[str, str], current: str = "", *, here: str, standalone: bool = False,
          sibling: str | None = None) -> str:
     """The top bar: one line. `base` leads to the archive folder ("" on its own pages, "../" one folder
     down). The last link goes to the observatory; a standalone archive has none, so it is left out there
@@ -660,7 +661,7 @@ def _bar(view: _View, up: str, base: str, versions: dict[str, str], current: str
     links.append(("chatbots", f"{base}chatbots.html", "How it works") if chat else ("method", f"{base}models.html#method", "How it works"))
     nav = "".join(f'    <a href="{href}"{" aria-current=" + chr(34) + "page" + chr(34) if name == current else ""}>{text}</a>\n'
                   for name, href, text in links)
-    return ('<a class="skip" href="#main">Skip to the content</a>\n'
+    return (f'<a class="skip" href="{esc(here)}#main">Skip to the content</a>\n'
             '<header class="bar"><div class="bar-in">\n'
             f'  <a class="wordmark" href="{base}{FIRST_PAGE}"><img class="mark" src="{up}static/archive-mark.svg?v={versions["archive-mark.svg"]}" '
             'alt="" width="57" height="24" />Answers Over Time</a>\n'
@@ -885,14 +886,14 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
                     '<a href="chatbots.html">here is how we ask</a>. '
                     'Want the plain models instead? <a href="models.html">Models</a> and <a href="trending.html">Trending</a>.</p>\n')
         return _page(view, _head("Answers Over Time", "../", versions, HOME_DESCRIPTION, _meta(view, "", track="chat")),
-                     _bar(view, "../", "", versions, "front", standalone=standalone, sibling=sibling), body,
+                     _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
                      _foot(view, "chat", shown))
     body = [_list_head(view.tag(), "Simple questions, asked again every month.",
                        "We ask AI the same basic things again and again, and keep every answer.")]
     body += _trending_section(view, key=_key(view, False)) + _core_sections(view)
     body += [_core_note(view), _method_models(view)]
     return _page(view, _head("Answers Over Time", "../", versions, HOME_DESCRIPTION, _meta(view, "")),
-                 _bar(view, "../", "", versions, "front", standalone=standalone, sibling=sibling), body,
+                 _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
                  _foot(view, "models", [q["id"] for q in view.questions + view.trending]))
 
 
@@ -907,7 +908,7 @@ def render_models(payload: dict, versions: dict[str, str] | None = None, *, stan
     body += [_core_note(view), _method_models(view)]
     return _page(view, _head("Models · Answers Over Time", "../", versions,
                              "The core questions, asked of AI models directly, with every answer kept.", _meta(view, "")),
-                 _bar(view, "../", "", versions, "models", standalone=standalone, sibling=sibling), body,
+                 _bar(view, "../", "", versions, "models", here="models.html", standalone=standalone, sibling=sibling), body,
                  _foot(view, "models", [q["id"] for q in view.questions]))
 
 
@@ -923,7 +924,7 @@ def render_trending(payload: dict, versions: dict[str, str] | None = None, *, st
     return _page(view, _head("Trending · Answers Over Time", "../", versions,
                              "Questions written from what many people were searching for, asked of AI models ever since.",
                              _meta(view, "")),
-                 _bar(view, "../", "", versions, "trending", standalone=standalone, sibling=sibling), body,
+                 _bar(view, "../", "", versions, "trending", here="trending.html", standalone=standalone, sibling=sibling), body,
                  _foot(view, "models", [q["id"] for q in view.trending]))
 
 
@@ -1130,7 +1131,7 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
     kinds = {cell["method"] for cell in board["cells"].values()}
     explain = []
     if SAMPLE in kinds:
-        explain.append(f"<strong>{SAMPLE_LABEL}</strong>: the answer and its date were written by hand as a sample. Nothing was asked.")
+        explain.append("<strong>Sample</strong>: we wrote the answer and its date by hand to show how the page works. Nothing was asked.")
     if METHODS["manual"] in kinds:
         explain.append("<strong>Typed in by hand</strong>: a person typed the question into the app and pasted the reply. "
                        "There's no receipt, so you're trusting whoever typed it.")
@@ -1161,7 +1162,7 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
     current = "front" if chat else "trending" if board["track"] == "trending" else "models"
     return _page(view, _head(f"{board['text']} · Answers Over Time", "../../", versions, board["text"],
                              _meta(view, "../", board=board, track=track)),
-                 _bar(view, "../../", "../", versions, current, standalone=standalone, sibling=sibling), body,
+                 _bar(view, "../../", "../", versions, current, here=f"{question_id}.html", standalone=standalone, sibling=sibling), body,
                  _foot(view, track, [question_id], back), ' itemscope itemtype="https://schema.org/Question"')
 
 
@@ -1209,7 +1210,7 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
                         f'<div class="app-how"><span>{esc(conditions_line(conditions))}</span>'
                         f'<span class="muted small">The app showed: {esc(conditions["shown_model"])} · '
                         f'asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all · '
-                        f'{esc(SOURCE_LABELS["demo" if chat.demo else "manual"])}</span>'
+                        f'{esc(SAMPLE_WORD if chat.demo else SOURCE_LABELS["manual"])}</span>'
                         + (f'<span class="muted small">{esc(conditions["note"])}</span>' if conditions["note"] else '')
                         + (f'<span class="mono small">{esc(column["attribution"])}</span>' if column["attribution"] else '')
                         + '</div></div>\n')
@@ -1240,7 +1241,7 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
                 'was asked, nothing more.</span></div>\n'
                 '  </div>\n</section>\n')
     return _page(view, _head("How it works · Answers Over Time", "../", versions, CHATBOTS_DESCRIPTION, _meta(view, "", track="chat")),
-                 _bar(view, "../", "", versions, "chatbots", standalone=standalone, sibling=sibling), body, _foot(view, "chat", []))
+                 _bar(view, "../", "", versions, "chatbots", here="chatbots.html", standalone=standalone, sibling=sibling), body, _foot(view, "chat", []))
 
 
 # ---- Share cards --------------------------------------------------------------------------------------------------
@@ -1367,7 +1368,7 @@ site root) and hold nothing that is not in it.
 Files
 -----
 answers.jsonl   One answer per line, each line a complete JSON object.
-<ID>.json       One question (Q01, T004, C003 ...): the question, exactly what was asked,
+<ID>.json       One question (Q01, T002, C003 ...): the question, exactly what was asked,
                 and every answer to it.
 README.txt      This file.
 

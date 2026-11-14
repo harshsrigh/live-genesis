@@ -4,11 +4,16 @@
 //   node scripts/capture-cards.mjs --site ./site --out ./cards
 //   node scripts/capture-cards.mjs --url https://example.org/project/ --out ./cards --ids Q11,T001
 //   node scripts/capture-cards.mjs --site ./site --out ./cards --set trending
-//   node scripts/capture-cards.mjs --site ./site --out ./cards --ids Q11-chatbots,Q11-grok
+//   node scripts/capture-cards.mjs --site ./site --out ./cards --set chat
+//   node scripts/capture-cards.mjs --site ./site --out ./cards --ids C001,C001-grok,C001-human
 //
-// Chat-app cards (replies the owner typed in by hand) are archive/card/<ID>-chatbots.html (all apps)
-// and archive/card/<ID>-<app label>.html (one app). They are captured like any other card; this script
-// only photographs pages of the site it is given and never opens a chat app.
+// Chat-app cards (replies the owner typed in by hand, and answers written by people) are
+// archive/card/C001.html (every app and Human), archive/card/C001-<app label>.html (one app) and
+// archive/card/C001-human.html. They are captured like any other card; this script only photographs
+// pages of the site it is given and never opens a chat app or any other site.
+//
+// The fitted 9:16 picture exists only in a window of at least 540 x 960 CSS pixels, which is the size
+// used here; in a smaller window a card page is ordinary flowing text.
 //
 // Opens archive/card/<ID>.html at 540 x 960 CSS pixels with a device scale factor of 2 and writes
 // <out>/<ID>.png. It reads the local site folder (--site) or the one base URL given (--url) and
@@ -18,8 +23,10 @@
 // Needs the `playwright` package and its Chromium, which the operator installs separately
 // (the project itself has no Node dependency):  npm install -g playwright && npx playwright install chromium
 //
-// A card that carries the "Scripted demo" label is captured and reported as SCRIPTED DEMO.
-// Never post such a card as a real answer. See docs/SOCIAL-POSTS.md.
+// A sample card (its page says data-provenance="scripted-sample"; the visible label is "Sample we
+// wrote, not a real AI answer") is captured and reported as SAMPLE. Never post such a card as a
+// real answer. A card never has its text edited: when a long reply is cut on the picture, the card
+// itself says "full answer on the site". See docs/SOCIAL-POSTS.md.
 
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -28,15 +35,15 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 const WIDTH = 540, HEIGHT = 960, SCALE = 2;
-const ID = /^(Q[0-9]{2}|T[0-9]{3})(-[a-z][a-z0-9-]{1,23})?$/;
-const SETS = { core: 'Q', trending: 'T' };
-const USAGE = `Usage: node scripts/capture-cards.mjs (--site DIR | --url BASE) --out DIR [--ids Q11,T001] [--set core|trending]
+const ID = /^(Q[0-9]{2}|T[0-9]{3}|C[0-9]{3}(-[a-z][a-z0-9-]{1,23})?)$/;
+const SETS = { core: 'Q', trending: 'T', chat: 'C' };
+const USAGE = `Usage: node scripts/capture-cards.mjs (--site DIR | --url BASE) --out DIR [--ids Q11,T001,C001] [--set core|trending|chat]
 
   --site DIR   a built site folder (the output of: python -m live_genesis.snapshot DIR)
   --url BASE   the address of a served site, e.g. http://127.0.0.1:8000/ or the published site
   --out DIR    where the PNG files go (created if missing)
-  --ids LIST   comma-separated card names (Q11, T001, Q11-chatbots, Q11-grok); default: every card of the site
-  --set NAME   core (Q..) or trending (T..) only`;
+  --ids LIST   comma-separated card names (Q11, T001, C001, C001-grok, C001-human); default: every card of the site
+  --set NAME   core (Q..), trending (T..) or chat (C...) only`;
 
 class Problem extends Error {}
 
@@ -55,11 +62,11 @@ function parseArgs(argv) {
   }
   if (!options.site === !options.url) throw new Problem('Give exactly one of --site DIR or --url BASE');
   if (!options.out) throw new Problem('--out DIR is required');
-  if (options.set && !(options.set in SETS)) throw new Problem('--set must be core or trending');
+  if (options.set && !(options.set in SETS)) throw new Problem('--set must be core, trending or chat');
   if (options.ids !== undefined) {
     options.ids = options.ids.split(',').map((id) => id.trim()).filter(Boolean);
     const bad = options.ids.filter((id) => !ID.test(id));
-    if (bad.length || !options.ids.length) throw new Problem(`--ids takes ids such as Q11, T001 or Q11-chatbots${bad.length ? `; not: ${bad.join(', ')}` : ''}`);
+    if (bad.length || !options.ids.length) throw new Problem(`--ids takes ids such as Q11, T001, C001 or C001-grok${bad.length ? `; not: ${bad.join(', ')}` : ''}`);
     options.ids = [...new Set(options.ids)];
   }
   return options;
@@ -156,11 +163,14 @@ async function main() {
         }
         const trending = data.trending && Array.isArray(data.trending.questions) ? data.trending.questions : [];
         ids = [...data.questions, ...trending].map((q) => String(q && q.id)).filter((id) => ID.test(id));
-        // The chat-app track, when the site has one: per question, one card for all apps and one per app.
+        // The chat-app track, when the site has one: per question, one card for everyone, one per app and one for Human.
         const chat = data.chatbots && Array.isArray(data.chatbots.questions) && Array.isArray(data.chatbots.apps) ? data.chatbots : null;
         if (chat) {
           for (const question of chat.questions) {
-            for (const suffix of ['chatbots', ...chat.apps.map((app) => String(app && app.label))]) ids.push(`${question}-${suffix}`);
+            const id = String(question && question.id);
+            ids.push(id);
+            for (const app of chat.apps) ids.push(`${id}-${String(app && app.label)}`);
+            if (chat.human) ids.push(`${id}-human`);
           }
           ids = ids.filter((id) => ID.test(id));
         }
@@ -183,14 +193,14 @@ async function main() {
         const card = page.locator('main.card');
         if (await card.count() !== 1) throw new Error('the page is not a share card');
         await page.evaluate(() => document.fonts.ready.then(() => null));
-        const label = (await page.locator('.card-foot').innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+        const provenance = await card.getAttribute('data-provenance').catch(() => null);
         await page.screenshot({ path: file, type: 'png', fullPage: false, animations: 'disabled' });
         const [w, h] = pngSize(file);
         if (w !== WIDTH * SCALE || h !== HEIGHT * SCALE) throw new Error(`the image is ${w} x ${h}, not ${WIDTH * SCALE} x ${HEIGHT * SCALE}`);
-        const scripted = /scripted demo/i.test(label);
+        const scripted = provenance === 'scripted-sample';
         if (scripted) demo += 1;
         written += 1;
-        console.log(`${id}  ${file}${scripted ? '  SCRIPTED DEMO: not model output, do not post as real' : ''}`);
+        console.log(`${id}  ${file}${scripted ? '  SAMPLE: we wrote it, no AI and no person was asked; do not post as real' : ''}`);
       } catch (error) {
         fs.rmSync(file, { force: true });
         failures.push(`${id}: ${String(error.message).split('\n')[0]}`);
@@ -201,7 +211,7 @@ async function main() {
     await browser.close();
   }
   console.log(`${written} card(s) written to ${options.out} at ${WIDTH * SCALE} x ${HEIGHT * SCALE}.`
-    + (demo ? ` ${demo} of them show SCRIPTED DEMO data: never post those as real answers.` : ''));
+    + (demo ? ` ${demo} of them show SAMPLE data: never post those as real answers.` : ''));
   if (failures.length) {
     console.error(`Not captured:\n  ${failures.join('\n  ')}`);
     process.exit(1);

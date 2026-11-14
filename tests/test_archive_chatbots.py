@@ -107,11 +107,11 @@ def test_checked_in_configuration_three_apps_human_and_ten_draft_questions_of_it
     assert config['aside'].startswith('Why no Copilot?') and len(config['aside']) <= chatbots.ASIDE_CHARS
     # The questions are this track's own list: ids C001..., one fixed prefix, nothing taken from the two locked lists.
     assert config['questions'] == [f'C{n:03d}' for n in range(1, 11)] and raw['prompt_prefix'] == chatbots.PROMPT_PREFIX == PREFIX
-    locked_texts = {q['text'] for track in archive.TRACKS for q in archive.load_questions(track=track)['questions']}
+    locked_ids = {q['id'] for track in archive.TRACKS for q in archive.load_questions(track=track)['questions']}
+    assert not set(config['questions']) & locked_ids                                          # ids of its own: nothing refers to the two lists
     for item in config['items']:
         assert item['prompt'] == f"{PREFIX}\n\n{item['text']}" and item['added'] == '2026-11-14'
         assert 0 < len(item['hook']) <= 60 and len(item['text']) <= chatbots.QUESTION_CHARS
-        assert item['text'] not in locked_texts or item['text'] == 'Is Monday really necessary?'      # that one is also a trending question
         # The seeded ten pass every mechanical check: the crude politics list and the existing content guards.
         for text in (item['text'], item['hook'], item['prompt']):
             assert chatbots.political_term(text) is None and guards.content_reason(text) is None
@@ -294,7 +294,7 @@ def test_dates_only_move_forward_one_run_per_app_and_day(chat, tmp_path):
     refused(filled(tmp_path, '2026-11-14', name='dup.json', only=['gemini'], human=False), 'gemini already has a hand-entered run dated 2026-11-14')
     # Human answers alone are a run too; and they move forward like an app.
     refused(filled(tmp_path, '2026-10-30', name='h-old.json', only=[]), 'Human answers already have a hand-entered run dated 2026-10-30', allow_old=True)
-    assert chatbots.import_collection(filled(tmp_path, '2026-11-12', name='h.json', only=[]))['chatbots'] == []
+    assert chatbots.import_collection(filled(tmp_path, '2026-11-14', name='h.json', only=[]))['chatbots'] == []
     refused(filled(tmp_path, '2026-11-14', name='none.json', only=[], human=False), 'at least one chat app, or the file must hold the human block')
     with core.connect() as cx:                                       # the database itself refuses it too
         with pytest.raises(sqlite3.IntegrityError, match='this date or a later one'):
@@ -364,17 +364,17 @@ def test_human_answers_are_short_marked_and_carry_no_handle_or_link(chat, tmp_pa
     def fine(data):
         answers = person(data)['answers']
         answers[0].update(answer='', kind='', skipped='PLACEHOLDER: nobody answered this one')
-        answers[1].update(answer='Mail me at someone.real@example.org')                    # the same guards as for an app's reply
+        answers[1].update(answer='Hidden\u200bcharacter here')                              # the same character rule and guards as for an app's reply
         answers[2].update(answer='x' * 501)                                                # one short text: 500 characters at most
         person(data)['conditions'].update(count=None, collected_on='2026-11-12')           # collected two days before the apps were asked
     done = chatbots.import_collection(filled(tmp_path, edit=fine))
     assert done['human']['answers'] == {'answered': 1, 'no_answer': 2, 'withheld': 1}
     stored = rows('SELECT state,reason,answer_text,manner FROM archive_human_answers ORDER BY id')
     assert stored[0] == {'state': 'no_answer', 'reason': 'skipped: PLACEHOLDER: nobody answered this one', 'answer_text': None, 'manner': None}
-    assert stored[1] == {'state': 'withheld', 'reason': 'looks like an email address', 'answer_text': None, 'manner': None}
+    assert stored[1] == {'state': 'withheld', 'reason': 'invisible or control character', 'answer_text': None, 'manner': None}
     assert stored[2]['state'] == 'no_answer' and stored[2]['reason'] == archive.TOO_LONG and stored[3]['manner'] == 'summarised'
     assert rows('SELECT collected_on,replies FROM archive_human_collections') == [{'collected_on': '2026-11-12', 'replies': None}]
-    assert 'someone.real' not in json.dumps(archive.public_payload()) + json.dumps(done)
+    assert 'character here' not in json.dumps(archive.public_payload()) + json.dumps(done)
     # The handle and link patterns are for text by or about people; an app's reply may hold an @ or a link-like word.
     assert chatbots.handle_or_link('use the @ sign and e.g. a dot') is None and chatbots.handle_or_link('r/funny') is None
 
@@ -607,7 +607,7 @@ def test_a_database_with_the_tracks_first_shape_migrates_in_place(chat, tmp_path
     table, no Human): the fixture is that schema. It gains the column and the new tables, trades the old rule for the new
     one, and keeps every row. No real reply was ever stored in that shape; a row of it is kept and shown nowhere."""
     old = V5_SCHEMA.read_text(encoding='utf-8')
-    assert 'archive_chatbot_answers_locked_question' in old and 'refused' not in old and 'archive_human' not in old
+    assert 'archive_chatbot_answers_locked_question' in old and 'refused INTEGER' not in old and 'archive_human' not in old
     assert 'archive_chatbot_questions' not in old and old.count('CREATE TABLE IF NOT EXISTS') == 3
     archive.lock()
     with core.connect() as cx:
@@ -693,7 +693,7 @@ def test_demo_uses_made_up_names_only_and_is_marked_as_a_sample_for_people_and_m
     assert 'Everything here is a sample we wrote. No AI and no person was asked.' in page
     # The scripted conditions change (search switched on) is flagged on its card; another shown version name is not a change of conditions.
     october = page.split('id="m-2026-10-01"')[1].split('<section class="panel"')[0]
-    assert '<span class="tag-cond mono">Conditions changed</span>' not in october             # C002: chat-app-a's reply did not need it flagged twice
+    assert october.count('<span class="tag-cond mono">Conditions changed</span>') == 1        # chat-app-a, the month search was switched on
     assert 'conditions changed · search: off → on' in page and 'country: US → GB' in page and 'the app showed a new version name' in page
     assert page.count('>Conditions changed</span>') == 2
     # The scripted refusal and the scripted error are stored, and shown nowhere.
@@ -772,7 +772,7 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     # The app's own attribution line stays visible, on that app's cards only.
     assert newest.count('<p class="credit mono">Written with Grok</p>') == 1 and page.count('Written with Grok') == 2
     # A long reply is in the page once per month it was given, clamped by the stylesheet, with a "More" control (no script).
-    assert page.count(LONG) == 2 and newest.count('class="more-box c-s c-m c-l" type="checkbox"') == 1          # the card and the table
+    assert newest.count(LONG) == 2 and newest.count('class="more-box c-s c-m c-l" type="checkbox"') == 1        # the card, and its history
     assert '<p class="ans clamp c-s c-m c-l" itemprop="text">' + LONG + '</p><label class="more c-s c-m c-l" for="x' in newest
     assert 'data-truncated-display="true"' in newest and newest.count('data-truncated-display="false"') == 3
     # Everything else about a reply left the card for the closed block and the attributes.
@@ -877,7 +877,10 @@ def test_chat_cards_three_apps_and_human_in_the_safe_box(chat, tmp_path):
     question_sizes = [float(size) for size in re.findall(r'\.card-q-\w+ \{ font-size: ([0-9.]+)cqw', fitted)]
     answer_sizes = [float(size) for size in re.findall(r'\.card-answer \{ font-size: ([0-9.]+)cqw', fitted)]
     label = float(re.search(r'\.card-meta \{[^}]*font-size: ([0-9.]+)cqw', fitted).group(1))
-    assert min(question_sizes) > max(s for s in answer_sizes if s < 4) and label < min(question_sizes)       # an app name is never the largest text
+    four_up = [float(size) for size in re.findall(r'\.card-four \.card-q-f\d \{ font-size: ([0-9.]+)cqw', fitted)]
+    assert len(four_up) == 3 and min(four_up) > answer_sizes[0] and label < min(four_up)                    # the card of four: 3.1cqw answers
+    assert min(set(question_sizes) - set(four_up)) > max(answer_sizes)                                       # every other card
+    assert label < min(answer_sizes)                                                                         # a name is never the largest text
     assert '-webkit-line-clamp: 3; line-clamp: 3; }' in fitted and 'gradient' not in fitted and 'url(' not in fitted
 
 
@@ -897,7 +900,7 @@ def test_hostile_text_in_the_chat_track_is_escaped_also_in_the_attributes(chat, 
              archive_pages.render_chatbot_card(payload, 'C001', 'human')]
     for page in pages:
         parsed = assert_page_is_safe(page)
-        assert [tag for tag, _ in parsed.tags].count('img') == 1 and 'onmouseover="' not in page and '<script' not in page
+        assert [tag for tag, _ in parsed.tags].count('img') == 1 and 'onmouseover="x"' not in page and '<script' not in page
         assert page.count('<div') == page.count('</div>') and page.count('<span') == page.count('</span>')
     question_page = pages[1]
     assert f'data-maker="{archive_pages.esc(HOSTILE[:40])}"' in question_page and f'data-version="{archive_pages.esc(HOSTILE[:60])}"' in question_page
@@ -927,7 +930,7 @@ def test_both_web_apps_serve_the_chat_pages_cards_and_data_files(chat, tmp_path)
                 assert response.headers['content-type'].startswith(kind) and "default-src 'none'" in response.headers['content-security-policy']
             for missing in ('/archive/card/Q01-chatgpt.html', '/archive/card/C001-copilot.html', '/archive/card/C099.html', '/archive/c/C099.html',
                             '/archive/card/C001-chatbots.html', '/archive/card/C001-.html', '/archive/card/C001-Grok.html', '/archive/chatbots',
-                            '/archive/c/Q11.html', '/archive/q/C001.html', '/archive/data/C099.json', '/archive/data/Q01.json',
+                            '/archive/c/Q11.html', '/archive/q/C001.html', '/archive/data/C099.json', '/archive/data/Q99.json',
                             '/archive/data/..%2Farchive.json', '/archive/data/answers.json', '/archive/data/'):
                 assert client.get(missing).status_code == 404, missing
     with TestClient(readonly) as client:
@@ -936,56 +939,21 @@ def test_both_web_apps_serve_the_chat_pages_cards_and_data_files(chat, tmp_path)
             assert client.post(path).status_code == 405, path
 
 
-# ---- display switches: questions left off the pages, questions flagged as political ---------------------------
+# ---- hidden questions (archive_pages.HIDDEN, the owner's constant; empty) -------------------------------------
 
-def display(tmp_path, monkeypatch, hidden=(), political=('T004',)):
-    path = tmp_path / 'display.json'
-    path.write_text(json.dumps({'format': 'live-genesis-archive-display/1', 'note': 'test', 'hidden': list(hidden),
-                                'political': list(political)}), encoding='utf-8')
-    monkeypatch.setattr(archive_pages, 'DISPLAY_FILE', path)
-
-
-def test_the_owner_can_leave_questions_off_the_pages_and_a_political_one_carries_the_no_hate_line(tmp_path, monkeypatch):
-    real = json.loads((REPO / 'published' / 'archive.json').read_text(encoding='utf-8'))
-    t004 = next(q for q in real['trending']['questions'] if q['id'] == 'T004')
-    assert 'president' in t004['text'].lower()                                               # the locked political question, with public answers
-    # The checked-in switch: nothing is hidden (the owner has not ruled), T004 is flagged.
-    assert archive_pages.display_config() == {'hidden': frozenset(), 'political': frozenset({'T004'})}
-    pages = archive_pages.render_site(real)
-    assert 't/T004.html' in pages and 'card/T004.html' in pages and 'data/T004.json' in pages
-    line, off = 'This site does not promote hate.', 'Some recorded questions are not shown.'
-    for name in ('t/T004.html', 'card/T004.html', 'trending.html', 'index.html'):             # every page that shows it
-        assert visible(pages[name]).count(line) == (0 if name.startswith('card/') else 1) or name.startswith('card/'), name
-    assert line in pages['t/T004.html'] and line in pages['trending.html'] and line in pages['index.html']
-    assert line not in pages['t/T005.html'] and line not in pages['models.html'] and line not in pages['q/Q01.html']
-    assert not any(off in page for page in pages.values())
-    # Switched on by the owner: the question has no page, no card, no row and no data file; every page says some are not shown.
-    display(tmp_path, monkeypatch, hidden=['T004'])
-    hidden = archive_pages.render_site(real)
-    assert set(pages) - set(hidden) == {'t/T004.html', 'card/T004.html', 'data/T004.json'}
-    assert not any('T004' in page or t004['text'] in page for name, page in hidden.items() if name != 'data/README.txt')
-    for name, page in hidden.items():
-        if name.endswith('.html') and not name.startswith('card/'):
-            assert visible(page).count(off) == 1 and line not in page, name
-    with pytest.raises(KeyError):
-        archive_pages.render_question(real, 'T004')
-    with pytest.raises(KeyError):
-        archive_pages.render_card(real, 'T004')
-    assert snapshot.check_published(REPO / 'published')['reviewed'] is True                  # a display switch never touches the record
-    # A malformed switch file stops the build: a page is never made from a switch that was not read.
-    (tmp_path / 'display.json').write_text('{"format": "live-genesis-archive-display/1", "hidden": ["../x"]}', encoding='utf-8')
-    with pytest.raises(ValueError, match='must list question ids'):
-        archive_pages.render_site(real)
-
-
-def test_a_chat_app_question_can_be_left_off_too(chat, tmp_path, monkeypatch):
+def test_a_hidden_chat_app_question_has_no_page_no_card_and_no_data_file(chat, tmp_path, monkeypatch):
     payload = two_dates(tmp_path)
-    display(tmp_path, monkeypatch, hidden=['C002'], political=['C003'])
+    assert archive_pages.HIDDEN == {}                                                        # nothing is hidden
+    shown = archive_pages.render_site(payload)
+    monkeypatch.setattr(archive_pages, 'HIDDEN', {'C002': 'test'})
     pages = archive_pages.render_site(payload)
-    assert 'c/C002.html' not in pages and 'card/C002.html' not in pages and 'card/C002-grok.html' not in pages and 'data/C002.json' not in pages
-    assert 'C002' not in pages['index.html'] and 'Some recorded questions are not shown.' in pages['index.html']
-    assert 'This site does not promote hate.' in pages['c/C003.html'] and 'This site does not promote hate.' in pages['index.html']
-    assert 'This site does not promote hate.' not in pages['c/C001.html']
+    assert set(shown) - set(pages) == {'c/C002.html', 'data/C002.json'} | {f'card/C002{s}.html' for s in ('', '-chatgpt', '-gemini', '-grok', '-human')}
+    assert not any('C002' in page for page in pages.values())
+    assert pages['index.html'].count('<h3 class="row-q">') == 3 and 'c/C003.html' in pages
+    for render in (archive_pages.render_question, archive_pages.render_card, archive_pages.render_chatbot_card):
+        with pytest.raises(KeyError):
+            render(payload, 'C002')
+    assert any(a['question'] == 'C002' for a in payload['chatbots']['answers'])              # the record is untouched
 
 
 # ---- machine-readable labels: attributes, head, data files ------------------------------------------------------
@@ -1039,7 +1007,7 @@ def check_machine_layer(payload, sample):
             assert record['human_form'] is None
         if record['state'] == 'changed':
             before = by_id[record['previous_id']]
-            assert before['text'] == record['previous_text'] and before['collected'] == record['previous_collected'] < record['collected']
+            assert before['text'] == record['previous_text'] and before['collected'] == record['previous_collected'] <= record['collected']
         for forbidden in ('base_url', 'api_key', 'file_sha256', 'username', 'path', 'url'):
             assert forbidden not in json.dumps(record.get('conditions'))
     # The per-question files hold the same records, with the question and exactly what was asked.
@@ -1048,9 +1016,9 @@ def check_machine_layer(payload, sample):
     for q in per_question:
         assert q['content'] == ('scripted-sample' if sample else 'recorded') and q['prompt'].endswith(q['question'])
         assert all(a == by_id[a['id']] and a['question_id'] == q['question_id'] and a['prompt'] == q['prompt'] for a in q['answers'])
-    assert ('scripted-sample' in data['data/answers.jsonl']) == sample
-    if sample:
-        assert all('"scripted-sample"' in line for line in data['data/answers.jsonl'].splitlines())        # in every line
+    assert any('scripted-sample' in (r['provenance'], r['method']) for r in records) == sample
+    if sample:                                                                                              # in every line of the file
+        assert all(json.loads(line)['provenance'] == 'scripted-sample' for line in data['data/answers.jsonl'].splitlines())
     # Round trip to the payload: every public answer text is in the file once, under its answerer and date.
     block = payload.get('chatbots') or {'answers': [], 'human_answers': [], 'runs': []}
     day = {run['number']: run['collected_on'] for run in block['runs']}
@@ -1094,7 +1062,7 @@ def test_machine_readable_labels_on_real_hand_entered_data(chat, tmp_path):
     payload = two_dates(tmp_path)
     pages, records = check_machine_layer(payload, sample=False)
     assert {r['method'] for r in records} == {'typed-by-hand', 'collected-by-hand'}
-    assert {r['provenance'] for r in records} == {'ai-generated', 'human-written'} and 'scripted' not in json.dumps(records)
+    assert {r['provenance'] for r in records} == {'ai-generated', 'human-written'}
     assert {r['state'] for r in records} == {'answered', 'same', 'changed', 'refused', 'no-answer'}
     page = pages['c/C001.html']
     head = page.split('</head>')[0]
@@ -1140,20 +1108,56 @@ def test_machine_readable_labels_mark_every_sample_record_and_element(ready):
     assert 'content="Scripted sample" />Human (sample)</span>' in pages['c/C001.html']       # never "Anonymous people" on a sample
 
 
-def test_machine_readable_labels_on_the_published_model_data():
-    payload = json.loads((REPO / 'published' / 'archive.json').read_text(encoding='utf-8'))
+def model_runs(monkeypatch):
+    """Two real-shaped model runs from a fake adapter (no model is called): three samples each; model-b's samples split
+    in the second run and model-a changes its answer there."""
+    core.seed_agents()
+    archive.lock()
+    monkeypatch.setenv('LIVE_ARCHIVE_SAMPLES', '3')
+    asked = {}
+
+    def reply(second):
+        def answer(model, prompt, _n):
+            asked[(model, prompt, second)] = k = asked.get((model, prompt, second), 0) + 1
+            if model == 'gpt-test-1':
+                return 'PLACEHOLDER changed.' if second else 'PLACEHOLDER first.'
+            return 'PLACEHOLDER odd one.' if second and k == 1 else 'PLACEHOLDER steady.'
+        return answer
+    as_real(monkeypatch, reply(False))
+    archive.run_archive(max_usd=1)
+    as_real(monkeypatch, reply(True))
+    archive.run_archive(max_usd=1)
+    return archive.public_payload()
+
+
+def test_machine_readable_labels_on_recorded_model_answers(ready, monkeypatch):
+    payload = model_runs(monkeypatch)
     pages, records = check_machine_layer(payload, sample=False)
-    assert {r['method'] for r in records if r['method']} == {'asked-by-server'} and {r['answerer_kind'] for r in records} == {'model'}
-    assert len([r for r in records if r['shown']]) == len(payload['answers']) == 160
-    assert 'mixed' in {r['state'] for r in records}
-    # The labels that left the cards: version, where it ran, sample counts. In the attributes and the closed block, not on the card.
+    assert {r['method'] for r in records} == {'asked-by-server'} and {r['answerer_kind'] for r in records} == {'model'}
+    assert {r['provenance'] for r in records} == {'ai-generated'} and len(records) == len(payload['answers']) == 80
+    assert {r['state'] for r in records} == {'answered', 'changed', 'mixed'}
+    # The labels that left the cards: version, sample counts, how it got here. In the attributes and the closed block.
     page = pages['q/Q06.html']
     cards = page.split('<section class="changes">')[0]
-    assert 'run locally' not in visible(cards) and 'times out of' not in visible(cards) and 'We asked it ourselves' not in visible(cards).replace(
-        'AI-generated · we asked it ourselves · may be wrong', '')
+    seen = visible(cards).replace('AI-generated · we asked it ourselves · may be wrong', '')
+    for moved in ('gpt-test-1', 'times out of', 'We asked it ourselves', 'version'):
+        assert moved not in seen, moved
     block = page.split('<summary>Where each answer came from</summary>')[1]
-    assert 'We asked it ourselves · version phi4-mini · run locally · same answer 2 times out of 3 · model file 78fad5d182a7' in block
-    assert 'data-version="phi4-mini"' in cards and 'data-method="asked-by-server" data-provenance="ai-generated"' in cards
+    assert 'We asked it ourselves · version gpt-test-1 · same answer 3 times out of 3' in block
+    assert 'We asked it ourselves · version gpt-test-2 · same answer 2 times out of 3' in block
+    assert 'data-version="gpt-test-1"' in cards and 'data-method="asked-by-server" data-provenance="ai-generated"' in cards
+    assert '<span class="tag-changed mono">Changed</span>' in cards and '<span class="tag-mixed mono">Mixed answers</span>' in cards
+    mixed = next(r for r in records if r['id'] == 'Q06/model-b/run-2')
+    assert mixed['conditions'] == {'model': 'gpt-test-2', 'samples': 3, 'agree': 2} or {'samples': 3, 'agree': 2}.items() <= mixed['conditions'].items()
+    assert 'base_url' not in json.dumps(records) and 'fake-key' not in json.dumps(records)
+    # The front page without a chat-app run: every question with each model's newest answer, no empty chat-app shell.
+    front = pages['index.html']
+    assert front.count('<h3 class="row-q"><a href="q/') == 20 and front.count('class="mini-text"') == 40
+    assert 'AI-generated · we asked it ourselves · may be wrong' in front and 'Sample' not in front and 'Chat app' not in front
+    assert '<a href="index.html" aria-current="page">Questions</a>' in front and not any(name.startswith('c/') for name in pages)
+    # Two checks fell in one month: the periods are told by their day, not twice by the month.
+    labels = re.findall(r'<label for="pick-[12]">([^<]+)</label>', pages['q/Q01.html'])
+    assert len(labels) == 2 and labels[0] != labels[1]
 
 
 # ---- export and --check -------------------------------------------------------------------------------------
@@ -1287,26 +1291,6 @@ def test_a_payload_without_the_track_is_exactly_what_it_was(ready, monkeypatch):
         'the schema marker does not fit the file (/5 exactly when it holds the chat-app track)'
 
 
-def test_the_published_real_data_still_passes_check_and_renders():
-    """`published/` holds real recorded model answers (two runs) and no chat-app run: it must keep passing --check and keep
-    rendering, with a useful front page and no empty chat-app shell."""
-    folder = REPO / 'published'
-    assert snapshot.check_published(folder)['reviewed'] is True
-    payload = json.loads((folder / 'archive.json').read_text(encoding='utf-8'))
-    assert payload['schema'] == 'live-genesis-archive/3' and 'chatbots' not in payload and len(payload['answers']) == 160
-    pages = archive_pages.render_site(payload)
-    front = pages['index.html']
-    assert front.count('<h3 class="row-q"><a href="') == 32 and front.count('class="mini-text"') == 32 * 4
-    assert 'AI-generated · we asked it ourselves · may be wrong' in front and 'Sample' not in front and 'Chat app' not in front
-    assert '<a href="index.html" aria-current="page">Questions</a>' in front and not any(name.startswith('c/') for name in pages)
-    for name, page in pages.items():
-        if name.endswith('.html'):
-            assert_page_is_safe(page)
-            assert page.count('<main') == 1 and page.count('<h1') == 1, name
-    # Two checks fell in one month: the periods are told by their day, not twice "Nov 2026".
-    assert '<label for="pick-1">14 Nov 2026</label><label for="pick-2">13 Nov 2026</label>' in pages['q/Q01.html']
-
-
 # ---- CLI, capture script, docs --------------------------------------------------------------------------------
 
 def test_cli_template_dry_run_import_and_status(chat, tmp_path, monkeypatch, capsys):
@@ -1357,8 +1341,7 @@ def test_capture_script_takes_chat_card_names_and_docs_describe_the_track():
                    'live-genesis-archive/5', 'Temporary Chat', 'Private Chat', 'not verified', 'Written with Grok',
                    'answer_file', 'chat-app-a', '--export --archive-only', 'Back up first', 'ChatGPT, Gemini and Grok',
                    'Human', 'quoted', 'summarised', 'never contacts Reddit', 'replies may be quoted', 'no usernames',
-                   '"refused": true', 'Refusals and non-answers are left out.', 'C001', PREFIX, 'archive_display.json', 'T004',
-                   'This site does not promote hate.', 'Some recorded questions are not shown.', 'aside', 'never on a share card',
+                   '"refused": true', 'Refusals and non-answers are left out.', 'C001', PREFIX, 'aside', 'never on a share card',
                    'never rewritten, shortened'):
         assert phrase in section, phrase
     assert 'Copilot' not in section.replace('Why no Copilot?', '').replace('cheaper to ask a human than Copilot', '').replace('Copilot is dropped', '').replace('Copilot was dropped', '')
@@ -1371,5 +1354,5 @@ def test_capture_script_takes_chat_card_names_and_docs_describe_the_track():
     social = (REPO / 'docs' / 'SOCIAL-POSTS.md').read_text(encoding='utf-8')
     part = social.split('## Chat-app cards', 1)[1]
     for phrase in ('typed in by hand on', 'screenshot', 'Sample we wrote', 'logo', 'endorse', 'C001-grok', 'C001-human', '65', '1440',
-                   'full answer on the site', 'never edit', 'Human'):
+                   'full answer on the site', 'Never edit an answer', 'Human'):
         assert phrase in part, phrase

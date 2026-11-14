@@ -256,11 +256,15 @@ def test_archive_only_writes_the_archive_and_nothing_of_the_society(isolated_db,
     ids = [q['id'] for q in payload['questions']] + [q['id'] for q in payload['trending']['questions']]
     assert payload['questions'] and payload['trending']['questions']
     chat = payload['chatbots']
-    ids += [f'{question}-{suffix}' for question in chat['questions'] for suffix in ['chatbots'] + [app['label'] for app in chat['apps']]]
-    expected = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/trending.html', 'archive/chatbots.html'}
-                | ARCHIVE_STATIC
+    chat_ids = [q['id'] for q in chat['questions']]
+    data_files = {f'archive/data/{name}.json' for name in ids + chat_ids} | {'archive/data/answers.jsonl', 'archive/data/README.txt'}
+    ids += chat_ids + [f'{question}-{suffix}' for question in chat_ids for suffix in [app['label'] for app in chat['apps']] + ['human']]
+    expected = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/models.html', 'archive/trending.html',
+                 'archive/chatbots.html'}
+                | ARCHIVE_STATIC | data_files
                 | {f'archive/q/{q["id"]}.html' for q in payload['questions']}
                 | {f'archive/t/{q["id"]}.html' for q in payload['trending']['questions']}
+                | {f'archive/c/{name}.html' for name in chat_ids}
                 | {f'archive/card/{name}.html' for name in ids})
     written = files_of(out)
     assert written == expected
@@ -268,7 +272,8 @@ def test_archive_only_writes_the_archive_and_nothing_of_the_society(isolated_db,
     for name in SOCIETY_FILES:
         assert name not in written, name
     assert not any(name.startswith(('post/', 'profile/')) or name.endswith(('.js', '.py', '.md')) for name in written)
-    assert [name for name in written if name.endswith('.json')] == ['archive.json']
+    # The only data: the archive payload and the files derived from it for machines (archive/data/).
+    assert [name for name in written if name.endswith('.json') and not name.startswith('archive/data/')] == ['archive.json']
     bodies = [post['body'] for post in snapshot._capture()['posts']]
     assert len(bodies) > 3 and all(len(body) > 20 for body in bodies)
     everything = ''.join((out / name).read_text(encoding='utf-8') for name in written if name.endswith(('.html', '.json')))
@@ -287,13 +292,16 @@ def test_archive_only_writes_the_archive_and_nothing_of_the_society(isolated_db,
         assert not RULE_WORDING.search(visible_text(html)), name
     # The honesty labels stay.
     front = pages['archive/index.html']
-    assert 'Scripted demo answers and dates · no model was called' in front and 'READ-ONLY ARCHIVE' in front
-    assert 'Sample answers on this page are scripted, not model output.' in front and 'No payments' in front
-    assert 'scripted, not model output' in pages['archive/q/Q01.html'] and 'scripted demo' in pages['archive/q/Q01.html']
+    assert 'Sample we wrote, not a real AI answer' in front and 'Read-only archive.' in front
+    assert 'Everything here is a sample we wrote. No AI and no person was asked.' in front and 'No payments' in front
+    assert 'Everything here is a sample we wrote.' in pages['archive/q/Q01.html'] and 'Sample we wrote, not a real AI answer' in pages['archive/q/Q01.html']
     # Apart from that one bar link, each page is the page every other snapshot and both web apps show.
     usual = archive_pages.render_site(payload)
-    assert {'archive/' + name for name in usual} == set(pages) - {'index.html'}
+    assert {'archive/' + name for name in usual if name.endswith('.html')} == set(pages) - {'index.html'}
     for name, html in usual.items():
+        if not name.endswith('.html'):
+            assert html == (out / 'archive' / name).read_text(encoding='utf-8'), name
+            continue
         assert OBSERVATORY_LINK.sub('', html) == pages['archive/' + name], name
         assert len(OBSERVATORY_LINK.findall(html)) == (0 if name.startswith('card/') else 1), name
 
@@ -303,11 +311,11 @@ def test_archive_only_root_page_leads_to_the_archive_without_script(isolated_db,
     out = tmp_path / 'site'
     snapshot.build(out, archive_only=True)
     home = (out / 'index.html').read_text(encoding='utf-8')
-    assert home.count('<meta http-equiv="refresh" content="0; url=archive/trending.html" />') == 1
+    assert home.count('<meta http-equiv="refresh" content="0; url=archive/index.html" />') == 1
     assert home.index('http-equiv="Content-Security-Policy"') < home.index('http-equiv="refresh"') < home.index('</head>')
-    assert body_of(home).count('<a href="archive/trending.html">') == 1          # for a browser that does not follow the refresh
+    assert body_of(home).count('<a href="archive/index.html">') == 1             # for a browser that does not follow the refresh
     assert '<script' not in home and 'data-overview' not in home and 'onload' not in home
-    assert sorted(set(addresses(home))) == sorted({'archive/trending.html', *re.findall(r'"(static/archive[^"]+)"', home)})
+    assert sorted(set(addresses(home))) == sorted({'archive/index.html', *re.findall(r'"(static/archive[^"]+)"', home)})
     assert 'Read-only archive · static snapshot' in home and 'Nothing is running behind this page.' in home
     assert not re.search(r'human|resident', visible_text(home), re.I) and not RULE_WORDING.search(visible_text(home))
     assert (out / 'archive' / 'index.html').is_file()                            # the existing archive address is unchanged
@@ -359,10 +367,10 @@ def test_archive_only_pair_links_each_other_as_the_workflow_builds_it(isolated_d
     assert files_of(site / 'demo') == {name for name in files_of(site) if not name.startswith('demo/')}
     # A scripted page calls the other snapshot the main archive, never "recorded".
     inner = (site / 'demo' / 'archive' / 'index.html').read_text(encoding='utf-8')
-    assert inner.count('<a href="../../archive/trending.html">Main archive</a>') == 1
+    assert inner.count('<a href="../../archive/index.html">Main archive</a>') == 1
     deep = (site / 'demo' / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
-    assert deep.count('<a href="../../../archive/trending.html">Main archive</a>') == 1
-    assert '<a href="../demo/archive/trending.html">' in (site / 'archive' / 'trending.html').read_text(encoding='utf-8')
+    assert deep.count('<a href="../../../archive/index.html">Main archive</a>') == 1
+    assert '<a href="../demo/archive/index.html">' in (site / 'archive' / 'trending.html').read_text(encoding='utf-8')
     assert 'Observatory' not in inner + deep and not re.search(r'>[^<]*recorded[^<]*</a>', inner + deep, re.I)
 
 

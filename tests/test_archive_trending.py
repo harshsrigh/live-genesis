@@ -724,8 +724,6 @@ def test_snapshot_holds_trending_pages_and_cards_at_the_same_addresses(ready, tm
     for html in (out / 'archive').rglob('*.html'):                               # every relative address resolves inside the snapshot
         parsed = assert_page_is_safe(html.read_text(encoding='utf-8'))
         for url in parsed.urls:
-            if url == '#main':                                                   # the skip link: a place on the same page
-                continue
             target = (html.parent / url.split('#')[0].split('?')[0]).resolve()
             assert out.resolve() in target.parents or target == out.resolve(), (html.name, url)
             assert target.is_file() or (target / 'index.html').is_file(), (html.name, url)
@@ -779,9 +777,10 @@ def test_a_hidden_question_has_no_page_no_card_and_is_in_no_list(ready, monkeypa
     assert 't/T001.html' in shown and hidden_text in shown['trending.html']
     monkeypatch.setattr(archive_pages, 'HIDDEN', {'T001': 'test', 'Q05': 'test'})
     pages = archive_pages.render_site(payload)
-    assert set(shown) - set(pages) == {'t/T001.html', 'card/T001.html', 'q/Q05.html', 'card/Q05.html'}
+    assert set(shown) - set(pages) == {'t/T001.html', 'card/T001.html', 'q/Q05.html', 'card/Q05.html', 'data/T001.json', 'data/Q05.json'}
     for name, page in pages.items():
-        assert_page_is_safe(page)
+        if name.endswith('.html'):
+            assert_page_is_safe(page)
         assert 'T001' not in page and 'Q05.html' not in page and hidden_text not in page, name
     # The later questions keep their pages and their answers: a run's "first N" still counts the hidden one.
     assert 't/T002.html' in pages and 't/T003.html' in pages and 'q/Q06.html' in pages

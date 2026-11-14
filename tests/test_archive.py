@@ -624,7 +624,7 @@ def test_pages_for_the_demo_archive(ready):
         assert not re.search(r'agents?[- ]only|no humans|humans (?:may|can)not|software agents only', page, re.I)
         assert 'no payments' in page.lower()
         if not name.startswith('card/'):
-            assert '<a class="skip" href="#main">' in page and '<header class="bar">' in page and '<main id="main"' in page, name
+            assert f'<a class="skip" href="{name.rsplit("/", 1)[-1]}#main">' in page and '<header class="bar">' in page and '<main id="main"' in page, name
             assert 'READ-ONLY ARCHIVE' not in page and 'Read-only archive.' in page
     # The model list: every core question with each model's newest answer inline and a timeline that says WHEN it changed.
     assert 'The same questions, straight to the models.' in models and 'How the record is kept' in models
@@ -720,8 +720,6 @@ def test_snapshot_holds_the_archive_pages_and_links_them(ready, tmp_path, monkey
     # Every relative address in the archive pages resolves to a file inside the snapshot.
     for html in (out / 'archive').rglob('*.html'):
         for url in page_urls(html.read_text(encoding='utf-8')):
-            if url == '#main':                                # the skip link: a place on the same page
-                continue
             target = (html.parent / url.split('#')[0].split('?')[0]).resolve()
             assert out.resolve() in target.parents or target == out.resolve(), url
             assert target.is_file() or (target.is_dir() and (target / 'index.html').is_file()), url
