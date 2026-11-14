@@ -488,7 +488,7 @@ def test_trending_pages_for_the_demo(ready):
     # One trending question: the same layout plus topic and source.
     assert '<span class="q-id mono">T002</span><span class="chip chip-topic">chip stocks</span><span class="chip-note">added Jul 2026</span>' in t2
     assert 'Topic taken from: Scripted sample, not a real trend. Added 20 Jul 2026;' in t2
-    assert t2.count('role="rowheader"') == 4 and 'Aug 2026' in t2 and '<label for="pick-4">Aug 2026</label>' in t2 and 'pick-5' not in t2
+    assert t2.count('role="rowheader"') == 4 and 'Aug 2026' in t2 and '<label for="pick-4"><span class="m-name">Aug 2026</span></label>' in t2 and 'pick-5' not in t2
     assert t2.index('id="m-run-8"') < t2.index('id="m-run-5"') and 'acard-none' not in t2
     assert t2.count('<span class="tag-changed mono">Changed</span>') == 1 and '<span class="t-word mono">changed</span>' in t2
     assert '<pre class="prompt mono">Answer in one or two sentences.\n\nWhat is Nvidia&#x27;s share price today?</pre>' in t2
@@ -515,9 +515,11 @@ def test_share_card_shows_the_latest_answers_and_one_change(ready):
     assert 'Answers Over Time</a>' in card and '<a class="card-brand" href="../q/Q11.html">' in card
     assert '<h1 class="card-q card-q-xl card-q-f1">What is today&#x27;s date?</h1>' in card
     assert card.count('<section class="card-panel') == 3 and '<div class="card-panels n-3">' in card
-    # model-a changed last (Nov 2026): its panel is marked. A card of several panels has no room for the answer before;
-    # the question page shows it.
-    assert card.count('card-panel-changed') == 1 and 'card-before' not in card
+    # model-a changed last (Nov 2026): its bubble is marked in words, and since these three short answers leave room, the
+    # answer before sits directly above it (a card that might overflow leaves it out: tests/test_archive_groups.py).
+    assert card.count('card-panel-changed') == 1 and card.count('class="card-before"') == 1
+    assert card.index('<p class="card-before"><span class="mono">Before · Oct 2026</span> It is probably some time in 2026.</p>') \
+        < card.index('<span class="card-label">model-a</span>')
     assert '<span class="card-label">model-a</span><span class="card-when">Nov 2026 · changed</span></div>' in card
     assert '<p class="card-answer">I have no clock, so I cannot know. My training suggests 2026 or later.</p>' in card
     assert '<span class="card-label">model-c</span><span class="card-when">Nov 2026</span>' in card
@@ -526,7 +528,7 @@ def test_share_card_shows_the_latest_answers_and_one_change(ready):
     assert 'AI-generated' not in card
     assert card.index('class="card-honest') < card.index('</div>\n  <footer class="card-foot')   # the honesty line is inside the safe box
     plain = archive_pages.render_card(payload, 'Q02')
-    assert 'card-panel-changed' not in plain and plain.count('<section class="card-panel"') == 3
+    assert 'card-panel-changed' not in plain and plain.count('<section class="card-panel who-') == 3
     trend = archive_pages.render_card(payload, 'T002')
     assert '<span class="card-kicker">chip stocks</span>' in trend and 'href="../t/T002.html"' in trend
     assert '<span class="card-kicker">Right now</span>' in card
@@ -654,7 +656,7 @@ def test_the_default_rendering_holds_trending_pages_and_cards_at_the_same_addres
                            + ['chatbots.html'] + [f'card/{q}{s}.html' for q in chat
                                                   for s in ('', '-chat-app-a', '-chat-app-b', '-chat-app-c', '-human')])
     # /5: the scripted archive also holds the scripted chat-app track
-    assert payload['schema'] == 'live-genesis-archive/5' and len(payload['trending']['questions']) == 3
+    assert payload['schema'] == 'live-genesis-archive/6' and len(payload['trending']['questions']) == 3
     assert (out / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8') == archive_pages.render_card(payload, 'T001')
     assert (out / 'archive' / 'trending.html').read_text(encoding='utf-8') == archive_pages.render_trending(payload)
     for html in (out / 'archive').rglob('*.html'):                               # every relative address resolves inside the snapshot

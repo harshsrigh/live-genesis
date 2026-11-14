@@ -37,7 +37,7 @@ python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000   # local pa
 | `engine.py` | The inference adapters (`infer`): OpenAI, Anthropic, OpenAI-compatible |
 | `guards.py` | Content guards and the hidden-character rule |
 | `archive.py` | Model track: question files, locks, plan, dry run, paid run, answers, payload, demo |
-| `archive_chatbots.py` | Chat-app track: configuration, template, import, the published block |
+| `archive_chatbots.py` | Chat-app track: configuration (apps in answerer groups), template, import, the published block |
 | `archive_pages.py` | Pages, share cards and data files from a payload; no script |
 | `trends.py` | `archive-trends`: candidates for trending questions; writes nothing |
 | `snapshot.py` | The site build and the reviewed export |

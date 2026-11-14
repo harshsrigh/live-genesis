@@ -87,8 +87,8 @@ def test_export_writes_two_files_and_the_chat_track_only(ready, tmp_path, monkey
     payload = json.loads(json.dumps(archive.public_payload()))
     assert payload['answers'] and payload['runs'] and payload['answerers']                 # the database does hold a model run
     assert list(exported) == ['schema', 'chatbots'] == list(chatbots.SITE_KEYS)
-    assert exported == {'schema': 'live-genesis-chat-archive/1', 'chatbots': payload['chatbots']} == chatbots.site_payload(payload)
-    assert chatbots.SITE_SCHEMA == 'live-genesis-chat-archive/1' and not set(exported) & set(MODEL_KEYS)
+    assert exported == {'schema': 'live-genesis-chat-archive/2', 'chatbots': payload['chatbots']} == chatbots.site_payload(payload)
+    assert chatbots.SITE_SCHEMA == 'live-genesis-chat-archive/2' and not set(exported) & set(MODEL_KEYS)
     text = raw.decode('ascii')
     assert MODEL_TEXT not in text and 'model-a' not in text and '"answerer"' not in text and 'set_hash' not in text
     assert manifest == json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8'))
@@ -236,7 +236,7 @@ def test_folder_and_manifest_tampering_is_refused(ready, tmp_path, monkeypatch):
     retarget_chat(out, lambda d: block(d)['answers'][0].update(source='demo'))
     refused("an answer's source does not fit its run")
     retarget_chat(out, lambda d: block(d)['apps'][0].update(name='Another name'))
-    refused('does not carry the name, maker and attribution')
+    refused('does not carry the name, maker, attribution and group')
     retarget_chat(out, lambda d: (block(d)['answers'].clear(), block(d)['human_answers'].clear()))
     refused('archive.json is refused: it holds no answers')
     manifest = json.loads(good['MANIFEST.json']); manifest['archive']['chatbots']['answers'] = 11
@@ -415,9 +415,9 @@ def test_archive_json_must_hold_exactly_the_chat_track_keys(ready, tmp_path, mon
         refused(lambda d, key=key: d.update({key: whole[key]}), f'archive.json is refused: top level: unexpected key {key}')
     # The whole public payload in place of the file (what an earlier version exported) is refused as a whole.
     refused(lambda d: (d.clear(), d.update(whole)), 'it holds the model track; an export of Answers Over Time only holds the chat-app track alone')
-    refused(lambda d: d.update(schema='live-genesis-archive/5'), 'it holds the model track')
+    refused(lambda d: d.update(schema='live-genesis-archive/6'), 'it holds the model track')
     refused(lambda d: d.update(schema='live-genesis-archive/3'), 'it holds the model track')
-    refused(lambda d: d.update(schema='live-genesis-chat-archive/2'), 'archive.json is refused: unknown schema')
+    refused(lambda d: d.update(schema='live-genesis-chat-archive/3'), 'archive.json is refused: unknown schema')
     refused(lambda d: d.pop('schema'), 'archive.json is refused: unknown schema')
     refused(lambda d: d.pop('chatbots'), 'top level: key chatbots is missing')
     refused(lambda d: d.update(chatbots=None), 'chatbots: a key is missing or has the wrong type')
@@ -442,7 +442,7 @@ def test_archive_json_must_hold_exactly_the_chat_track_keys(ready, tmp_path, mon
 def test_the_model_track_payload_is_key_closed(ready, tmp_path, monkeypatch):
     world(monkeypatch, tmp_path)
     good = json.loads(json.dumps(archive.public_payload()))
-    assert good['schema'] == 'live-genesis-archive/5' and any(a['text'] == MODEL_TEXT for a in good['answers'])
+    assert good['schema'] == 'live-genesis-archive/6' and any(a['text'] == MODEL_TEXT for a in good['answers'])
     assert publish_refusal(good) == ''
     for edit, match in ((lambda d: d.update(posts=[{'id': 1}]), 'top level: unexpected key posts'),
                         (lambda d: d['answers'][0].update(note='x'), 'answer id 1: unexpected key note'),
@@ -619,7 +619,7 @@ def rewrite_archive(folder, payload):
 
 @pytest.mark.parametrize('insert,reason', [
     ('"extra": NaN,', 'NaN or Infinity'), ('"extra": Infinity,', 'NaN or Infinity'), ('"extra": -Infinity,', 'NaN or Infinity'),
-    ('"extra": 1e999,', 'number out of range'), ('"schema": "live-genesis-chat-archive/1",', 'duplicate key'),
+    ('"extra": 1e999,', 'number out of range'), ('"schema": "live-genesis-chat-archive/2",', 'duplicate key'),
 ])
 def test_check_refuses_non_json_literals_and_duplicate_keys(ready, tmp_path, monkeypatch, insert, reason):
     out = approved(monkeypatch, tmp_path)

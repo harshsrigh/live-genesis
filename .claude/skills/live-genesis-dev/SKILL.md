@@ -30,8 +30,8 @@ A public static site that puts the same questions to consumer chat apps (ChatGPT
 | `engine.py` | `infer(...)`: the three adapters, no redirect, no retry; `Completion`; `REAL_INFER` |
 | `guards.py` | Regex guards (PII, secrets, payment links), hidden-character rule, look-alike folding |
 | `archive.py` | Model track: question files, locks, plan, dry run, PAID run, answers, samples, `public_payload`, payload and publication rules, scripted demo |
-| `archive_chatbots.py` (+ `archive_chatbots.json`) | Chat-app track: apps, Human column, own questions, template, import, the published block |
-| `archive_pages.py` | Pages, share cards, data files from a payload |
+| `archive_chatbots.py` (+ `archive_chatbots.json`, format /3) | Chat-app track: apps in answerer groups (`groups` / `group`, any number of apps), Human column, own questions, template, import, the published block (`chatbots`; payload schema `/6` only when present; chat-only `live-genesis-chat-archive/2`) |
+| `archive_pages.py` | Pages, share cards, data files from a payload. "Group chat" look: bubbles, group switch, cards of at most four bubbles that paginate. No script, no inline style, one shadow token (`--shadow`), no gradient or glow |
 | `trends.py` | `archive-trends`: prints candidates, writes nothing |
 | `snapshot.py` | Site build; reviewed export `--export` / `--approve` / `--check` / `--from-data` (`--archive-only` accepted, no effect) |
 | `web.py`, `app.py` | The one web app: local, read-only, serves the archive pages |

@@ -580,7 +580,7 @@ ALLOWED_TAGS = {'html', 'head', 'meta', 'title', 'link', 'body', 'div', 'span', 
                 'strong', 'em', 'section', 'article', 'main', 'pre', 'footer', 'input', 'label', 'details', 'summary',
                 'table', 'caption', 'thead', 'tbody', 'tr', 'th', 'td', 'time', 'ol', 'ul', 'li'}
 ALLOWED_ATTRS = {'lang', 'charset', 'name', 'content', 'http-equiv', 'rel', 'type', 'href', 'class', 'src', 'alt', 'width', 'height',
-                 'aria-label', 'aria-current', 'role', 'id', 'for', 'checked', 'reversed', 'scope', 'datetime',
+                 'aria-label', 'aria-current', 'aria-hidden', 'role', 'id', 'for', 'checked', 'reversed', 'scope', 'datetime',
                  'itemscope', 'itemtype', 'itemprop'}
 DATA_ATTRS = {'data-question-id', 'data-answerer', 'data-answerer-kind', 'data-maker', 'data-version', 'data-collected', 'data-method',
               'data-provenance', 'data-human-form', 'data-state', 'data-previous-collected', 'data-truncated-display', 'data-lang',
@@ -684,15 +684,17 @@ def test_pages_for_the_demo_archive(ready):
     assert re.search(r'href="\.\./static/archive\.css\?v=[0-9a-f]{12}"', models)
     assert 'This list of twenty questions is a draft' in models
     # The front page of the scripted demo is the chat-app comparison (tests/test_archive_chatbots.py).
-    assert 'Same question. Three AI apps. One human.' in index and 'href="c/C001.html"' in index and 'href="q/' not in index
+    assert 'Same question. Three AI apps. One human.' in re.sub(r'<[^>]*>', '', index) and 'href="c/C001.html"' in index and 'href="q/' not in index
     # The question page: the newest month is the first panel, one card per answerer, older months one radio away.
     assert '<title>What is today&#x27;s date? · Answers Over Time</title>' in date
     assert date.index('id="m-run-8"') < date.index('id="m-run-7"') < date.index('id="m-run-1"')
     assert date.count('<section class="panel"') == 8 and date.count('class="m-radio" type="radio" name="month"') == 8
     assert date.count(' checked />') == 1 and '<input class="m-radio" type="radio" name="month" id="pick-1" checked />' in date
-    assert '<label for="pick-1">Nov 2026</label><label for="pick-2">Oct 2026</label>' in date
+    # Month pills; the newest one says in words how many changed.
+    assert ('<label for="pick-1"><span class="m-name">Nov 2026</span><span class="m-mark">1 changed</span></label>'
+            '<label for="pick-2"><span class="m-name">Oct 2026</span></label>') in date
     assert date.count('<article class="acard') == 24 and date.count('acard is-changed') == 3 and date.count('>Changed<') == 3
-    assert date.count('class="acard acard-none"') == 1 and 'No answer this time' in date
+    assert date.count('class="acard acard-none who-') == 1 and 'No answer this time' in date
     cards = date.split('<section class="changes">')[0]
     # Per-cell and per-row repeats are gone from the cards; the labels live in the closed block and in the attributes.
     assert 'scripted' not in re.sub(r'<[^>]*>', '', cards).lower() and 'model-a-2' not in re.sub(r'<[^>]*>', '', cards)
@@ -720,28 +722,56 @@ def test_pages_for_the_demo_archive(ready):
 
 def test_archive_stylesheet_uses_tokens_local_fonts_and_no_gradient():
     css = (STATIC / 'archive.css').read_text(encoding='utf-8')
-    assert 'gradient' not in css and 'box-shadow' not in css and '@import' not in css and 'http' not in css
-    for token in ('#1b1d36', '#4338ca', '#c9cdf0', '#f4f4fb', '#312e81'):
-        assert css.count(token) == 1, token                                # each colour is defined once, as a custom property
-    assert css.count('#ffffff') == 2                                       # the ground, and text on dark panels
-    rules = css.split(':root', 1)[1].split('}', 1)[1]                     # everything after the token block
-    assert not re.findall(r'#[0-9a-fA-F]{3,8}\b', rules) and 'var(--changed)' in rules and 'var(--same)' in rules
+    assert 'gradient' not in css and '@import' not in css and 'http' not in css
+    # The "Group chat" look (owner's choice) lifts the old "no box-shadow" rule by exactly ONE soft shadow: a single token,
+    # and every box-shadow in the sheet is that token. Still no glow, no text shadow, no filter, no gradient.
+    assert css.count('--shadow:') == 1 and css.count('box-shadow') == css.count('box-shadow: var(--shadow);') >= 1
+    for banned in ('text-shadow', 'drop-shadow', 'filter', 'glow', 'inset'):
+        assert banned not in css.replace('clip-path: inset(50%)', ''), banned
+    tokens, rules = css.split(':root {', 1)[1].split('}', 1)                # the token block, and everything after it
+    for token in ('#f4efe6', '#fffdf9', '#1f1b2e', '#4338ca', '#c9cdf0', '#312e81', '#ffffff'):
+        assert css.count(token) == 1 and token in tokens, token             # each colour is defined once, as a custom property
+    assert not re.findall(r'#[0-9a-fA-F]{3,8}\b', rules) and 'rgb' not in rules and 'var(--changed)' in rules and 'var(--same)' in rules
+    assert tokens.count('rgba(') == 1                                       # the shadow's own colour, nowhere else
+    # Eight position colours (ink and tint), each defined once and used only through .who-N.
+    for n in range(1, archive_pages.PALETTE + 1):
+        assert tokens.count(f'--w{n}:') == 1 and tokens.count(f'--w{n}-t:') == 1
+        assert f'.who-{n} {{ --hue: var(--w{n}); --tint: var(--w{n}-t); }}' in rules
+    assert f'--w{archive_pages.PALETTE + 1}' not in css and '.av-b {' in rules and '.av-c {' in rules
     mark = (STATIC / 'archive-mark.svg').read_text(encoding='utf-8')
     assert mark.count('<rect') == 3 and mark.count('#c9cdf0') == 2 and mark.count('#312e81') == 1 and '<script' not in mark
-    # The redesign: no sidebar, no sideways-scrolling grid, no min-width ladder; one rule set per month panel instead.
+    # No sidebar, no sideways-scrolling grid, no min-width ladder; one rule set per month panel and per group instead.
     for gone in ('.grid-scroll', '.grid.n-', '.side', '.legend', 'min-width: 296px'):
         assert gone not in css, gone
     assert all(f'.m-radio:nth-of-type({n}):checked ~ .panel:nth-of-type({n}) ' in css for n in range(1, archive_pages.MAX_PANELS + 1))
+    from live_genesis import archive_chatbots
+    assert all(f'.g-radio:nth-of-type({n}):checked ~ .qs .minis-g:not(.g-{n}) {{ display: none; }}' in css
+               for n in range(1, archive_chatbots.MAX_GROUPS + 1))          # a checked radio hides the OTHER groups: all show without it
+    assert f'.g-radio:nth-of-type({archive_chatbots.MAX_GROUPS + 1})' not in css
     assert '.month-strip { position: sticky;' in css and '.more-box:checked + .clamp' in css
-    assert 'grid-template-columns: repeat(4, minmax(0, 1fr))' in css and '@media (min-width: 1100px)' in css and '@media (min-width: 700px)' in css
+    assert '@media (min-width: 1100px)' in css and '@media (min-width: 700px)' in css and '@media (min-width: 900px)' in css
+    # Month and group pills are about 44px tall (2.75rem), whatever they hold.
+    assert '.group-strip label, .month-strip label { flex: 1 0 auto; min-height: 2.75rem;' in css
     # Timeline squares keep an edge, also in forced colours; the fitted card layout exists only at the capture size.
-    assert '.sq { ' in css and 'border: 1px solid var(--muted)' in css and '.sq-none { border-style: dashed; }' in css
+    assert '.sq { ' in css and 'border: 1px solid var(--muted)' in css and '.sq-none { border-style: dashed;' in css
     assert '@media (forced-colors: active)' in css and '@media (min-width: 540px) and (min-height: 960px)' in css
     # Sizes are in rem with a floor: nothing under 12px (0.75rem) outside the fitted card.
     flowing = css.split('@media (min-width: 540px) and (min-height: 960px)')[0]
     assert all(float(size) >= 0.75 for size in re.findall(r'font-size: ([0-9.]+)rem', flowing))
     assert not re.findall(r'font-size: [0-9.]+px', flowing) and 'text-transform: uppercase' in flowing
     assert not re.findall(r'[a-z-]+: [0-9.]+cqw', flowing)                     # no cqw size outside the fitted card
+    # Motion: every animation and transition sits inside "no-preference", is short, and only describes where a bubble
+    # comes FROM (`backwards`): the resting state is the visible one, so nothing is hidden without animation support.
+    before, motion = css.split('@media (prefers-reduced-motion: no-preference) {', 1)
+    motion, after = motion.split('/* Forced colours', 1)
+    for word in ('animation', 'transition', '@keyframes', '@view-transition'):
+        assert word not in before and word not in after and word in motion, word
+    assert '@keyframes pop { from { opacity: 0;' in motion and ' to {' not in motion and 'infinite' not in motion
+    assert 'animation: pop 240ms' in motion and motion.count('backwards') == 1
+    delays = [int(ms) for ms in re.findall(r'animation-delay: ([0-9]+)ms', motion)]
+    assert max(delays) + 240 < 400 and not re.findall(r'[0-9.]+s\b', motion.replace('ms', ''))
+    # Nothing rests invisible: the only other "opacity: 0" is on the radio and checkbox inputs behind the labels.
+    assert css.count('opacity: 0') == 2 and 'opacity: 0; pointer-events: none; }' in before and 'visibility: hidden' not in css
 
 
 def test_the_default_rendering_holds_the_archive_pages_and_links_them(ready, tmp_path, monkeypatch):

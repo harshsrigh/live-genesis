@@ -6,7 +6,7 @@ Updated 14 Nov 2026, when the agent society was removed. Read `CLAUDE.md` and `.
 The repository is **Answers Over Time** and nothing else: the chat-app comparison (ChatGPT, Gemini, Grok and a Human column, asked by hand), which is the public site, and a model track that stays in the code and is not published. The agent society the project began with (ten agents, posts, proposals, rounds, the observatory page, the agent API) was removed on 14 November 2026; `docs/ROADMAP.md`, "History", says what went and at which commit it last existed. **The next moves are the owner's:** the first hand-collected chat-app round.
 
 ## What the repository itself shows (checked on 14 Nov 2026)
-- `live_genesis/archive_chatbots.json`: status `draft`, ten questions (C001 to C010). Editable until the first import, fixed after it.
+- `live_genesis/archive_chatbots.json`: status `draft`, format /3, three apps and Human in one answerer group, ten questions (C001 to C010). Editable until the first import, fixed after it. The pages have the "Group chat" look and take any number of answerers in groups (payload schema /6).
 - `live_genesis/archive_questions.json` (20 core questions) and `live_genesis/archive_trending.json` (11 trending questions): status `locked` in the files.
 - No `published/` folder, so CI builds the scripted demo as the whole public site.
 - The full test suite passes offline: `python -m pytest -q`.
