@@ -10,7 +10,7 @@ Every question has a card at `archive/card/<ID>.html` (9:16, plain HTML). `scrip
 
 ```bash
 # from the published site (reviewed data): the normal case
-node scripts/capture-cards.mjs --url https://harshsrigh.github.io/live-genesis/ --out ./cards --ids Q11,T001
+node scripts/capture-cards.mjs --url https://harshsrigh.github.io/live-genesis/ --out ./cards --ids C001,C001-human
 
 # from a site folder built on this machine
 node scripts/capture-cards.mjs --site ./site --out ./cards                 # every card
@@ -22,7 +22,8 @@ node scripts/capture-cards.mjs --site ./site --out ./cards --set trending  # T..
 - It reads the site folder or the one address given and blocks every other request. It calls no model and opens no database.
 - It needs Node and the `playwright` package with its Chromium, installed by the operator; the project gains no dependency: `npm install -g playwright`, then `npx playwright install chromium`. Without it the script stops with that hint.
 - A sample card (its page is marked `scripted-sample`; it reads "Sample we wrote, not a real AI answer") is captured and listed as `SAMPLE`. That is a warning, not a pass: see the next section.
-- Tested here against a scripted demo snapshot, from a folder and from a local server. Not tested against the public site address.
+- The published site holds chat-app cards only (`C001`, `C001-grok`, `C001-human` ...). Model cards (`Q11`, `T001` ...) exist in a site folder built on this machine without `--archive-only`.
+- Tested here against a scripted demo snapshot, from a folder and from a local server. Not tested against the public site address. The change that lets `--url` read the published site's reduced `archive.json` (chat-app track only) was not run.
 
 By hand instead: open the card in a browser, responsive mode, 540 x 960, device pixel ratio 2, screenshot. In a smaller window the card page is ordinary flowing text for reading, not the picture.
 

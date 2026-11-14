@@ -1169,7 +1169,8 @@ def retarget(folder, edit):
     raw = json.dumps(data, ensure_ascii=True, indent=1).encode('ascii')
     (folder / 'archive.json').write_bytes(raw)
     manifest = json.loads((folder / 'MANIFEST.json').read_text(encoding='utf-8'))
-    manifest['archive'] = {**snapshot._archive_counts(data), 'sha256': hashlib.sha256(raw).hexdigest()}
+    counts = snapshot._chat_counts(data) if isinstance(data.get('chatbots'), dict) else {'file': 'archive.json'}
+    manifest['archive'] = {**counts, 'sha256': hashlib.sha256(raw).hexdigest()}
     (folder / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1))
 
 
@@ -1183,11 +1184,14 @@ def test_hand_entered_answers_go_through_the_reviewed_export(chat, tmp_path, mon
     # An archive with ONLY hand-entered replies exports, and neither the core nor the trending list needs a lock for it.
     manifest = snapshot.export_published(out, archive_only=True)
     assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json']        # the data files are derived: never in published/
-    assert manifest['schema'] == 'live-genesis-published/5' and manifest['archive']['runs'] == 0
+    assert manifest['schema'] == 'live-genesis-published/5'
+    # The archive-only export is the chat-app track alone: the manifest counts nothing else and the file holds nothing else.
+    assert set(manifest['archive']) == {'file', 'chatbots', 'sha256'}
     assert manifest['archive']['chatbots'] == {'runs': 2, 'answers': 24, 'apps': APPS, 'human_answers': 8, 'questions': 4}
     exported = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
-    assert exported == json.loads(json.dumps(archive.public_payload())) and exported['schema'] == 'live-genesis-archive/5'
-    assert exported['demo_only'] is False and exported['answers'] == [] and exported['locked'] is False
+    whole = json.loads(json.dumps(archive.public_payload()))
+    assert whole['schema'] == 'live-genesis-archive/5' and whole['demo_only'] is False and whole['answers'] == [] and whole['locked'] is False
+    assert list(exported) == ['schema', 'chatbots'] and exported == {'schema': 'live-genesis-chat-archive/1', 'chatbots': whole['chatbots']}
     block = exported['chatbots']
     assert set(block) == set(chatbots.BLOCK_KEYS) and set(block['answers'][0]) == set(chatbots.ANSWER_KEYS_PUBLIC)
     assert set(block['human_answers'][0]) == set(chatbots.HUMAN_ANSWER_KEYS_PUBLIC) and set(block['questions'][0]) == set(chatbots.QUESTION_KEYS)
@@ -1207,8 +1211,9 @@ def test_hand_entered_answers_go_through_the_reviewed_export(chat, tmp_path, mon
     site = tmp_path / 'site'
     snapshot.build_from_data(site, out, archive_only=True)
     names = {p.relative_to(site).as_posix() for p in site.rglob('*') if p.is_file()}
-    assert {'archive/chatbots.html', 'archive/card/C001.html', 'archive/card/C002-human.html', 'archive/c/C001.html', 'archive/models.html',
+    assert {'archive/chatbots.html', 'archive/card/C001.html', 'archive/card/C002-human.html', 'archive/c/C001.html',
             'archive/data/C001.json', 'archive/data/answers.jsonl', 'archive/data/README.txt'} <= names
+    assert not names & {'archive/models.html', 'archive/trending.html'} and not any(name.startswith(('archive/q/', 'archive/t/')) for name in names)
     assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json']        # building a site writes nothing into published/
     page = (site / 'archive' / 'c' / 'C001.html').read_text(encoding='utf-8')
     assert 'PLACEHOLDER reply 1 of chatgpt.' in page and 'screenshot kept' in page and 'scripted' not in page.lower()
@@ -1263,10 +1268,11 @@ def test_check_refuses_a_tampered_chat_track(chat, tmp_path, monkeypatch):
     tampered(lambda d: block(d)['runs'][0].update(human=None), 'recorded no human collection')
     tampered(lambda d: (block(d)['runs'][0].update(demo=True), block(d)['runs'][1].update(demo=True),
                         [a.update(source='demo') for a in block(d)['answers'] + block(d)['human_answers']]), 'scripted chat-app answers')
-    tampered(lambda d: d.update(schema='live-genesis-archive/3'), 'schema marker does not fit')
+    tampered(lambda d: d.update(schema='live-genesis-archive/3'), 'it holds the model track')
     tampered(lambda d: d.update(schema='live-genesis-archive/4'), 'unknown schema')
-    tampered(lambda d: d.pop('chatbots'), 'schema marker does not fit')
-    tampered(lambda d: d.update(demo_only=True), 'demo_only does not fit|scripted demo data only')
+    tampered(lambda d: d.pop('chatbots'), 'top level: key chatbots is missing')
+    tampered(lambda d: d.update(demo_only=True), 'top level: unexpected key demo_only')
+    tampered(lambda d: d.update(answers=[]), 'top level: unexpected key answers')
     tampered(lambda d: block(d)['runs'].append(dict(block(d)['runs'][0], number=9)), 'two runs on one date')
     # The manifest's own count of the track is checked too.
     snapshot.export_published(out, archive_only=True, replace=True)

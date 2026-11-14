@@ -1328,6 +1328,35 @@ def export_problem(block: dict) -> str | None:
     return closed_problem(block)
 
 
+# ---- The chat-app track on its own: the public site's archive.json and the archive-only export --------------
+# Owner decision: the public site is the chat-app comparison only. What is published there (and what
+# `snapshot --export --archive-only` writes) is this payload: a schema marker and the `chatbots` block.
+# No model answer, answerer, model question list, set hash or model run is in it.
+
+SITE_SCHEMA = "live-genesis-chat-archive/1"
+SITE_KEYS = ("schema", "chatbots")
+
+
+def site_payload(payload: dict) -> dict:
+    """A public payload (archive.public_payload, or the archive.json of a full export) reduced to the
+    chat-app track. A payload that is already reduced is returned as it is. With no chat-app run the
+    block is empty: the pages then say that no chat app has been asked yet."""
+    if payload.get("schema") == SITE_SCHEMA:
+        return payload
+    empty = {"apps": [], "human": None, "questions": [], "runs": [], "answers": [], "human_answers": []}
+    return {"schema": SITE_SCHEMA, "chatbots": payload.get("chatbots") or empty}
+
+
+def site_problem(data: Any) -> str | None:
+    """Why `data` is not a well-formed chat-app-only payload, or None: the schema marker, exactly the
+    two keys, and a well-formed block. What may be PUBLISHED from it is `export_problem` on the block."""
+    if not isinstance(data, dict):
+        return "top level is not an object"
+    if data.get("schema") != SITE_SCHEMA:
+        return "unknown schema"
+    return archive._keys_problem("top level", data, SITE_KEYS) or block_problem(data["chatbots"])
+
+
 def status(cx) -> dict:
     """For `archive-status`: the configuration's state and the hand-entered runs (numbers and counts only)."""
     try:

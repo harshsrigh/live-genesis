@@ -1,6 +1,7 @@
 # Tests the project, then rebuilds the public snapshot on the gh-pages branch.
 # No model is called and no secret is used. Every build uses --archive-only: the public site is
-# Answers Over Time alone; no observatory page, overview, script or agent kit is published.
+# the chat-app comparison of Answers Over Time alone; no model-track page or data, observatory
+# page, overview, script or agent kit is published.
 #   - No published/ folder: the SCRIPTED-DEMO snapshot is the whole site (the exporter refuses
 #     anything that is not scripted demo data).
 #   - published/ present: it must be intact and approved (python -m live_genesis.snapshot --check).
@@ -66,7 +67,8 @@ jobs:
         run: |
           if [ "${HAVE_PUBLISHED:-}" = "1" ]; then
             # Root: rendered from the reviewed JSON, no database. demo/: the scripted demo.
-            # --archive-only: the public site holds Answers Over Time and nothing of the society.
+            # --archive-only: the public site holds the chat-app comparison and nothing of the
+            # model track or the society.
             python -m live_genesis.snapshot "$RUNNER_TEMP/site" --from-data published --sibling demo/ --archive-only
             python -m live_genesis.snapshot "$RUNNER_TEMP/site/demo" --sibling ../ --archive-only
             echo "SNAPSHOT_KIND=reviewed recorded data at the root, scripted demo under demo/" >> "$GITHUB_ENV"
