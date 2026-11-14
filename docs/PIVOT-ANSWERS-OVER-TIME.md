@@ -57,7 +57,7 @@ The agent society (LIVE Genesis) stays in the repository and keeps working, but 
 - Scripted sample answers are always labelled as scripted.
 - No question about consciousness or feelings, and no claims about them.
 - No payments, no donation links, no credentials in the repository.
-- Only the owner exports and approves what is published.
+- Only the owner exports and approves what is published. The export for the public repository is the archive-only one (`snapshot --export --archive-only`): recorded answers, no society data.
 
 ## Limits to state plainly on the page
 
