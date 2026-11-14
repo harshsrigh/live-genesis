@@ -487,7 +487,7 @@ def rewrite(folder, edit, **manifest_changes):
     edit(data)
     payload = json.dumps(data, ensure_ascii=True, indent=1).encode('ascii')
     (folder / 'overview.json').write_bytes(payload)
-    manifest = json.loads((folder / 'MANIFEST.json').read_text())
+    manifest = json.loads((folder / 'MANIFEST.json').read_text(encoding='utf-8'))
     manifest.update(sha256=hashlib.sha256(payload).hexdigest(), **manifest_changes)
     (folder / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1))
     return data

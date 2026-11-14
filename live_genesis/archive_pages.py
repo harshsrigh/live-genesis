@@ -17,6 +17,14 @@ Standalone: `render_site(payload, standalone=True)` is the archive published on 
 `render_home` is the site's root page. `sibling` (standalone only) is the relative address of the
 other published snapshot as seen from the site root (`demo/` or `../`); the bar links its archive.
 
+Chat apps (the optional `chatbots` block of the payload; archive_chatbots.py): replies a person collected
+by hand. They have their own page (`chatbots.html`), a second grid on the page of each question that was
+asked there, and their own share cards (`card/<ID>-chatbots.html` with up to four apps, and
+`card/<ID>-<app label>.html` with one). They are never mixed into the model grid or a model's strip.
+Every such cell says "entered by hand" (or "scripted demo", under made-up app names), and a date on which
+an app's recorded conditions differ from its date before is marked. App names are plain text, never a
+logo, and never the largest thing on a page or card: the question is.
+
 Repeat samples: a run may ask each question several times (`runs[].samples`). A cell then shows the
 representative answer with "2 of 3 agree", and a third state, UNSETTLED (archive.stability), next to
 same and changed. Nothing of this is rendered for an archive whose runs all asked once.
@@ -37,7 +45,12 @@ MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 NUMBER_WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine",
                 10: "ten", 11: "eleven", 12: "twelve", 15: "fifteen", 20: "twenty", 25: "twenty-five", 30: "thirty",
                 40: "forty"}
-SOURCE_LABELS = {"engine": "server call", "api": "self-declared", "demo": "scripted demo"}
+SOURCE_LABELS = {"engine": "server call", "api": "self-declared", "demo": "scripted demo", "manual": "entered by hand"}
+CHATBOTS_SUFFIX = "chatbots"   # card/<ID>-chatbots.html: the four-up card; card/<ID>-<app label>.html: one app
+CARD_APPS = 4
+LONG_REPLY = 420   # characters; a longer chat-app reply is shown whole in a box that scrolls
+CARD_NAME = re.compile(r"(Q[0-9]{2}|T[0-9]{3})-([a-z][a-z0-9-]{1,23})")
+CHAT_CARD_FOOT = "AI-generated · typed in by hand · not affiliated · may be wrong"
 # Why a model has no answers in a run it was dropped from (archive.SKIP_REASONS), in plain words.
 SKIP_WORDS = {"rate_limited": "the service limited the number of requests", "not_found": "the service did not know this model",
               "auth": "the service refused the key", "timeout": "the call timed out", "server_error": "the service reported an error",
@@ -92,6 +105,102 @@ def _plural(n: int, word: str) -> str:
 HIDDEN = {"T004": "political (who holds an office); the owner keeps politics off the site, 14 November 2026"}
 
 
+class _Chat:
+    """Lookups over the chat-app track of one payload (empty when the payload has none). Time is told in
+    DATES here: one row or square per day on which the owner asked, whatever import carried it."""
+
+    def __init__(self, payload: dict):
+        block = payload.get("chatbots") or {"apps": [], "questions": [], "runs": [], "answers": []}
+        self.apps = block["apps"]
+        self.labels = [app["label"] for app in self.apps]
+        self.name = {app["label"]: app["name"] for app in self.apps}
+        self.maker = {app["label"]: app["maker"] for app in self.apps}
+        self.attribution = {app["label"]: app.get("attribution", "") for app in self.apps}
+        self.questions = list(block["questions"])
+        runs = sorted(block["runs"], key=lambda r: (r["collected_on"], r["number"]))
+        self.demo = any(run["demo"] for run in runs)
+        self.dates = sorted({run["collected_on"] for run in runs})
+        self.day = {run["number"]: run["collected_on"] for run in runs}
+        self.conditions: dict[tuple[str, str], dict] = {}
+        self.asked: dict[tuple[str, str], list] = {}
+        for run in runs:
+            for label, conditions in run["conditions"].items():
+                self.conditions[(label, run["collected_on"])] = conditions
+                self.asked[(label, run["collected_on"])] = run["questions"]
+        self.answers = [a for a in block["answers"] if a["source"] in ("manual", "demo")]
+        self.cell = {(a["question"], a["chatbot"], self.day[a["run"]]): a for a in self.answers}
+
+    def series(self, question_id: str, label: str) -> list[tuple[str, dict | None]]:
+        """The dates on which this app was asked this question, oldest first, each with its answer row."""
+        return [(date, self.cell.get((question_id, label, date))) for date in self.dates
+                if question_id in self.asked.get((label, date), ())]
+
+    def dates_of(self, question_id: str) -> list[str]:
+        return [date for date in self.dates if any(question_id in self.asked.get((label, date), ()) for label in self.labels)]
+
+    def latest(self, question_id: str, label: str) -> tuple[str, dict] | None:
+        """(date, answer) of this app's latest ANSWERED reply to the question, or None."""
+        answered = [(date, a) for date, a in self.series(question_id, label) if a is not None and a["state"] == "answered"]
+        return answered[-1] if answered else None
+
+    @staticmethod
+    def kind(answer: dict | None) -> str:
+        if answer is None or answer["state"] != "answered":
+            return "none"
+        return "changed" if answer["changed"] else "same"
+
+    def before(self, label: str, date: str) -> dict | None:
+        """This app's conditions on its previous date, or None for its first."""
+        earlier = [d for d in self.dates if d < date and (label, d) in self.conditions]
+        return self.conditions[(label, earlier[-1])] if earlier else None
+
+    def conditions_changed(self, label: str, date: str) -> list[str]:
+        """What differs between this app's recorded conditions on `date` and on its date before, in words
+        ("search: off → on"). Empty for its first date and when nothing differs. The model name the app
+        showed is not a condition the owner chose and is reported by `shown_change`."""
+        now, old = self.conditions.get((label, date)), self.before(label, date)
+        if not now or not old:
+            return []
+        return [f"{CONDITION_NAMES[key]}: {_condition_value(key, old[key])} → {_condition_value(key, now[key])}"
+                for key in CONDITION_NAMES if old[key] != now[key]]
+
+    def shown_change(self, label: str, date: str) -> bool:
+        now, old = self.conditions.get((label, date)), self.before(label, date)
+        return bool(now and old and old["shown_model"] != now["shown_model"])
+
+
+CONDITION_NAMES = {"account": "account", "temporary_chat": "temporary chat", "memory_off": "memory", "web_search": "search",
+                   "country": "country", "app": "app"}
+ACCOUNT_WORDS = {"logged_out": "logged out", "free_account": "free account", "paid_account": "paid account"}
+APP_WORDS = {"web": "web", "mobile": "mobile app", "desktop": "desktop app"}
+
+
+def _condition_value(key: str, value: object) -> str:
+    if key == "account":
+        return ACCOUNT_WORDS.get(str(value), str(value))
+    if key == "temporary_chat":
+        return "yes" if value else "no"
+    if key == "memory_off":
+        return "not applicable" if value == "not_applicable" else "off" if value else "on"
+    if key == "web_search":
+        return "not known" if value == "unknown" else str(value)
+    if key == "app":
+        return APP_WORDS.get(str(value), str(value))
+    return str(value)
+
+
+def conditions_line(conditions: dict) -> str:
+    """"free account · temporary chat · memory off · search on · US · web": what the owner recorded."""
+    memory = conditions["memory_off"]
+    parts = [ACCOUNT_WORDS.get(conditions["account"], str(conditions["account"])),
+             "temporary chat" if conditions["temporary_chat"] else "regular chat"]
+    if memory != "not_applicable":
+        parts.append("memory off" if memory else "memory on")
+    parts += [f"search {_condition_value('web_search', conditions['web_search'])}", str(conditions["country"]),
+              APP_WORDS.get(conditions["app"], str(conditions["app"]))]
+    return " · ".join(parts)
+
+
 class _View:
     """Lookups over one payload, shared by both page kinds."""
 
@@ -116,8 +225,9 @@ class _View:
         for answer in sorted(self.answers, key=lambda a: a["run"]):
             self.by_series.setdefault((answer["question"], answer["answerer"]), []).append(answer)
         self.run_date = {r["number"]: r["date"] for r in self.runs}
-        self.demo = any(a["source"] == "demo" for a in self.answers) or any(r["demo"] for r in self.runs)
-        self.empty = not self.answers
+        self.chat = _Chat(payload)
+        self.demo = any(a["source"] == "demo" for a in self.answers) or any(r["demo"] for r in self.runs) or self.chat.demo
+        self.empty = not self.answers and not self.chat.answers
         # Repeat samples: how many each run asked, whether any run asked several, and per answered cell its
         # derived label (archive.stability) against that answerer's previous answered cell.
         self.run_samples = {r["number"]: r.get("samples", 1) for r in self.runs}
@@ -229,13 +339,14 @@ def _bar(up: str, base: str, versions: dict[str, str], current: str = "", *, sta
                 f'{"Main archive" if demo else "Scripted demo"}</a>\n')
     else:
         last = ""
-    here = {name: ' aria-current="page"' if name == current else "" for name in ("questions", "trending")}
+    here = {name: ' aria-current="page"' if name == current else "" for name in ("questions", "trending", "chatbots")}
     return ('<div class="bar"><div class="bar-in">\n'
             f'  <a class="wordmark" href="{first_href}"><img class="mark" src="{up}static/archive-mark.svg?v={versions["archive-mark.svg"]}" '
             'alt="" width="57" height="24" />Answers Over Time</a>\n'
             '  <nav aria-label="Archive navigation">\n'
             f'    <a href="{base}trending.html"{here["trending"]}>Trending</a>\n'
             f'    <a href="{index_href}"{here["questions"]}>Questions</a>\n'
+            f'    <a href="{base}chatbots.html"{here["chatbots"]}>Chatbots</a>\n'
             f'    <a href="{index_href}#method">Method</a>\n'
             + last +
             '  </nav>\n'
@@ -499,6 +610,10 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
         out.append('  </div>\n  </div>\n')
     else:
         out.append('  <p class="muted">No answers have been recorded for this question yet.</p>\n')
+    chat = view.chat
+    in_chat = question_id in chat.questions and bool(chat.dates_of(question_id))
+    if in_chat:
+        out.append(_chat_grid(view, question_id))
     out.append('</main>\n<aside class="side">\n'
                '  <div class="side-block"><h2>The exact prompt</h2>\n'
                f'    <pre class="prompt mono">{esc(question["prompt"])}</pre>\n'
@@ -515,6 +630,10 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
                + ('    <span><strong>unsettled</strong> means the question was asked several times in that run and the answers did not all '
                   'agree, there or in the run before. The answer shown is the one most samples gave; the difference is not counted as a '
                   'change.</span>\n' if view.multi else '')
+               + ('    <span><strong>entered by hand</strong> means a person typed the question into the chat app and pasted its reply. '
+                  'There is no receipt for it, so it cannot be checked.'
+                  + (' On this sample page those replies are scripted and the app names are made up.' if chat.demo else '')
+                  + '</span>\n' if in_chat else '')
                + '  </div>\n</aside>\n</div>\n')
     back = ('<a class="back" href="../trending.html">All trending questions</a>' if trending
             else f'<a class="back" href="../index.html">All {esc(count_word(len(view.questions)))} questions</a>')
@@ -638,6 +757,246 @@ def render_card(payload: dict, question_id: str, versions: dict[str, str] | None
     return "".join(out)
 
 
+# ---- Chat apps: replies a person collected by hand ----------------------------------------------------------
+
+def _chat_label(chat: _Chat) -> str:
+    return SOURCE_LABELS["demo" if chat.demo else "manual"]
+
+
+def chat_disclaimer(makers: list[str]) -> str:
+    """The notice shown wherever real hand-entered replies are: what they are and that the site is
+    independent of the companies whose apps were asked (named from the recorded apps, in their order)."""
+    names: list[str] = []
+    for maker in makers:
+        if maker not in names:
+            names.append(maker)
+    listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+    return ("These answers were generated by AI: each was typed by hand into the named app on the date and under the "
+            "conditions shown, and copied unedited. This site is independent and is not affiliated with, sponsored by or "
+            f"endorsed by {listed}; product names are their owners' trademarks. The answers may be inaccurate and are not advice.")
+
+
+def _chat_strip(chat: _Chat, question_id: str, label: str) -> str:
+    squares, changes, missing, moved = [], 0, 0, 0
+    for date, answer in chat.series(question_id, label):
+        kind = chat.kind(answer)
+        marked = bool(chat.conditions_changed(label, date))
+        changes += kind == "changed"
+        missing += kind == "none"
+        moved += marked
+        squares.append(f'<span class="sq sq-{kind}{" sq-cond" if marked else ""}"></span>')
+    name = chat.name[label]
+    if not squares:
+        return (f'<div class="strip-row"><span class="strip-name mono">{esc(name)}</span>'
+                '<span class="muted small">Not asked yet.</span></div>')
+    summary = (f"{name}: {_plural(changes, 'change')} across {_plural(len(squares), 'date')}"
+               + (f", conditions changed on {_plural(moved, 'date')}" if moved else "")
+               + (f", {missing} without a reply" if missing else ""))
+    return (f'<div class="strip-row"><span class="strip-name mono">{esc(name)}</span>'
+            f'<div class="strip" role="img" aria-label="{esc(summary)}">{"".join(squares)}</div></div>')
+
+
+def _chat_last_change(chat: _Chat, question_id: str) -> str:
+    rows = [a for a in chat.answers if a["question"] == question_id]
+    if not rows:
+        return "No replies recorded yet"
+    changed = [a for a in rows if chat.kind(a) == "changed"]
+    if not changed:
+        return f"No change in any app across {_plural(len(chat.dates_of(question_id)), 'date')}"
+    last = max(changed, key=lambda a: chat.day[a["run"]])
+    return f"Last change: {chat.name[last['chatbot']]}, {month_year(chat.day[last['run']])}"
+
+
+def _chat_cell(chat: _Chat, question_id: str, label: str, date: str) -> str:
+    conditions = chat.conditions.get((label, date))
+    if conditions is None or question_id not in chat.asked.get((label, date), ()):
+        return '<div class="cell cell-chat cell-none" role="cell">Not asked on this date</div>'
+    answer = chat.cell.get((question_id, label, date))
+    moved = chat.conditions_changed(label, date)
+    meta = (f'<span class="cell-meta mono">{esc(conditions["shown_model"])} · {esc(_chat_label(chat))}'
+            + (' · new shown model' if chat.shown_change(label, date) else '')
+            + (' · screenshot kept' if answer and answer.get("screenshot_hash") else '')
+            + f'</span><span class="cell-meta mono">{esc(conditions_line(conditions))}</span>'
+            + (f'<span class="cell-meta mono">conditions changed · {esc("; ".join(moved))}</span>' if moved else '')
+            + (f'<span class="cell-meta">{esc(conditions["note"])}</span>' if conditions["note"] else ''))
+    tag = '<span class="cond-tag mono">CONDITIONS CHANGED</span>' if moved else ''
+    if answer is None:
+        return f'<div class="cell cell-chat cell-none" role="cell"><span>No reply recorded</span>{meta}</div>'
+    if answer["state"] == "withheld":
+        return (f'<div class="cell cell-chat cell-none" role="cell"><span>Withheld by content check ({esc(answer["reason"])})</span>'
+                f'{meta}</div>')
+    if answer["state"] != "answered":
+        return (f'<div class="cell cell-chat cell-none" role="cell"><span>No reply recorded: {esc(answer["reason"] or "none given")}</span>'
+                f'{meta}</div>')
+    credit = f'<span class="cell-meta mono">{esc(chat.attribution[label])}</span>' if chat.attribution[label] else ''
+    # A long reply keeps its whole text on the page, in a box that scrolls on its own (no script; reachable by keyboard).
+    text = (f'<span class="cell-text cell-scroll" tabindex="0" role="group" aria-label="Whole reply, scrolls">{esc(answer["text"])}</span>'
+            if len(answer["text"]) > LONG_REPLY else f'<span class="cell-text">{esc(answer["text"])}</span>')
+    if chat.kind(answer) == "changed":
+        return ('<div class="cell cell-chat cell-changed" role="cell"><div class="cell-tags"><span class="changed-tag mono">CHANGED</span>'
+                f'{tag}</div>{text}{credit}{meta}</div>')
+    return ('<div class="cell cell-chat cell-same" role="cell">' + (f'<div class="cell-tags">{tag}</div>' if tag else '')
+            + f'{text}{credit}{meta}</div>')
+
+
+def _chat_grid(view: _View, question_id: str) -> str:
+    """The second grid of a question page: one column per chat app, one row per date, newest first."""
+    chat = view.chat
+    columns = min(max(len(chat.labels), 1), MAX_COLUMNS)
+    cards = "".join(f'<a href="../card/{esc(question_id)}-{esc(label)}.html">{esc(chat.name[label])}</a>' for label in chat.labels)
+    out = ['  <div id="chat-apps" class="group-head spread chat-head"><h2>Chat apps, entered by hand</h2>'
+           '<span class="muted small">Newest first · a person typed the question into each app and pasted the reply</span></div>\n',
+           '  <div class="grid-scroll" tabindex="0" role="region" aria-label="Replies by date and chat app">\n'
+           f'  <div class="grid n-{columns}" role="table" aria-label="Chat-app replies to {esc(question_id)}, newest first">\n'
+           '    <div class="grid-row grid-head mono" role="row"><span role="columnheader">DATE</span>'
+           + "".join(f'<span role="columnheader">{esc(chat.name[label].upper())}</span>' for label in chat.labels) + '</div>\n']
+    for date in reversed(chat.dates_of(question_id)):
+        out.append('    <div class="grid-row" role="row"><div class="when" role="rowheader">'
+                   f'<span class="when-month">{esc(month_year(date))}</span>'
+                   f'<span class="when-day mono">{esc(full_date(date))}</span>'
+                   f'<span class="when-day mono">{"scripted date" if chat.demo else "asked by hand"}</span></div>'
+                   + "".join(_chat_cell(chat, question_id, label, date) for label in chat.labels) + '</div>\n')
+    out.append('  </div>\n  </div>\n'
+               '  <p class="muted small">A chat app\'s reply can depend on the account, the country, whether search was on, and the day. '
+               'Where the recorded conditions differ from the date before, the cell says so: a changed reply there may not mean the '
+               'app changed.</p>\n'
+               f'  <p class="card-links small"><span class="muted">Share cards:</span>'
+               f'<a href="../card/{esc(question_id)}-{CHATBOTS_SUFFIX}.html">All chat apps</a>{cards}</p>\n')
+    return "".join(out)
+
+
+CHATBOTS_DESCRIPTION = "The same questions, typed into consumer chat apps by hand, with every reply and its conditions kept."
+
+
+def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
+                    sibling: str | None = None) -> str:
+    """`chatbots.html`: the questions asked of the chat apps, one strip per app, the conditions recorded
+    on each app's latest date, and how the replies are collected. Names are shown as text only."""
+    view = _View(payload)
+    chat = view.chat
+    versions = versions or asset_versions()
+    out = [_head("Chatbots · Answers Over Time", "../", versions, CHATBOTS_DESCRIPTION),
+           _bar("../", "", versions, "chatbots", standalone=standalone, sibling=sibling, demo=view.demo),
+           '<div class="wrap">\n']
+    lede = ('A person asked each chat app by hand, in a new chat, and pasted the replies here. No software collected them.'
+            + (' On this sample page the apps are made up and the replies are scripted.' if chat.demo else ''))
+    out.append('<header class="hero hero-small">\n  <div class="hero-copy">\n'
+               f'    <span class="tag tag-dark mono">{esc(view.tag())}</span>\n'
+               '    <h1 class="display">The same questions, typed into the chat apps.</h1>\n'
+               f'    <p class="lede">{lede}</p>\n'
+               '  </div>\n'
+               '  <div class="legend">\n'
+               '    <strong class="legend-title">How to read a strip</strong>\n'
+               '    <span class="legend-note">One square per date asked, oldest on the left.</span>\n'
+               '    <div class="legend-row"><span class="sq sq-same"></span><span>Same reply as the time before, or the first reply</span></div>\n'
+               '    <div class="legend-row"><span class="sq sq-changed"></span><span>The reply changed</span></div>\n'
+               '    <div class="legend-row"><span class="sq sq-none"></span><span>No reply recorded</span></div>\n'
+               '    <div class="legend-row"><span class="sq sq-same sq-cond"></span><span>A dot: the conditions differ from the time '
+               'before (account, search, country and so on), so a changed reply may not mean the app changed</span></div>\n'
+               '  </div>\n</header>\n')
+    questions = [view.by_id[i] for i in chat.questions if i in view.by_id]
+    if questions and chat.labels:
+        total = count_word(len(questions))
+        out.append(f'<section class="group">\n  <div class="group-head"><h2>{esc(total[:1].upper() + total[1:])} '
+                   f'question{"" if len(questions) == 1 else "s"}</h2>'
+                   '<span class="muted">Taken from the two question lists, in the same words.</span></div>\n')
+        for question in questions:
+            strips = "".join(_chat_strip(chat, question["id"], label) for label in chat.labels)
+            out.append('  <article class="q-row">\n    <div class="q-main">'
+                       f'<span class="q-id mono">{esc(question["id"])}</span>'
+                       f'<div class="q-text"><a href="{esc(view.page(question["id"]))}#chat-apps">{esc(question["text"])}</a>'
+                       f'<span class="muted small">{esc(_chat_last_change(chat, question["id"]))}</span></div></div>\n'
+                       f'    <div class="q-strips">{strips}</div>\n  </article>\n')
+        out.append('</section>\n')
+        out.append('<section class="group">\n  <div class="group-head"><h2>How each app was asked</h2>'
+                   '<span class="muted">The conditions recorded on the latest date.</span></div>\n')
+        for label in chat.labels:
+            dates = [d for d in chat.dates if (label, d) in chat.conditions]
+            conditions = chat.conditions[(label, dates[-1])]
+            out.append('  <div class="app-row"><div class="app-name"><strong>' + esc(chat.name[label]) + '</strong>'
+                       f'<span class="muted small">{esc(chat.maker[label])}</span></div>'
+                       f'<div class="app-how"><span>{esc(conditions_line(conditions))}</span>'
+                       f'<span class="muted small">Model shown by the app: {esc(conditions["shown_model"])} · '
+                       f'asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "date"))} in all · {esc(_chat_label(chat))}</span>'
+                       + (f'<span class="muted small">{esc(conditions["note"])}</span>' if conditions["note"] else '')
+                       + (f'<span class="mono small">{esc(chat.attribution[label])}</span>' if chat.attribution[label] else '')
+                       + '</div></div>\n')
+        out.append('</section>\n')
+        if not chat.demo:
+            out.append(f'<p class="list-note muted">{esc(chat_disclaimer([chat.maker[label] for label in chat.labels]))}</p>\n')
+    else:
+        out.append('<section class="group">\n  <div class="group-head"><h2>Questions</h2></div>\n'
+                   '  <p class="muted trend-none">No chat app has been asked yet.</p>\n</section>\n')
+    out.append('<section id="method" class="method">\n  <h2 class="display">How the replies are collected</h2>\n  <div class="method-grid">\n'
+               '    <div><strong>Asked by hand</strong><span>A person typed each question into the app, in a new chat every time. '
+               'No software contacts these apps.</span></div>\n'
+               '    <div><strong>Pasted exactly</strong><span>The exact prompt is on each question\'s page. The whole reply is pasted '
+               'as it came and is not edited.</span></div>\n'
+               '    <div><strong>Conditions recorded and shown</strong><span>Account, temporary chat, memory, search, country, the kind of '
+               'app and the model name the app displayed are written down and shown with every reply.</span></div>\n'
+               '    <div><strong>Cannot be verified</strong><span>There is no receipt for a reply entered by hand. You are trusting the '
+               'person who typed it in.</span></div>\n'
+               '    <div><strong>Depends on the day</strong><span>An app\'s reply can depend on the account, the country, whether search '
+               'was on, and the day. A changed reply does not always mean the app changed.</span></div>\n'
+               '    <div><strong>Not affiliated</strong><span>This archive is not affiliated with or endorsed by the companies named. '
+               'Names are used only to say which app was asked.</span></div>\n'
+               '  </div>\n</section>\n')
+    honesty = ("Sample replies on this page are scripted and the app names are made up." if chat.demo
+               else "Replies were entered by hand, cannot be verified and may be wrong.")
+    out.append(f'<footer class="foot"><span>Part of LIVE Genesis. {honesty}</span>'
+               '<span class="mono small">No payments · nothing can be changed from this page</span></footer>\n')
+    out.append('</div>\n</body>\n</html>\n')
+    return "".join(out)
+
+
+def render_chatbot_card(payload: dict, question_id: str, which: str = CHATBOTS_SUFFIX, versions: dict[str, str] | None = None) -> str:
+    """A 9:16 share card of the chat-app track. `which` is "chatbots" (`card/<ID>-chatbots.html`: the
+    latest reply of up to four apps) or one app's label (`card/<ID>-<label>.html`: that app's latest
+    reply at a larger size, with the conditions it was asked under). Every panel carries its date.
+    Laid out for a 1080 by 1920 image that a video app covers in part: the question, the app names,
+    the replies and the dates sit inside x 65-940, y 270-1440; the wordmark is above and the honesty
+    footer below. Raises KeyError for a question or an app that is not in the chat-app track."""
+    view = _View(payload)
+    chat = view.chat
+    versions = versions or asset_versions()
+    question = view.by_id.get(question_id)
+    single = which != CHATBOTS_SUFFIX
+    if question is None or question_id not in chat.questions or (single and which not in chat.labels):
+        raise KeyError(question_id)
+    panels = [(label, *found) for label in ([which] if single else chat.labels)
+              for found in [chat.latest(question_id, label)] if found][:CARD_APPS]
+    length = len(question["text"])
+    size = "xl" if length <= 26 else "l" if length <= 48 else "m" if length <= 90 else "s"
+    title = f"{question['id']} {chat.name[which] if single else 'chat apps'} card · Answers Over Time"
+    out = [_head(title, "../../", versions, question["text"]).replace("<body>", '<body class="card-page">'),
+           '<main class="card card-safe"><div class="card-in">\n'
+           f'  <header class="card-top"><a class="card-brand" href="../{esc(view.page(question_id))}">'
+           f'<img class="card-mark" src="../../static/archive-mark.svg?v={versions["archive-mark.svg"]}" alt="" width="57" height="24" />'
+           'Answers Over Time</a>'
+           '<span class="card-kicker">Chat apps</span></header>\n'
+           f'  <div class="card-body">\n  <h1 class="card-q card-q-{size}">{esc(question["text"])}</h1>\n'
+           f'  <div class="card-panels {"one" if single else "n-" + str(max(len(panels), 1))}">\n']
+    for label, date, answer in panels:
+        changed = chat.kind(answer) == "changed"
+        credit = f'<span class="card-credit mono">{esc(chat.attribution[label])}</span>' if chat.attribution[label] else ''
+        how = (f'<span class="card-cond mono">{esc(conditions_line(chat.conditions[(label, date)]))}</span>' if single else '')
+        out.append(f'    <section class="card-panel{" card-panel-changed" if changed else ""}">'
+                   f'<div class="card-meta mono"><span class="card-label">{esc(chat.name[label])}</span>'
+                   f'<span class="card-when">{esc(full_date(date))} · {esc(_chat_label(chat))}'
+                   f'{" · changed" if changed else ""}</span></div>'
+                   f'<p class="card-answer">{esc(answer["text"])}</p>{how}{credit}</section>\n')
+    if not panels:
+        out.append('    <section class="card-panel"><p class="card-answer card-empty">No replies recorded yet.</p></section>\n')
+    if chat.demo:
+        first, second = view.tag(), f"{question['id']} · made-up app names · read-only · no payments"
+    else:
+        first, second = CHAT_CARD_FOOT, f"{question['id']} · same question every time · read-only · no payments"
+    out.append('  </div>\n  </div>\n'
+               f'  <footer class="card-foot mono"><span>{esc(first)}</span><span>{esc(second)}</span></footer>\n'
+               '</div></main>\n</body>\n</html>\n')
+    return "".join(out)
+
+
 def static_files() -> list[str]:
     """Every file under static/ that the archive pages need: the stylesheet, the mark, the icon, the
     fonts the stylesheet names and each font's licence text. Nothing of the observatory page."""
@@ -661,4 +1020,9 @@ def render_site(payload: dict, *, standalone: bool = False, sibling: str | None 
                 continue
             pages[f"{folder}/{question['id']}.html"] = render_question(payload, question["id"], versions, **options)
             pages[f"card/{question['id']}.html"] = render_card(payload, question["id"], versions)
+    pages["chatbots.html"] = render_chatbots(payload, versions, **options)
+    block = payload.get("chatbots") or {"questions": [], "apps": []}
+    for question_id in block["questions"]:
+        for suffix in [CHATBOTS_SUFFIX] + [app["label"] for app in block["apps"]]:
+            pages[f"card/{question_id}-{suffix}.html"] = render_chatbot_card(payload, question_id, suffix, versions)
     return pages
