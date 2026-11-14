@@ -32,20 +32,27 @@ outside its run's recorded id list and an answer without recorded conditions. A 
 as its sha256 only. An archive that holds only such replies can be exported.
 
 `--export --archive-only` writes `archive.json` and `MANIFEST.json` and nothing else: no society
-table is read (no post, document, proposal, game or profile) and no `overview.json` exists. An answer
-an outside agent submitted over the API is part of the archive and is exported with that agent's name
-and self-declared model; the export summary says how many there are.
+table is read (no post, document, proposal, game or profile) and no `overview.json` exists. Its
+`archive.json` is the chat-app track ALONE (owner decision: the public site publishes nothing of the
+model track): a schema marker (`archive_chatbots.SITE_SCHEMA`) and the `chatbots` block. Model runs
+and answers in the database are not exported by it, and with no reply entered by hand it is refused.
+`--check` holds such a file to the same rules as before (hash, ASCII, strict JSON, closed key sets,
+guards, counts, `reviewed`) and refuses one that carries the model track.
 The manifest says which kind it is (`"contents": "full"` or `"archive"`); `--approve`, `--check`
 and `--from-data` read it there. An archive export renders with `--from-data ... --archive-only` only.
 
-`--export` (either kind) prints each recorded run's stored status and refuses while a run is still
-marked `running` (an archive-run in progress, or one that was killed and so never closed);
-`--include-unfinished` exports such a run as it stands.
+A full `--export` (unchanged) carries the whole archive with every model answer: an answer an outside
+agent submitted over the API is exported with that agent's name and self-declared model, and the
+export summary says how many there are. It prints each recorded run's stored status and refuses
+while a run is still marked `running` (an archive-run in progress, or one that was killed and so
+never closed); `--include-unfinished` exports such a run as it stands.
 
 `--archive-only` (with a database or with `--from-data`; what the public site is built with) writes
-Answers Over Time and no page of the society: `archive/`, `archive.json`, the stylesheet, mark, icon
-and fonts those pages use, and a root `index.html` that sends the visitor to `archive/index.html`.
-No overview, no post, profile or stats page, no script, no agent kit.
+the chat-app comparison of Answers Over Time and nothing else: `archive/` (`index.html`,
+`chatbots.html`, `c/`, the chat-app cards and data files), an `archive.json` reduced to the chat-app
+track, the stylesheet, mark, icon and fonts those pages use, and a root `index.html` that sends the
+visitor to `archive/index.html`. No model page (`models.html`, `trending.html`, `q/`, `t/`), no model
+card or data file, no overview, no post, profile or stats page, no script, no agent kit.
 
 See docs/FIRST-REAL-ROUND.md. Publishing is not reversible in practice: git history keeps the data.
 """
@@ -275,13 +282,21 @@ def _render(out: Path, payload: bytes, kit: dict[str, str], include_client: bool
 
 
 def _render_archive_only(out: Path, sibling: str | None, archive_payload: bytes) -> None:
-    """Answers Over Time on its own: the archive pages, the static files they use, the data behind
-    them and a root page that leads to them. No page or overview of the society is written."""
+    """Answers Over Time on its own, and of it the chat-app track only: its pages, the static files
+    they use, the data behind them (archive.json holds the `chatbots` block and a schema marker) and a
+    root page that leads to them. No page or overview of the society and nothing of the model track."""
     try:
-        archive_html = archive_pages.render_site(_loads(archive_payload), standalone=True, sibling=sibling)
+        data = _loads(archive_payload)
+        if not isinstance(data, dict):
+            raise ValueError("archive payload is malformed: top level is not an object")
+        # The public site is the chat-app track only: the model track is neither rendered nor copied.
+        chat = archive_chatbots.site_payload(data)
+        archive_html = archive_pages.render_site(chat, standalone=True, sibling=sibling)
         home = archive_pages.render_home()
     except ValueError as err:
         raise RuntimeError(str(err)) from None
+    if chat is not data:   # a full payload: write its chat-app part; an archive export is copied byte for byte
+        archive_payload = _encode(chat)
     assets = archive_pages.static_files()
     missing = [name for name in assets if not (STATIC / name).is_file()]
     if missing:
@@ -411,6 +426,26 @@ def _counts(data: dict) -> tuple[dict, dict]:
                                                           *(key for key in OPTIONAL_SHAPE if key in data))})
 
 
+def _chat_block_counts(chat: dict) -> dict:
+    return {"runs": len(chat["runs"]), "answers": len(chat["answers"]), "apps": [app["label"] for app in chat["apps"]],
+            "human_answers": len(chat["human_answers"]), "questions": len(chat["questions"])}
+
+
+def _chat_counts(answers: dict) -> dict:
+    """The manifest's "archive" block (without the hash) of an export of Answers Over Time only."""
+    return {"file": ARCHIVE_FILE, "chatbots": _chat_block_counts(answers["chatbots"])}
+
+
+def _chat_problem(answers: object) -> str | None:
+    """Why the archive.json of an export of Answers Over Time only may not be published, or None. It is
+    the chat-app track alone: the schema marker and the `chatbots` block, hand-entered replies only,
+    the apps and questions of the checked-in configuration, closed keys."""
+    if isinstance(answers, dict) and answers.get("schema") in (archive.PAYLOAD_SCHEMA, archive.PAYLOAD_SCHEMA_CHATBOTS):
+        return ("it holds the model track; an export of Answers Over Time only holds the chat-app track alone "
+                "(an export made by an earlier version must be exported and reviewed again)")
+    return archive_chatbots.site_problem(answers) or archive_chatbots.export_problem(answers["chatbots"])
+
+
 def _archive_counts(answers: dict) -> dict:
     by_source = {name: sum(1 for a in answers["answers"] if a.get("source") == name) for name in archive.SOURCES}
     trending = answers["trending"]
@@ -419,9 +454,7 @@ def _archive_counts(answers: dict) -> dict:
               "trending": {"questions": len(trending["questions"]), "question_set": trending["question_set"],
                            "set_hash": trending["set_hash"], "version": trending["version"]}}
     if "chatbots" in answers:   # only for a file that holds the hand-entered chat-app track: any other manifest is unchanged
-        chat = answers["chatbots"]
-        counts["chatbots"] = {"runs": len(chat["runs"]), "answers": len(chat["answers"]), "apps": [app["label"] for app in chat["apps"]],
-                              "human_answers": len(chat["human_answers"]), "questions": len(chat["questions"])}
+        counts["chatbots"] = _chat_block_counts(answers["chatbots"])
     return counts
 
 
@@ -481,38 +514,46 @@ def _run_lines(states: list[dict]) -> list[str]:
 def export_published(target: str | Path | None = None, *, replace: bool = False, archive_only: bool = False,
                      include_unfinished: bool = False, notes: list[str] | None = None) -> dict:
     """Database (read-only) -> published/overview.json + archive.json + MANIFEST.json, unreviewed.
-    With archive_only: archive.json + MANIFEST.json, and no society table is read.
-    Refused while a recorded run is still marked running, unless include_unfinished. `notes`, when
-    given, receives one line per recorded run (number, stored status, answers recorded)."""
+    With archive_only: archive.json + MANIFEST.json, no society table is read, and archive.json holds
+    the chat-app track only (replies entered by hand); model runs in the database are not exported.
+    A full export is refused while a recorded run is still marked running, unless include_unfinished.
+    `notes`, when given, receives one line per recorded model run of a full export (number, stored
+    status, answers recorded)."""
     out = Path(target) if target is not None else PUBLISHED
     if out.is_symlink() or (out.exists() and not out.is_dir()):
         raise RuntimeError(f"{out} exists and is not a plain folder")
     if out.exists() and any(out.iterdir()) and not replace:
         raise RuntimeError(f"{out} already holds an export. Pass --replace to overwrite it "
                            "(the new export starts unreviewed).")
-    states = archive.run_states()   # read before the answers: a run that is closed here is whole in the payload
+    # Read before the answers: a run that is closed here is whole in the payload. Model runs are not part of an
+    # archive-only export, so their state is not read for it.
+    states = [] if archive_only else archive.run_states()
     data = None if archive_only else _capture()   # archive only: the society tables are not read at all
     answers = _capture_archive()
     if archive_only:
-        if answers["demo_only"]:
-            raise RuntimeError("Export refused; nothing was written. Answers Over Time holds no recorded answers "
-                               "(scripted demo answers and mock answers are never exported), so there is nothing to "
-                               "review: the scripted demo is already the public site.")
+        answers = archive_chatbots.site_payload(answers)   # the chat-app track alone: no model answer is exported
+        if not any(not run["demo"] for run in answers["chatbots"]["runs"]):
+            raise RuntimeError("Export refused; nothing was written. Answers Over Time holds no chat-app reply entered by "
+                               "hand (scripted answers are never exported, and --archive-only leaves the model track out), "
+                               "so there is nothing to review: the scripted demo is already the public site.")
     else:
         data["snapshot"]["demo_only"] = data["snapshot"]["demo_only"] and answers["demo_only"]
         if data["snapshot"]["demo_only"]:
             raise RuntimeError("Export refused; nothing was written. This database holds scripted demo data only, "
                                "so there is nothing to review: the scripted demo is already the public site.")
-    problem = _archive_problem(answers) or (NO_ANSWERS if archive_only and not answers["answers"] and not _chat_answers(answers) else None)
+    if archive_only:
+        problem = _chat_problem(answers) or (NO_ANSWERS if not _chat_answers(answers) else None)
+    else:
+        problem = _archive_problem(answers)
     if problem:
         raise RuntimeError(f"Export refused; nothing was written. Answers Over Time: {problem}.")
     hits = ([] if archive_only else _scan(data)) + [f"archive {hit}" for hit in _scan(answers)]
     if hits:
         raise RuntimeError("Export refused; nothing was written. Content guards matched:\n  " + "\n  ".join(hits))
-    problem = archive.set_hash_problem(answers)
+    problem = None if archive_only else archive.set_hash_problem(answers)   # the chat-app questions are checked against their file above
     if problem:
         raise RuntimeError(f"Export refused; nothing was written. Answers Over Time: {problem}.")
-    if archive.run_states() != states:
+    if not archive_only and archive.run_states() != states:
         raise RuntimeError("Export refused; nothing was written. Answers Over Time changed while it was being read "
                            "(a run is recording answers); run the export again.")
     running = [str(s["number"]) for s in states if s["status"] == "running"]
@@ -522,7 +563,8 @@ def export_published(target: str | Path | None = None, *, replace: bool = False,
                            "run stays \"running\" for good). Wait for it to finish, or pass --include-unfinished to export "
                            "it as it stands.")
     archive_payload = _encode(answers)
-    listed = {**_archive_counts(answers), "sha256": hashlib.sha256(archive_payload).hexdigest()}
+    listed = {**(_chat_counts(answers) if archive_only else _archive_counts(answers)),
+              "sha256": hashlib.sha256(archive_payload).hexdigest()}
     if archive_only:
         # No top-level sha256: the one data file is archive.json and its hash is in the "archive" block.
         # archive.json carries no export time of its own, so exported_at is a note here, not a checked value.
@@ -658,18 +700,20 @@ def check_published(target: str | Path | None = None, *, require_reviewed: bool 
         raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is not strict JSON ({err})") from None
     except ValueError:
         raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is not an exported answer archive") from None
-    problem = _archive_problem(answers)
-    if not problem and not full:   # with no overview beside it, the archive must itself be recorded data
-        problem = (NO_ANSWERS if not answers["answers"] and not _chat_answers(answers) else
-                   "it is scripted demo data only; the demo is published without review" if answers["demo_only"] is not False else None)
+    if full:
+        problem = _archive_problem(answers)
+    else:   # the chat-app track alone, and with no overview beside it, it must itself hold hand-entered replies
+        problem = _chat_problem(answers) or (NO_ANSWERS if not _chat_answers(answers) else None)
     if problem:
         raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is refused: {problem}")
-    if {k: v for k, v in listed.items() if k != "sha256"} != _archive_counts(answers):
+    if {k: v for k, v in listed.items() if k != "sha256"} != (_archive_counts(answers) if full else _chat_counts(answers)):
         raise RuntimeError(f"{folder}: the counts in the manifest do not match {ARCHIVE_FILE}")
     hits = (_scan(data) if full else []) + [f"archive {hit}" for hit in _scan(answers)]
     if hits:
         raise RuntimeError(f"{folder}: refused. Content guards matched:\n  " + "\n  ".join(hits))
-    problem = archive.set_hash_problem(answers)   # after the guards: a changed question is first named by what it now says
+    # After the guards: a changed question is first named by what it now says. Full only: the chat-app
+    # questions were compared with their checked-in file above.
+    problem = archive.set_hash_problem(answers) if full else None
     if problem:
         raise RuntimeError(f"{folder}: {ARCHIVE_FILE} is refused: {problem}")
     if require_reviewed and manifest.get("reviewed") is not True:
@@ -693,7 +737,8 @@ def approve_published(target: str | Path | None = None, *, confirmed: bool = Fal
 def build_from_data(outdir: str | Path, published: str | Path | None = None, *, api_base: str | None = None,
                     sibling: str | None = None, archive_only: bool = False) -> dict:
     """Render the site from reviewed, committed data. No database is opened. With archive_only the
-    whole export is still checked, but only its archive.json is rendered and copied. An export of
+    whole export is still checked, but only the chat-app track of its archive.json is rendered and
+    written (an archive export holds nothing else and is copied byte for byte). An export of
     Answers Over Time only (manifest "contents": "archive") renders with archive_only and no other way."""
     out = Path(outdir)
     folder = Path(published) if published is not None else PUBLISHED
@@ -720,8 +765,15 @@ def build_from_data(outdir: str | Path, published: str | Path | None = None, *, 
 
 def _describe(manifest: dict) -> str:
     answered = manifest["archive"]
+    chat_note = (f"\n  NOTE: {answered['chatbots']['answers']} row(s) in {ARCHIVE_FILE} are chat-app replies ENTERED BY HAND "
+                 f"({', '.join(answered['chatbots']['apps'])}; {answered['chatbots']['runs']} run(s)). They cannot be verified. Read "
+                 "each service's current terms about publishing its output before you push." if "chatbots" in answered else "")
     if manifest["contents"] == ARCHIVE:
-        head = f"  exported {manifest['exported_at']} · Answers Over Time only (no society table was read)\n"
+        return (f"  exported {manifest['exported_at']} · Answers Over Time only: the chat-app track "
+                "(no society table was read; no model answer is exported)\n"
+                f"  {ARCHIVE_FILE}: {answered['chatbots']['runs']} chat-app run(s), {answered['chatbots']['answers']} chat-app "
+                f"answer row(s), {answered['chatbots']['human_answers']} human answer row(s)"
+                + chat_note + f"\n  {ARCHIVE_FILE} sha256 {answered['sha256']}")
     else:
         counts = ", ".join(f"{name} {manifest['actions_by_source'].get(name, 0)}" for name in SOURCES)
         records = ", ".join(f"{name} {n}" for name, n in manifest["records"].items())
@@ -732,10 +784,7 @@ def _describe(manifest: dict) -> str:
             + ", ".join(f"{name} {n}" for name, n in answered["answers_by_source"].items())
             + (f"\n  NOTE: {outside} answer(s) in {ARCHIVE_FILE} were submitted by outside agents over the API. Each one "
                "carries that agent's name and its self-declared model." if outside else "")
-            + (f"\n  NOTE: {answered['chatbots']['answers']} row(s) in {ARCHIVE_FILE} are chat-app replies ENTERED BY HAND "
-               f"({', '.join(answered['chatbots']['apps'])}; {answered['chatbots']['runs']} run(s)). They cannot be verified. Read "
-               "each service's current terms about publishing its output before you push." if "chatbots" in answered else "")
-            + f"\n  {ARCHIVE_FILE} sha256 {answered['sha256']}")
+            + chat_note + f"\n  {ARCHIVE_FILE} sha256 {answered['sha256']}")
 
 
 def main() -> None:
@@ -751,9 +800,10 @@ def main() -> None:
     parser.add_argument("--sibling", metavar="HREF", default=None,
                         help="Relative link to the other published snapshot (demo/ or ../), shown on the page")
     parser.add_argument("--archive-only", action="store_true",
-                        help="Write Answers Over Time only (archive/, its static files, a root page that leads to it): "
-                             "no observatory page, no overview.json, no script, no agent kit. With --export: write "
-                             "archive.json and MANIFEST.json only, without reading the society tables")
+                        help="Write Answers Over Time only, and of it the chat-app comparison only (archive/, its static "
+                             "files, a root page that leads to it): no model-track page or data, no observatory page, no "
+                             "overview.json, no script, no agent kit. With --export: write archive.json (the chat-app "
+                             "track only) and MANIFEST.json only, without reading the society tables")
     steps = parser.add_mutually_exclusive_group()
     steps.add_argument("--export", metavar="DIR", nargs="?", const=str(PUBLISHED), default=None,
                        help="Write overview.json, archive.json and MANIFEST.json for review (default folder: published/); "
@@ -819,7 +869,8 @@ def main() -> None:
     print(f"Static snapshot written to {args.outdir} ({origin}captured {info['generated_at']}, "
           f"{'scripted demo data only' if info['demo_only'] else 'INCLUDES NON-DEMO DATA'}). No model was called.")
     if args.archive_only:
-        print("Archive only: Answers Over Time and its static files. No observatory page, overview or agent kit was written.")
+        print("Archive only: the chat-app comparison of Answers Over Time and its static files. No model-track page or data, "
+              "observatory page, overview or agent kit was written.")
         return
     print(f"Agent kit: API base {info['api_base']}." if info["api_base"]
           else "Agent kit: no API base given; the files say the API is not publicly hosted.")

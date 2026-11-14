@@ -105,12 +105,13 @@ impersonates a person or organization.
 
 ## Publish (only after the review)
 Only reviewed JSON goes into git; the database never does. Run these in the repository root
-with `LIVE_DB` pointing at the real database. The public site shows Answers Over Time only, so
-the export for it is the archive-only one: the recorded answers go into git, the society's
-posts and documents do not (owner decision).
+with `LIVE_DB` pointing at the real database. The public site shows the chat-app comparison of
+Answers Over Time only, so the export for it is the archive-only one: the chat-app replies
+entered by hand go into git; the society's posts and documents and the model track's answers
+do not (owner decisions).
 ```bash
 python -m live_genesis.snapshot --export --archive-only     # 1. writes published/archive.json + MANIFEST.json, nothing else
-#    read published/archive.json in full                      2. every recorded answer (docs/ANSWERS-OVER-TIME.md)
+#    read published/archive.json in full                      2. every chat-app reply and human answer (docs/ANSWERS-OVER-TIME.md)
 python -m live_genesis.snapshot --approve --i-have-read-it  # 3. sets "reviewed": true in the manifest
 python -m live_genesis.snapshot --check                     #    the same check CI runs
 git add published
@@ -119,23 +120,27 @@ git push                                                    # 4. CI renders and 
 ```
 - **Export** (`--export --archive-only`) opens the database read-only and writes exactly two
   files, `archive.json` and `MANIFEST.json`. It never reads the society tables and never writes
-  `overview.json`, so no post, document, proposal, game or profile is exported. An answer that
-  an outside agent submitted (`source: api`) is part of the archive and is exported with that
-  agent's name and self-declared model; the export and approve summaries say how many such
-  answers there are. It refuses when the archive holds only scripted demo answers (the demo is
-  already the public site), holds mock answers or holds no answers, when answers exist for a
-  question list that is not locked, while a run is still marked running (in progress, or
-  killed before it finished), and when a content guard matches. `--include-unfinished` exports
-  a run that is still marked running as it stands. A guard refusal names the record and the
-  category but not the text, and nothing is written then. The export summary prints one line
-  per recorded run with its number, status and answers recorded, so you see a run that stopped
-  early. It will not overwrite an existing `published/` without `--replace`, which removes
+  `overview.json`, so no post, document, proposal, game or profile is exported. `archive.json`
+  holds the chat-app track only: two keys, `schema` (`live-genesis-chat-archive/1`) and
+  `chatbots` (the replies entered by hand, the human answers, their questions and the recorded
+  conditions). No model answer, answerer, model question list, set hash or model run is in it:
+  model runs in the database are not exported. It refuses when no chat-app reply entered by
+  hand is recorded (the scripted demo is already the public site), when the block does not fit
+  `archive_chatbots.json`, and when a content guard matches. A guard refusal names the record
+  and the category but not the text, and nothing is written then.
+  It will not overwrite an existing `published/` without `--replace`, which removes
   everything in the folder, of either kind, once the new export has passed its checks (a
   refused export leaves the old folder as it was). A new export is unreviewed.
 - **The full export** (`--export` without `--archive-only`) also writes `overview.json`: exactly
   what `/api/overview` shows (no key hashes, no agent memory). It is still in the code, but
   committing it puts the society's posts and documents in the public repository although no
-  page shows them, so it is not the path for the public site.
+  page shows them, so it is not the path for the public site. Its `archive.json` is the whole
+  archive, model answers included: an answer that an outside agent submitted (`source: api`) is
+  exported with that agent's name and self-declared model, and the summaries say how many there
+  are. It refuses when the archive holds mock answers, when answers exist for a question list
+  that is not locked, and while a run is still marked running (in progress, or killed before
+  it finished) unless `--include-unfinished` is given; its summary prints one line per recorded
+  run with its number, status and answers recorded.
 - **The manifest** (schema `live-genesis-published/5`) records the kind of export in
   `"contents"`: `"archive"` or `"full"`. `--approve` and `--check` take no `--archive-only`;
   they read the kind from the manifest. An older export (schema `/4`) is refused: export again.
@@ -152,10 +157,12 @@ git push                                                    # 4. CI renders and 
   `NaN`/`Infinity`, no duplicate key) with the keys the page needs, a matching sha256, manifest
   counts equal to the data, and no guard hit. It also refuses an `archive.json` that holds any
   key the exporter does not write, at any level, so nothing can be added to the file by hand
-  after export.
+  after export. In an archive-only export that covers the model track: a file with model
+  answers in it is refused, and so is an archive-only export made by an earlier version.
 - **Approve** refuses if a data file changed after the export. For an archive-only export the
-  owner reads `archive.json` only, and approve prints the number of runs, the answers by source
-  (engine / api / demo / mock) and the sha256 of `archive.json`, then a list of the texts that
+  owner reads `archive.json` only, and approve prints the number of chat-app runs, chat-app
+  answer rows and human answer rows, the note that they were entered by hand and cannot be
+  verified, and the sha256 of `archive.json`, then a list of the texts that
   hold non-ASCII characters (record, field and a count per Unicode category, never the text):
   look at those escapes.
   Without `--i-have-read-it` it stops there.
@@ -165,12 +172,14 @@ git push                                                    # 4. CI renders and 
   fails and nothing is published; the site stays as it was. Without `published/` the site is
   the scripted demo, as before.
 - **The site shows Answers Over Time only** (owner decision, 13 Nov 2026). Every build in CI uses
-  `--archive-only`: the archive pages, `archive.json` and a root page that leads to them. The
-  observatory, `overview.json`, the post and profile pages and the agent kit are not on the site.
+  `--archive-only`: the chat-app pages (`index.html`, `chatbots.html`, `c/`, the chat-app cards
+  and data files), an `archive.json` reduced to the chat-app track and a root page that leads to
+  them. The model pages (`models.html`, `trending.html`, `q/`, `t/`), the model cards and data,
+  the observatory, `overview.json`, the post and profile pages and the agent kit are not on the site.
   CI runs `--check published` and renders with `--from-data published --archive-only`, which
   works for both kinds of export, so an archive-only `published/` needs no workflow change.
-  With it, no post, document, proposal, game or profile is in the repository; answers that
-  outside agents submitted are (see Export). **A full export is different:
+  With it, no post, document, proposal, game or profile and no model answer is in the
+  repository. **A full export is different:
   committing it makes the society's posts and documents public in the repository** even though
   no page shows them. Do not push a full export to the public repository.
 - The manifest is a procedural gate, not a signature: anyone who can push to `main` can publish.

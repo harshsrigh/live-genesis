@@ -39,7 +39,10 @@ check withheld is never shown as a card; the page says "Refusals and non-answers
 App names are plain text, never a logo, and never the largest thing on a page or card.
 
 Standalone: `render_site(payload, standalone=True)` is the archive published on its own (snapshot.py
-`--archive-only`). `sibling` (standalone only) is the relative address of the other published
+`--archive-only`), and it is the chat-app track ONLY (owner decision): `index.html`, `chatbots.html`,
+`c/`, the chat-app cards and the chat-app data files. No `models.html`, `trending.html`, `q/`, `t/`,
+model card or model data file is made, and no page links to one. The local apps and a full snapshot
+keep every page. `sibling` (standalone only) is the relative address of the other published
 snapshot as seen from the site root (`demo/` or `../`); the bar links its archive.
 """
 from __future__ import annotations
@@ -250,11 +253,22 @@ def conditions_line(conditions: dict) -> str:
     return " · ".join(parts)
 
 
+# What a chat-app-only payload (archive_chatbots.site_payload) lacks, as empty values for _View.
+_NO_MODELS = {"questions": [], "groups": [], "locked": False, "locked_at": None, "runs": [], "answerers": [], "answers": [],
+              "trending": {"questions": [], "locked": False}}
+
+
 class _View:
     """Lookups over one payload, shared by every page kind."""
 
     def __init__(self, payload: dict):
-        problem = archive.payload_problem(payload)
+        from . import archive_chatbots   # lazy, as in render_chatbots
+        if isinstance(payload, dict) and payload.get("schema") == archive_chatbots.SITE_SCHEMA:
+            # The chat-app track on its own (the public site): it holds no model list, run or answer.
+            problem = archive_chatbots.site_problem(payload)
+            payload = {**_NO_MODELS, **payload}
+        else:
+            problem = archive.payload_problem(payload)
         if problem:
             raise ValueError(f"archive payload is malformed: {problem}")
         self.hidden = frozenset(HIDDEN)
@@ -656,9 +670,11 @@ def _bar(view: _View, up: str, base: str, versions: dict[str, str], current: str
                 f'{"Main archive" if view.demo else "Sample site"}</a>\n')
     else:
         last = ""
-    links = [("front", f"{base}index.html", "Chat apps" if chat else "Questions"), ("trending", f"{base}trending.html", "Trending"),
-             ("models", f"{base}models.html", "Models")]
-    links.append(("chatbots", f"{base}chatbots.html", "How it works") if chat else ("method", f"{base}models.html#method", "How it works"))
+    links = [("front", f"{base}index.html", "Chat apps" if chat else "Questions")]
+    if not standalone:   # a standalone archive is the chat-app track only: it has no model page to link
+        links += [("trending", f"{base}trending.html", "Trending"), ("models", f"{base}models.html", "Models")]
+    links.append(("chatbots", f"{base}chatbots.html", "How it works") if chat or standalone
+                 else ("method", f"{base}models.html#method", "How it works"))
     nav = "".join(f'    <a href="{href}"{" aria-current=" + chr(34) + "page" + chr(34) if name == current else ""}>{text}</a>\n'
                   for name, href, text in links)
     return (f'<a class="skip" href="{esc(here)}#main">Skip to the content</a>\n'
@@ -866,10 +882,18 @@ def _trending_note(view: _View) -> str:
 def render_index(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
                  sibling: str | None = None) -> str:
     """`index.html`, the front page: the chat-app comparison when the payload holds a chat-app run,
-    else the trending and the core questions with the models' newest answers."""
+    else the trending and the core questions with the models' newest answers. A standalone archive
+    never lists the models: with no chat-app run its front page says that nothing was asked yet."""
     view = _View(payload)
     versions = versions or asset_versions()
     chat = view.chat
+    if standalone and not chat.dates:
+        body = [_list_head(view.tag("chat"), "Same question, asked again every month.", "No chat app has been asked yet."),
+                '<section class="group">\n  <p class="muted trend-none">Nothing has been recorded yet. '
+                '<a href="chatbots.html">Here is how we ask</a>.</p>\n</section>\n']
+        return _page(view, _head("Answers Over Time", "../", versions, HOME_DESCRIPTION, _meta(view, "", track="chat")),
+                     _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
+                     _foot(view, "chat", []))
     if chat.dates:
         names = [column["name"] for column in chat.columns]
         people = "one human" if chat.human else ""
@@ -883,8 +907,9 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
         body += [_row(_chat_board(view, question_id), f"c/{question_id}.html") for question_id in shown]
         body.append('</section>\n')
         body.append(f'<p class="list-note muted">{LEFT_OUT} The same words go to every app; '
-                    '<a href="chatbots.html">here is how we ask</a>. '
-                    'Want the plain models instead? <a href="models.html">Models</a> and <a href="trending.html">Trending</a>.</p>\n')
+                    '<a href="chatbots.html">here is how we ask</a>.'
+                    + ('' if standalone else ' Want the plain models instead? <a href="models.html">Models</a> and '
+                                             '<a href="trending.html">Trending</a>.') + '</p>\n')
         return _page(view, _head("Answers Over Time", "../", versions, HOME_DESCRIPTION, _meta(view, "", track="chat")),
                      _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
                      _foot(view, "chat", shown))
@@ -1431,6 +1456,34 @@ Product names belong to their owners. This archive is independent and is not aff
 with, sponsored by or endorsed by them.
 """ % {"schema": DATA_SCHEMA}
 
+# The same text for a standalone archive, which holds the chat-app track only: the lines about model
+# questions and model answers are left out or shortened. Each pair is (in README, in README_CHAT).
+_README_CHAT_ONLY = (
+    ("One question (Q01, T002, C003 ...): the question,", "One question (C001, C002 ...): the question,"),
+    ("Q.. (core list), T... (trending list) or C... (chat-app list).", "C... (the chat-app list)."),
+    ("chat-app | model | human", "chat-app | human"),
+    ("The version name the app showed, or the model version asked (", "The version name the app showed ("),
+    ("                    asked-by-server     the archive's own program called the model\n"
+     "                    sent-in-unverified  an outside program sent the answer; nothing about it was checked\n", ""),
+    ("                    mixed      asked several times in one check; the tries did not all agree\n", ""),
+    ("chat app; source and date for human answers; endpoint name and sample counts\n"
+     "                    for a model). Never a web address, a key, a file path or a username.",
+     "chat app; source and date for human answers). Never a web address, a key, a file path\n"
+     "                    or a username."),
+)
+
+
+def _readme_chat() -> str:
+    text = README
+    for full, short in _README_CHAT_ONLY:
+        if text.count(full) != 1:
+            raise ValueError("the data README no longer holds a line its chat-app-only form replaces")
+        text = text.replace(full, short)
+    return text
+
+
+README_CHAT = _readme_chat()
+
 
 def _dump(node: object) -> str:
     return json.dumps(node, ensure_ascii=True, sort_keys=False, separators=(",", ":"))
@@ -1449,9 +1502,10 @@ def question_data(view: _View, question_id: str) -> dict:
             "answers": answers}
 
 
-def render_data(payload: dict) -> dict[str, str]:
+def render_data(payload: dict, *, chat_only: bool = False) -> dict[str, str]:
     """The data files, keyed by their path under `archive/`: `data/<ID>.json` per shown question,
-    `data/answers.jsonl` (every answer, one per line) and `data/README.txt`. ASCII-escaped JSON."""
+    `data/answers.jsonl` (every answer, one per line) and `data/README.txt`. ASCII-escaped JSON.
+    `chat_only` (a standalone archive): the README describes the chat-app track only."""
     view = _View(payload)
     out: dict[str, str] = {}
     lines: list[str] = []
@@ -1460,7 +1514,7 @@ def render_data(payload: dict) -> dict[str, str]:
         out[f"data/{question['id']}.json"] = json.dumps(data, ensure_ascii=True, indent=1) + "\n"
         lines += [_dump(answer) for answer in data["answers"]]
     out["data/answers.jsonl"] = "".join(line + "\n" for line in lines)
-    out["data/README.txt"] = README
+    out["data/README.txt"] = README_CHAT if chat_only else README
     return out
 
 
@@ -1489,13 +1543,21 @@ def static_files() -> list[str]:
 
 def render_site(payload: dict, *, standalone: bool = False, sibling: str | None = None) -> dict[str, str]:
     """Every archive page and data file, keyed by its path under `archive/`. A hidden question (`HIDDEN`)
-    has no page, no card and no data file."""
+    has no page, no card and no data file. Standalone (the public site): the chat-app track only. The
+    payload is reduced to it first (archive_chatbots.site_payload), so no model page, card or data file
+    is made and no page links to one."""
     versions = asset_versions()
+    if standalone:
+        if not isinstance(payload, dict):
+            raise ValueError("archive payload is malformed: top level is not an object")
+        from . import archive_chatbots   # lazy, as in render_chatbots
+        payload = archive_chatbots.site_payload(payload)
     view = _View(payload)
     options = {"standalone": standalone, "sibling": sibling if standalone else None}
-    pages = {"index.html": render_index(payload, versions, **options), "models.html": render_models(payload, versions, **options),
-             "trending.html": render_trending(payload, versions, **options),
-             "chatbots.html": render_chatbots(payload, versions, **options)}
+    pages = {"index.html": render_index(payload, versions, **options), "chatbots.html": render_chatbots(payload, versions, **options)}
+    if not standalone:
+        pages["models.html"] = render_models(payload, versions, **options)
+        pages["trending.html"] = render_trending(payload, versions, **options)
     for folder, questions in (("q", view.questions), ("t", view.trending), ("c", view.chat_questions)):
         for question in questions:
             board = _board(view, question["id"])
@@ -1504,5 +1566,5 @@ def render_site(payload: dict, *, standalone: bool = False, sibling: str | None 
             if folder == "c":
                 for column in board["columns"]:
                     pages[f"card/{question['id']}-{column['key']}.html"] = render_chatbot_card(payload, question["id"], column["key"], versions)
-    pages.update(render_data(payload))
+    pages.update(render_data(payload, chat_only=standalone))
     return pages

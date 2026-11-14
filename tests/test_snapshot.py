@@ -244,8 +244,48 @@ def run_main(monkeypatch, *argv):
         return stop.code
 
 
-def test_archive_only_writes_the_archive_and_nothing_of_the_society(isolated_db, tmp_path, monkeypatch):
-    from live_genesis import archive, archive_pages
+# Owner decision ("Remove anything from previous models"): the public site is the chat-app comparison only.
+# Exactly what a standalone build of the scripted demo writes outside static/: listed by name, not derived.
+CHAT_DEMO_IDS = ['C001', 'C002', 'C003', 'C004', 'C005', 'C006']
+CHAT_DEMO_SITE = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/chatbots.html',
+                   'archive/data/answers.jsonl', 'archive/data/README.txt'}
+                  | {f'archive/c/{name}.html' for name in CHAT_DEMO_IDS} | {f'archive/data/{name}.json' for name in CHAT_DEMO_IDS}
+                  | {f'archive/card/{name}{suffix}.html' for name in CHAT_DEMO_IDS
+                     for suffix in ('', '-chat-app-a', '-chat-app-b', '-chat-app-c', '-human')})
+MODEL_PAGES = {'archive/models.html', 'archive/trending.html', 'archive/q/Q01.html', 'archive/t/T001.html', 'archive/card/Q01.html',
+               'archive/card/T001.html', 'archive/data/Q01.json', 'archive/data/T001.json'}
+MODEL_KEYS = ('answers', 'answerers', 'questions', 'trending', 'runs', 'set_hash', 'question_set', 'groups', 'answers_by_source',
+              'locked', 'locked_at', 'demo_only', 'system_line', 'changed_rule')
+# Text that only the model track has: its page names and links, its labels, the scripted models and their versions.
+MODEL_ONLY_TEXT = ('models.html', 'trending.html', '>Models<', '>Trending<', 'Want the plain models', 'straight to the models',
+                   'Questions from what people search for', 'We asked it ourselves', 'asked-by-server', 'sent-in-unverified',
+                   'model-a', 'model-b', 'model-c', 'Scripted sample, not a real trend', 'set_hash', 'Q01', 'T001')
+
+
+def text_files(root, names):
+    return {name: (root / name).read_text(encoding='utf-8') for name in names if name.endswith(('.html', '.json', '.jsonl', '.txt'))}
+
+
+def assert_no_model_track(root):
+    """Nothing of the model track in a built site: no page, card or data file, no link, no label, no answer."""
+    written = files_of(root)
+    assert not any(name.startswith(('archive/q/', 'archive/t/', 'archive/card/Q', 'archive/card/T', 'archive/data/Q', 'archive/data/T'))
+                   or name in MODEL_PAGES for name in written), sorted(written)
+    for name, text in text_files(root, written).items():
+        for gone in MODEL_ONLY_TEXT:
+            assert gone not in text, (name, gone)
+        if name.endswith(('.html', '.txt')):
+            # "model" is not a word a visitor reads anywhere (the one data key `shown_model` is a chat app's version name).
+            assert not re.search(r'(?i)\bmodels?\b', visible_text(text) if name.endswith('.html') else text), name
+            assert not re.search(r'(?i)trending', text), name
+    data = json.loads((root / 'archive.json').read_text(encoding='utf-8'))
+    assert list(data) == ['schema', 'chatbots'] and data['schema'] == 'live-genesis-chat-archive/1' and not set(data) & set(MODEL_KEYS)
+    assert list(data['chatbots']) == ['apps', 'human', 'questions', 'runs', 'answers', 'human_answers']
+    return data
+
+
+def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the_society(isolated_db, tmp_path, monkeypatch):
+    from live_genesis import archive, archive_chatbots, archive_pages
     archive_demo_world(tmp_path, monkeypatch)
     before = hashlib.sha256(isolated_db.read_bytes()).hexdigest()
     out = tmp_path / 'site'
@@ -253,35 +293,41 @@ def test_archive_only_writes_the_archive_and_nothing_of_the_society(isolated_db,
     assert info['demo_only'] is True and info['api_base'] is None
     assert hashlib.sha256(isolated_db.read_bytes()).hexdigest() == before  # database untouched
     payload = archive.public_payload(readonly=True)
-    ids = [q['id'] for q in payload['questions']] + [q['id'] for q in payload['trending']['questions']]
-    assert payload['questions'] and payload['trending']['questions']
+    # The database does hold the model track (514 scripted answers of three made-up models); none of it is published.
+    assert payload['questions'] and payload['trending']['questions'] and len(payload['answers']) > 500
+    assert payload['answerers'] == ['model-a', 'model-b', 'model-c']
     chat = payload['chatbots']
-    chat_ids = [q['id'] for q in chat['questions']]
-    data_files = {f'archive/data/{name}.json' for name in ids + chat_ids} | {'archive/data/answers.jsonl', 'archive/data/README.txt'}
-    ids += chat_ids + [f'{question}-{suffix}' for question in chat_ids for suffix in [app['label'] for app in chat['apps']] + ['human']]
-    expected = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/models.html', 'archive/trending.html',
-                 'archive/chatbots.html'}
-                | ARCHIVE_STATIC | data_files
-                | {f'archive/q/{q["id"]}.html' for q in payload['questions']}
-                | {f'archive/t/{q["id"]}.html' for q in payload['trending']['questions']}
-                | {f'archive/c/{name}.html' for name in chat_ids}
-                | {f'archive/card/{name}.html' for name in ids})
+    assert [q['id'] for q in chat['questions']] == CHAT_DEMO_IDS and [app['label'] for app in chat['apps']] == ['chat-app-a', 'chat-app-b', 'chat-app-c']
     written = files_of(out)
-    assert written == expected
+    assert written == CHAT_DEMO_SITE | ARCHIVE_STATIC
+    data = assert_no_model_track(out)
+    everything_text = ''.join(text_files(out, written).values())
+    for answer in payload['answers']:
+        if answer['text'] and len(answer['text']) > 25:
+            assert answer['text'] not in everything_text and json.dumps(answer['text'])[1:-1] not in everything_text, answer['id']
+    for question in payload['questions'] + payload['trending']['questions']:
+        assert question['text'] not in everything_text, question['id']
     # Nothing of the society: no data file, no page, no script, no agent kit, no emblem.
     for name in SOCIETY_FILES:
         assert name not in written, name
     assert not any(name.startswith(('post/', 'profile/')) or name.endswith(('.js', '.py', '.md')) for name in written)
-    # The only data: the archive payload and the files derived from it for machines (archive/data/).
+    # The only data: the chat-app payload and the files derived from it for machines (archive/data/).
     assert [name for name in written if name.endswith('.json') and not name.startswith('archive/data/')] == ['archive.json']
+    lines = [json.loads(line) for line in (out / 'archive' / 'data' / 'answers.jsonl').read_text(encoding='utf-8').splitlines()]
+    assert lines and {line['answerer_kind'] for line in lines} == {'chat-app', 'human'}
+    assert {line['question_id'] for line in lines} == set(CHAT_DEMO_IDS) and {line['provenance'] for line in lines} == {'scripted-sample'}
+    readme = (out / 'archive' / 'data' / 'README.txt').read_text(encoding='utf-8')
+    assert readme == archive_pages.README_CHAT != archive_pages.README and 'scripted-sample' in readme and 'typed-by-hand' in readme
+    assert 'chat-app | human' in readme and 'not affiliated' in readme and 'It may be wrong.' in readme
     bodies = [post['body'] for post in snapshot._capture()['posts']]
     assert len(bodies) > 3 and all(len(body) > 20 for body in bodies)
     everything = ''.join((out / name).read_text(encoding='utf-8') for name in written if name.endswith(('.html', '.json')))
     for body in bodies:
         assert body not in everything and json.dumps(body)[1:-1] not in everything
     assert '<script' not in everything and 'overview.json' not in everything and 'app.js' not in everything
-    # The archive data is the public payload, exactly as the default mode writes it.
-    assert (out / 'archive.json').read_bytes() == snapshot._encode(payload)
+    # The archive data is the chat-app block of the public payload under its own schema marker, and nothing else.
+    assert data == {'schema': archive_chatbots.SITE_SCHEMA, 'chatbots': json.loads(json.dumps(chat))}
+    assert (out / 'archive.json').read_bytes() == snapshot._encode(archive_chatbots.site_payload(payload))
     # No dead link, and no link to the observatory at all.
     assert_every_address_resolves(out)
     pages = {name: (out / name).read_text(encoding='utf-8') for name in written if name.endswith('.html')}
@@ -294,16 +340,30 @@ def test_archive_only_writes_the_archive_and_nothing_of_the_society(isolated_db,
     front = pages['archive/index.html']
     assert 'Sample we wrote, not a real AI answer' in front and 'Read-only archive.' in front
     assert 'Everything here is a sample we wrote. No AI and no person was asked.' in front and 'No payments' in front
-    assert 'Everything here is a sample we wrote.' in pages['archive/q/Q01.html'] and 'Sample we wrote, not a real AI answer' in pages['archive/q/Q01.html']
-    # Apart from that one bar link, each page is the page every other snapshot and both web apps show.
+    assert 'Everything here is a sample we wrote.' in pages['archive/c/C001.html'] and 'Sample we wrote, not a real AI answer' in pages['archive/c/C001.html']
+    for name in ('archive/c/C001.html', 'archive/chatbots.html', 'archive/card/C001.html', 'archive/card/C001-human.html'):
+        assert 'Sample we wrote, not a real AI answer' in pages[name], name
+    assert 'Refusals and non-answers are left out.' in front and 'On this sample site the apps are made up' in pages['archive/chatbots.html']
+    # The bar: the comparison and how it is made. No "Trending", no "Models".
+    for name in ('archive/index.html', 'archive/chatbots.html', 'archive/c/C001.html'):
+        nav = pages[name].split('<nav aria-label="Archive navigation">', 1)[1].split('</nav>', 1)[0]
+        assert re.findall(r'>([^<>]+)</a>', nav) == ['Chat apps', 'How it works'], name
+    # The pages are what render_site makes for a standalone archive, from the whole payload or from the reduced one.
+    alone = archive_pages.render_site(payload, standalone=True)
+    assert alone == archive_pages.render_site(archive_chatbots.site_payload(payload), standalone=True)
+    assert {'archive/' + name for name in alone} == written - ARCHIVE_STATIC - {'index.html', '.nojekyll', 'archive.json'}
+    for name, text in alone.items():
+        assert text == (out / 'archive' / name).read_text(encoding='utf-8'), name
+    # The local apps and a full snapshot use the default rendering, which keeps every model page.
     usual = archive_pages.render_site(payload)
-    assert {'archive/' + name for name in usual if name.endswith('.html')} == set(pages) - {'index.html'}
-    for name, html in usual.items():
-        if not name.endswith('.html'):
-            assert html == (out / 'archive' / name).read_text(encoding='utf-8'), name
-            continue
-        assert OBSERVATORY_LINK.sub('', html) == pages['archive/' + name], name
-        assert len(OBSERVATORY_LINK.findall(html)) == (0 if name.startswith('card/') else 1), name
+    assert {name[len('archive/'):] for name in MODEL_PAGES} <= set(usual) and set(alone) < set(usual)
+    assert '<a href="trending.html">Trending</a>' in usual['index.html'] and '<a href="models.html">Models</a>' in usual['index.html']
+    assert 'Want the plain models instead?' in usual['index.html'] and usual['data/README.txt'] == archive_pages.README
+    for name in alone:
+        if name.startswith('card/') or (name.startswith('data/C') and name.endswith('.json')):
+            assert usual[name] == alone[name], name                        # a chat-app card and data file are the same everywhere
+        elif name.endswith('.html'):
+            assert len(OBSERVATORY_LINK.findall(usual[name])) == 1 and 'Observatory' not in alone[name], name
 
 
 def test_archive_only_root_page_leads_to_the_archive_without_script(isolated_db, tmp_path, monkeypatch):
@@ -336,6 +396,13 @@ def test_default_export_is_unchanged_by_the_archive_only_mode(isolated_db, tmp_p
     assert 'data-overview="overview.json"' in home and 'http-equiv="refresh"' not in home
     assert visible_text(home) == visible_text(STATIC_PAGE.read_text(encoding='utf-8'))
     assert files_of(only) < written                                                 # the mode only ever leaves files out
+    assert files_of(only) == CHAT_DEMO_SITE | ARCHIVE_STATIC
+    # A full snapshot keeps every model page and the whole archive.json; the standalone one has none of it.
+    assert MODEL_PAGES <= written and not MODEL_PAGES & files_of(only)
+    assert set(MODEL_KEYS) < set(json.loads((full / 'archive.json').read_text(encoding='utf-8')))
+    assert (full / 'archive.json').read_bytes() == snapshot._encode(archive.public_payload(readonly=True))
+    assert_no_model_track(only)
+    assert 'model-a' in (full / 'archive' / 'models.html').read_text(encoding='utf-8')
     assert {name for name in written if name.startswith('static/')} == {
         'static/' + path.relative_to(snapshot.STATIC).as_posix() for path in snapshot.STATIC.rglob('*')
         if path.is_file() and path.suffix != '.html'}
@@ -347,8 +414,9 @@ def test_default_export_is_unchanged_by_the_archive_only_mode(isolated_db, tmp_p
     assert '<a href="../../">Observatory</a>' in (full / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
     # A sibling changes nothing in the archive pages unless the archive stands alone.
     assert archive_pages.render_site(payload, sibling='demo/') == archive_pages.render_site(payload)
-    # Files both modes write are the same bytes; only the root page and the bar of the archive pages differ.
-    for name in files_of(only) - {'index.html'}:
+    # Files both modes write are the same bytes, except the root page, the bar of the archive pages, and the three files
+    # that hold the model track in a full snapshot (archive.json, the list of every answer, the data README).
+    for name in files_of(only) - {'index.html', 'archive.json', 'archive/data/answers.jsonl', 'archive/data/README.txt'}:
         if not (name.startswith('archive/') and name.endswith('.html') and '/card/' not in name):
             assert (only / name).read_bytes() == (full / name).read_bytes(), name
 
@@ -368,10 +436,30 @@ def test_archive_only_pair_links_each_other_as_the_workflow_builds_it(isolated_d
     # A scripted page calls the other snapshot the main archive, never "recorded".
     inner = (site / 'demo' / 'archive' / 'index.html').read_text(encoding='utf-8')
     assert inner.count('<a href="../../archive/index.html">Main archive</a>') == 1
-    deep = (site / 'demo' / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
+    deep = (site / 'demo' / 'archive' / 'c' / 'C001.html').read_text(encoding='utf-8')
     assert deep.count('<a href="../../../archive/index.html">Main archive</a>') == 1
-    assert '<a href="../demo/archive/index.html">' in (site / 'archive' / 'trending.html').read_text(encoding='utf-8')
+    assert '<a href="../demo/archive/index.html">' in (site / 'archive' / 'chatbots.html').read_text(encoding='utf-8')
+    assert_no_model_track(site)
+    assert_no_model_track(site / 'demo')
     assert 'Observatory' not in inner + deep and not re.search(r'>[^<]*recorded[^<]*</a>', inner + deep, re.I)
+
+
+def test_archive_only_with_no_chat_app_run_says_so_and_never_lists_the_models(isolated_db, tmp_path, monkeypatch):
+    from live_genesis import archive, archive_pages
+    demo_world(tmp_path, monkeypatch)                                              # a scripted society; Answers Over Time is empty
+    out = tmp_path / 'site'
+    snapshot.build(out, archive_only=True)
+    assert files_of(out) == ARCHIVE_STATIC | {'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/chatbots.html',
+                                              'archive/data/answers.jsonl', 'archive/data/README.txt'}
+    data = assert_no_model_track(out)
+    assert data['chatbots'] == {'apps': [], 'human': None, 'questions': [], 'runs': [], 'answers': [], 'human_answers': []}
+    assert_every_address_resolves(out)
+    front = (out / 'archive' / 'index.html').read_text(encoding='utf-8')
+    assert 'No answers recorded yet' in front and 'No chat app has been asked yet.' in front and '<a href="chatbots.html">Here is how we ask</a>' in front
+    assert 'Read-only archive.' in front and 'No payments' in front and '<script' not in front and 'style="' not in front
+    assert (out / 'archive' / 'data' / 'answers.jsonl').read_text(encoding='utf-8') == ''
+    # The same empty payload in a local app still shows the model lists: only the standalone archive leaves them out.
+    assert 'Simple questions, asked again every month.' in archive_pages.render_index(archive.public_payload(readonly=True))
 
 
 def test_archive_only_command_line(isolated_db, tmp_path, monkeypatch, capsys):
@@ -379,7 +467,8 @@ def test_archive_only_command_line(isolated_db, tmp_path, monkeypatch, capsys):
     out = tmp_path / 'site'
     assert run_main(monkeypatch, str(out), '--archive-only') == 0
     printed = capsys.readouterr().out
-    assert 'scripted demo data only' in printed and 'Archive only' in printed and 'Agent kit' not in printed
+    assert 'scripted demo data only' in printed and 'Agent kit' not in printed
+    assert 'Archive only: the chat-app comparison of Answers Over Time and its static files. No model-track page or data' in printed
     assert 'No model was called' in printed
     assert not (out / 'overview.json').exists() and (out / 'archive' / 'index.html').is_file()
     # The agent kit is not written in this mode, so an address for it is refused rather than dropped.

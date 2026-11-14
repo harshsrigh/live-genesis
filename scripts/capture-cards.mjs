@@ -7,6 +7,9 @@
 //   node scripts/capture-cards.mjs --site ./site --out ./cards --set chat
 //   node scripts/capture-cards.mjs --site ./site --out ./cards --ids C001,C001-grok,C001-human
 //
+// The published site (a standalone build, snapshot --archive-only) holds chat-app cards only: the Q.. and
+// T... cards of the model track exist in a full snapshot and in the local apps, not there.
+//
 // Chat-app cards (replies the owner typed in by hand, and answers written by people) are
 // archive/card/C001.html (every app and Human), archive/card/C001-<app label>.html (one app) and
 // archive/card/C001-human.html. They are captured like any other card; this script only photographs
@@ -158,13 +161,16 @@ async function main() {
         const response = await context.request.get(new URL('archive.json', base).href, { maxRedirects: 0, timeout: 20000 }).catch(() => null);
         let data = null;
         if (response && response.ok()) { try { data = await response.json(); } catch { data = null; } }
-        if (!data || !Array.isArray(data.questions)) {
-          throw new Problem(`Could not read the question list at ${new URL('archive.json', base).href}. Name the cards yourself with --ids Q01,T001`);
+        // The published site's archive.json holds the chat-app track only (schema and chatbots: no model question list);
+        // a full snapshot's holds the model lists too. Either is enough to find the cards.
+        const core = data && Array.isArray(data.questions) ? data.questions : null;
+        const chat = data && data.chatbots && Array.isArray(data.chatbots.questions) && Array.isArray(data.chatbots.apps) ? data.chatbots : null;
+        if (!core && !chat) {
+          throw new Problem(`Could not read the question list at ${new URL('archive.json', base).href}. Name the cards yourself with --ids C001,C001-human`);
         }
         const trending = data.trending && Array.isArray(data.trending.questions) ? data.trending.questions : [];
-        ids = [...data.questions, ...trending].map((q) => String(q && q.id)).filter((id) => ID.test(id));
+        ids = [...(core || []), ...trending].map((q) => String(q && q.id)).filter((id) => ID.test(id));
         // The chat-app track, when the site has one: per question, one card for everyone, one per app and one for Human.
-        const chat = data.chatbots && Array.isArray(data.chatbots.questions) && Array.isArray(data.chatbots.apps) ? data.chatbots : null;
         if (chat) {
           for (const question of chat.questions) {
             const id = String(question && question.id);

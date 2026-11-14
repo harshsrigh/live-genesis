@@ -400,11 +400,16 @@ def test_archive_only_render_from_data_publishes_no_society_content(isolated_db,
     assert 'rendered from approved data' in printed and 'Archive only' in printed and 'Agent kit' not in printed
     assert not (tmp_path / 'no-such.sqlite').exists()
     names = {p.relative_to(site).as_posix() for p in site.rglob('*') if p.is_file()}
-    assert {'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/trending.html', 'static/archive.css'} <= names
+    assert {'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/chatbots.html', 'static/archive.css'} <= names
+    # The public site holds nothing of the model track, whatever the export holds.
+    assert not names & {'archive/models.html', 'archive/trending.html'} and not any(name.startswith(('archive/q/', 'archive/t/')) for name in names)
     assert not names & {'overview.json', 'stats.html', 'llms.txt', 'agent-guide.md', 'openapi.json', 'agent_client.py', 'MANIFEST.json',
                         'static/app.js', 'static/time.js', 'static/style.css', 'static/agents.txt', 'static/genesis-sigil.png'}
     assert not any(name.startswith(('post/', 'profile/')) or name.endswith('.js') for name in names)
-    assert (site / 'archive.json').read_bytes() == (published / 'archive.json').read_bytes()
+    assert 'questions' in json.loads((published / 'archive.json').read_text(encoding='utf-8'))   # the reviewed file is the whole payload
+    assert json.loads((site / 'archive.json').read_text(encoding='utf-8')) == {
+        'schema': 'live-genesis-chat-archive/1',
+        'chatbots': {'apps': [], 'human': None, 'questions': [], 'runs': [], 'answers': [], 'human_answers': []}}
     # No text an agent or a model wrote in the society is anywhere in the output.
     world = json.loads((published / 'overview.json').read_text(encoding='utf-8'))
     texts = [post['body'] for post in world['posts']] + [post['title'] for post in world['posts']]
@@ -414,7 +419,7 @@ def test_archive_only_render_from_data_publishes_no_society_content(isolated_db,
         assert text not in everything
     assert '<script' not in everything and 'overview.json' not in everything
     front = (site / 'archive' / 'index.html').read_text(encoding='utf-8')
-    assert 'No answers recorded yet' in front and 'Observatory' not in front
+    assert 'No answers recorded yet' in front and 'No chat app has been asked yet.' in front and 'Observatory' not in front
     assert front.count('<a href="../demo/archive/index.html">Sample site</a>') == 1
     # Every address resolves, except the one that leads to the demo folder, which this test did not build.
     for page in site.rglob('*.html'):
