@@ -101,7 +101,7 @@ The first step towards human voting is the platform's own poll (TikTok poll stic
 
 ## Chat-app cards
 
-The chat-app track (`docs/ANSWERS-OVER-TIME.md`, "The chat-app track") has its own cards: `archive/card/C001.html` shows the latest answer of the three apps and of Human (Human's panel is outlined, not filled, and says quoted or summarised), `archive/card/C001-<app label>.html` (for example `C001-grok`) shows one app at a larger size, and `archive/card/C001-human.html` the human answer.
+The chat-app track (`docs/ANSWERS-OVER-TIME.md`, "The chat-app track") has its own cards: `archive/card/C001.html` shows the latest answer of up to four answerers, the Human among them (the Human's bubble is dark, on the right, and says quoted or summarised; with more answerers the rest are on `C001-2.html` and so on, and with several answerer groups each later group has `C001-<group id>.html`), `archive/card/C001-<app label>.html` (for example `C001-grok`) shows one app at a larger size, and `archive/card/C001-human.html` the human answer.
 
 ```bash
 node scripts/capture-cards.mjs --url https://harshsrigh.github.io/live-genesis/ --out ./cards --ids C001,C001-grok,C001-human

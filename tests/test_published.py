@@ -408,8 +408,8 @@ def test_archive_only_render_from_data_publishes_no_society_content(isolated_db,
     assert not any(name.startswith(('post/', 'profile/')) or name.endswith('.js') for name in names)
     assert 'questions' in json.loads((published / 'archive.json').read_text(encoding='utf-8'))   # the reviewed file is the whole payload
     assert json.loads((site / 'archive.json').read_text(encoding='utf-8')) == {
-        'schema': 'live-genesis-chat-archive/1',
-        'chatbots': {'apps': [], 'human': None, 'questions': [], 'runs': [], 'answers': [], 'human_answers': []}}
+        'schema': 'live-genesis-chat-archive/2',
+        'chatbots': {'groups': [], 'apps': [], 'human': None, 'questions': [], 'runs': [], 'answers': [], 'human_answers': []}}
     # No text an agent or a model wrote in the society is anywhere in the output.
     world = json.loads((published / 'overview.json').read_text(encoding='utf-8'))
     texts = [post['body'] for post in world['posts']] + [post['title'] for post in world['posts']]

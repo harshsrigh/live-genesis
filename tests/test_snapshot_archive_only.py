@@ -97,8 +97,8 @@ def test_archive_only_export_writes_two_files_the_chat_track_only_and_no_society
     payload = json.loads(json.dumps(archive.public_payload()))
     assert payload['answers'] and payload['runs'] and payload['answerers']                 # the database does hold a model run
     assert list(exported) == ['schema', 'chatbots'] == list(chatbots.SITE_KEYS)
-    assert exported == {'schema': 'live-genesis-chat-archive/1', 'chatbots': payload['chatbots']} == chatbots.site_payload(payload)
-    assert chatbots.SITE_SCHEMA == 'live-genesis-chat-archive/1' and not set(exported) & set(MODEL_KEYS)
+    assert exported == {'schema': 'live-genesis-chat-archive/2', 'chatbots': payload['chatbots']} == chatbots.site_payload(payload)
+    assert chatbots.SITE_SCHEMA == 'live-genesis-chat-archive/2' and not set(exported) & set(MODEL_KEYS)
     text = raw.decode('ascii')
     assert MODEL_TEXT not in text and 'model-a' not in text and '"answerer"' not in text and 'set_hash' not in text
     assert manifest == json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8'))
@@ -251,7 +251,7 @@ def test_archive_only_folder_and_manifest_tampering_is_refused(ready, tmp_path, 
     retarget_chat(out, lambda d: block(d)['answers'][0].update(source='demo'))
     refused("an answer's source does not fit its run")
     retarget_chat(out, lambda d: block(d)['apps'][0].update(name='Another name'))
-    refused('does not carry the name, maker and attribution')
+    refused('does not carry the name, maker, attribution and group')
     retarget_chat(out, lambda d: (block(d)['answers'].clear(), block(d)['human_answers'].clear()))
     refused('archive.json is refused: it holds no answers')
     manifest = json.loads(good['MANIFEST.json']); manifest['archive']['chatbots']['answers'] = 11
@@ -293,7 +293,7 @@ def test_full_export_still_round_trips_and_its_archive_only_site_has_no_model_tr
     assert SOCIETY_TEXT in (out / 'overview.json').read_text(encoding='utf-8')
     # The full export is unchanged: its archive.json is the whole public payload, model answers included.
     exported = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
-    assert exported == json.loads(json.dumps(archive.public_payload())) and exported['schema'] == 'live-genesis-archive/5'
+    assert exported == json.loads(json.dumps(archive.public_payload())) and exported['schema'] == 'live-genesis-archive/6'
     assert manifest['archive']['answers_by_source'] == {'engine': 40, 'api': 0, 'demo': 0, 'mock': 0} and manifest['archive']['runs'] == 1
     assert manifest['archive']['chatbots'] == CHAT_COUNTS and MODEL_TEXT in (out / 'archive.json').read_text(encoding='utf-8')
     with pytest.raises(RuntimeError, match=r'Read overview\.json and archive\.json, then run'):
@@ -510,9 +510,9 @@ def test_archive_only_archive_json_must_hold_exactly_the_chat_track_keys(ready, 
         refused(lambda d, key=key: d.update({key: whole[key]}), f'archive.json is refused: top level: unexpected key {key}')
     # The whole public payload in place of the file (what an earlier version exported) is refused as a whole.
     refused(lambda d: (d.clear(), d.update(whole)), 'it holds the model track; an export of Answers Over Time only holds the chat-app track alone')
-    refused(lambda d: d.update(schema='live-genesis-archive/5'), 'it holds the model track')
+    refused(lambda d: d.update(schema='live-genesis-archive/6'), 'it holds the model track')
     refused(lambda d: d.update(schema='live-genesis-archive/3'), 'it holds the model track')
-    refused(lambda d: d.update(schema='live-genesis-chat-archive/2'), 'archive.json is refused: unknown schema')
+    refused(lambda d: d.update(schema='live-genesis-chat-archive/3'), 'archive.json is refused: unknown schema')
     refused(lambda d: d.pop('schema'), 'archive.json is refused: unknown schema')
     refused(lambda d: d.pop('chatbots'), 'top level: key chatbots is missing')
     refused(lambda d: d.update(chatbots=None), 'chatbots: a key is missing or has the wrong type')

@@ -57,7 +57,7 @@ from . import archive, controls, guards
 from . import core  # attributes are used at call time only
 
 CONFIG_FILE = Path(__file__).resolve().parent / "archive_chatbots.json"
-CONFIG_FORMAT = "live-genesis-chatbots/2"
+CONFIG_FORMAT = "live-genesis-chatbots/3"   # /3: optional answerer groups (`groups`, and `group` on a chat app)
 FILE_FORMAT = "live-genesis-chatbot-collection/2"
 CHAT_QUESTION_ID = re.compile(r"C[0-9]{3}")
 QUESTION_SET = "chat"     # archive_chatbot_answers.question_set of every row written since the track got its own list
@@ -71,7 +71,12 @@ HUMAN_SOURCE_CHARS = 80
 MANNERS = ("quoted", "summarised")
 REFUSED = "refused"       # reason of a reply the owner marked as a refusal
 CHATBOT_LABEL = re.compile(r"[a-z][a-z0-9-]{1,23}")
-MAX_CHATBOTS, MAX_CHATBOT_QUESTIONS = 6, 60
+MAX_CHATBOTS, MAX_CHATBOT_QUESTIONS = 24, 60
+# Answerer GROUPS: which kind of place a chat app belongs to ("AI chat apps" today; a later group is a configuration
+# addition). A group id shares the card namespace with the app labels (card/<ID>-<group id>.html, -<group id>-2.html).
+MAX_GROUPS = 6
+DEFAULT_GROUP = {"id": "ai-apps", "name": "AI chat apps"}   # a configuration without `groups`, and every row stored before groups
+_PAGED = re.compile(r"(.+)-[0-9]+")
 NAME_CHARS = 40
 ATTRIBUTION_CHARS = 60    # an optional line a maker's brand guidance asks for, shown as text with every reply of that app
 RESERVED_LABELS = ("chatbots", HUMAN_LABEL)   # card/<ID>-chatbots.html is the card of all; card/<ID>-<label>.html is one app's
@@ -154,6 +159,9 @@ CREATE TABLE IF NOT EXISTS archive_chatbot_conditions (
     country TEXT NOT NULL CHECK(country GLOB '[A-Z][A-Z]'),
     app TEXT NOT NULL CHECK(app IN ('web','mobile','desktop')),
     shown_model TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+    -- The answerer group this app belonged to at this run (archive_chatbots.json). '' in a row stored before groups
+    -- existed: read as the default group. The two columns are last so that an upgraded table has a new table's order.
+    group_id TEXT NOT NULL DEFAULT '', group_name TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (run_id, chatbot)
 );
 CREATE TABLE IF NOT EXISTS archive_chatbot_answers (
@@ -250,10 +258,16 @@ def migrate(cx) -> None:
     empty tables, and one from the track's first shape (questions referring to the locked lists, no
     human column; `tests/fixtures/archive_schema_v5.sql`) gains the `refused` column, the question
     table and the two human tables, and trades the rule "a hand-entered answer needs a locked question"
-    for "an answer needs a recorded chat-app question". Nothing recorded is touched."""
+    for "an answer needs a recorded chat-app question". One from before answerer groups
+    (`tests/fixtures/archive_schema_v6.sql`) gains `group_id` and `group_name` on the conditions, empty
+    in every stored row. Nothing recorded is touched."""
     cx.executescript(TABLES)
     if "refused" not in {row[1] for row in cx.execute("PRAGMA table_info(archive_chatbot_answers)")}:
         cx.execute("ALTER TABLE archive_chatbot_answers ADD COLUMN refused INTEGER NOT NULL DEFAULT 0 CHECK(refused IN (0,1))")
+    columns = {row[1] for row in cx.execute("PRAGMA table_info(archive_chatbot_conditions)")}
+    for column in ("group_id", "group_name"):      # answerer groups: added in place; every stored row reads as the default group
+        if column not in columns:
+            cx.execute(f"ALTER TABLE archive_chatbot_conditions ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
     cx.executescript("DROP TRIGGER IF EXISTS archive_chatbot_answers_locked_question;" + RULES)
 
 
@@ -340,9 +354,34 @@ def question_hash(question: dict) -> str:
     return hashlib.sha256(_canonical({key: question[key] for key in QUESTION_KEYS})).hexdigest()
 
 
-def config_hash(chatbots: list[dict], questions: list, human: dict | None = None) -> str:
-    """Covers the chat apps, the human column's wording and the questions."""
-    return hashlib.sha256(_canonical({"chatbots": chatbots, "questions": questions, "human": human})).hexdigest()
+def config_hash(chatbots: list[dict], questions: list, human: dict | None = None, groups: list[dict] | None = None) -> str:
+    """Covers the chat apps (with their group), the groups' names, the human column's wording and the questions."""
+    return hashlib.sha256(_canonical({"chatbots": chatbots, "questions": questions, "human": human,
+                                      "groups": groups or []})).hexdigest()
+
+
+def groups_problem(groups: list[dict], apps: list[dict]) -> str | None:
+    """Why a list of groups ({id, name}) and of chat apps ({label, name, group, ...}) do not fit together, or None.
+    Shared by the configuration and the public payload. A group id is shaped like a label and shares the
+    card names with the labels, so no label may equal a group id or look like a later page of its card."""
+    ids = [group["id"] for group in groups]
+    if not 1 <= len(groups) <= MAX_GROUPS:
+        return f"there must be 1 to {MAX_GROUPS} groups"
+    if any(not CHATBOT_LABEL.fullmatch(i) or i in RESERVED_LABELS or _PAGED.fullmatch(i) for i in ids):
+        return ('a group id must be 2-24 characters of a-z 0-9 -, starting with a letter, not "chatbots" or "human", '
+                "and not ending in a number after a hyphen")
+    if len(set(ids)) != len(ids) or len({group["name"].casefold() for group in groups}) != len(groups):
+        return "group ids and group names must differ"
+    for app in apps:
+        if app["group"] not in ids:
+            return f"{app['label']}: its group is not one of the groups"
+        paged = _PAGED.fullmatch(app["label"])
+        if app["label"] in ids or (paged and paged.group(1) in ids):
+            return f"{app['label']}: a label may not be a group id, or a group id followed by a number"
+    unused = [i for i in ids if not any(app["group"] == i for app in apps)]
+    if unused:
+        return f"group {unused[0]} has no chat app"
+    return None
 
 
 def prompt_of(text: str) -> str:
@@ -350,8 +389,10 @@ def prompt_of(text: str) -> str:
 
 
 def load_config(path: str | Path | None = None) -> dict:
-    """Read and validate `archive_chatbots.json`. Returns {status, chatbots, human, aside, questions, items,
-    prompts, sha256}: `chatbots` is a list of {label, name, maker, attribution}; `human` is {name, meta}
+    """Read and validate `archive_chatbots.json`. Returns {status, groups, chatbots, human, aside, questions, items,
+    prompts, sha256}: `groups` is a list of {id, name} (the optional `groups` of the file, or the one default
+    group); `chatbots` is a list of {label, name, maker, attribution, group} (`group` is a group id; an app
+    without one belongs to the first group); `human` is {name, meta}
     (the wording of the Human column); `aside` one short line of the owner's own (shown once on the
     chat-app page, never on a card; '' when none); `questions` the ids in the file's order; `items` the
     questions ({id, text, prompt, hook, added}); `prompts` maps each id to its question.
@@ -365,8 +406,9 @@ def load_config(path: str | Path | None = None) -> dict:
         raw = _load_json(source.read_bytes())
     except (OSError, ValueError) as err:
         raise _refused(f"Chat-app configuration {source.name} is missing or not valid JSON ({type(err).__name__})") from None
-    if not isinstance(raw, dict) or set(raw) - {"format", "status", "note", "prompt_prefix", "chatbots", "human", "aside", "questions"}:
-        raise bad("top level must be an object with format, status, note, prompt_prefix, chatbots, human, aside and questions only")
+    if not isinstance(raw, dict) or set(raw) - {"format", "status", "note", "prompt_prefix", "groups", "chatbots", "human", "aside", "questions"}:
+        raise bad("top level must be an object with format, status, note, prompt_prefix, groups, chatbots, human, aside and "
+                  "questions only")
     if raw.get("format") != CONFIG_FORMAT:
         raise bad(f'format must be "{CONFIG_FORMAT}"')
     if raw.get("status") not in ("draft", "locked"):
@@ -378,10 +420,21 @@ def load_config(path: str | Path | None = None) -> dict:
     listed, entries, person, aside_text = raw.get("chatbots"), raw.get("questions"), raw.get("human"), raw.get("aside", "")
     if not isinstance(listed, list) or not 1 <= len(listed) <= MAX_CHATBOTS:
         raise bad(f"chatbots must list 1 to {MAX_CHATBOTS} chat apps")
+    declared = raw.get("groups", [dict(DEFAULT_GROUP)])
+    if not isinstance(declared, list) or not declared:
+        raise bad(f"groups must list 1 to {MAX_GROUPS} groups, or be left out")
+    groups: list[dict] = []
+    for group in declared:
+        if not isinstance(group, dict) or set(group) != {"id", "name"} or not isinstance(group["id"], str) \
+                or not _line_ok(group["name"], NAME_CHARS):
+            raise bad(f"each group needs exactly id and name (name 1-{NAME_CHARS} plain characters)")
+        groups.append({"id": group["id"], "name": group["name"].strip()})
     chatbots: list[dict] = []
     for item in listed:
-        if not isinstance(item, dict) or not {"label", "name", "maker"} <= set(item) <= {"label", "name", "maker", "attribution"}:
-            raise bad("each chat app needs label, name and maker, and may have attribution")
+        if not isinstance(item, dict) or not {"label", "name", "maker"} <= set(item) <= {"label", "name", "maker", "attribution", "group"}:
+            raise bad("each chat app needs label, name and maker, and may have attribution and group")
+        if not isinstance(item.get("group", ""), str):
+            raise bad("a chat app's group must be a group id")
         if not isinstance(item["label"], str) or not CHATBOT_LABEL.fullmatch(item["label"]) or item["label"] in RESERVED_LABELS:
             raise bad('a label must be 2-24 characters of a-z 0-9 -, starting with a letter, and not "chatbots" or "human"')
         if "attribution" in item and not _line_ok(item["attribution"], ATTRIBUTION_CHARS):
@@ -389,7 +442,10 @@ def load_config(path: str | Path | None = None) -> dict:
         if not _line_ok(item["name"], NAME_CHARS) or not _line_ok(item["maker"], NAME_CHARS):
             raise bad(f"{item['label']}: name and maker must be 1-{NAME_CHARS} plain characters")
         chatbots.append({"label": item["label"], "name": item["name"].strip(), "maker": item["maker"].strip(),
-                         "attribution": item.get("attribution", "").strip()})
+                         "attribution": item.get("attribution", "").strip(), "group": item.get("group", groups[0]["id"])})
+    problem = groups_problem(groups, chatbots)
+    if problem:
+        raise bad(problem)
     if not isinstance(person, dict) or set(person) != {"name", "meta"} or not _line_ok(person["name"], NAME_CHARS) \
             or not _line_ok(person["meta"], META_CHARS):
         raise bad(f"human must hold name (1-{NAME_CHARS} characters) and meta (1-{META_CHARS} characters): the wording of the "
@@ -429,9 +485,9 @@ def load_config(path: str | Path | None = None) -> dict:
         items.append({"id": wanted, "text": text, "prompt": entry["prompt"], "hook": hook, "added": entry["added"]})
     if len({q["text"].casefold() for q in items}) != len(items):
         raise bad("two questions have the same text")
-    return {"status": raw["status"], "chatbots": chatbots, "human": human, "aside": aside_text.strip(),
+    return {"status": raw["status"], "groups": groups, "chatbots": chatbots, "human": human, "aside": aside_text.strip(),
             "questions": [q["id"] for q in items], "items": items, "prompts": {q["id"]: q for q in items},
-            "sha256": config_hash(chatbots, items, human)}
+            "sha256": config_hash(chatbots, items, human, groups)}
 
 
 def aside() -> str:
@@ -830,14 +886,16 @@ def _open_run(cx, kind: str, collected_on: str, question_ids: list[str], config_
     return run_id, number
 
 
-def _store_conditions(cx, run_id: int, chatbot: dict, conditions: dict) -> None:
+def _store_conditions(cx, run_id: int, chatbot: dict, conditions: dict, groups: list[dict]) -> None:
+    """`groups` is the configuration's group list: the app's group id and that group's name are recorded with the run."""
     memory = conditions["memory_off"]
+    group_name = next(group["name"] for group in groups if group["id"] == chatbot["group"])
     cx.execute("INSERT INTO archive_chatbot_conditions(run_id,chatbot,display_name,maker,attribution,account,fresh_chat,temporary_chat,"
-               "memory_off,web_search,country,app,shown_model,note) VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?)",
+               "memory_off,web_search,country,app,shown_model,note,group_id,group_name) VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?)",
                (run_id, chatbot["label"], chatbot["name"], chatbot["maker"], chatbot.get("attribution", ""), conditions["account"],
                 int(conditions["temporary_chat"]), memory if memory == NOT_APPLICABLE else ("true" if memory else "false"),
                 conditions["web_search"], conditions["country"], conditions["app"], conditions["shown_model"],
-                conditions.get("note", "")))
+                conditions.get("note", ""), chatbot["group"], group_name))
 
 
 def _store_human_collection(cx, run_id: int, human: dict, conditions: dict) -> None:
@@ -921,7 +979,7 @@ def import_collection(path: str | Path, *, dry_run: bool = False, allow_old: boo
             summary["new_questions"] = _record_questions(cx, run_id, MANUAL, config["items"])
         for chatbot in collection["chatbots"]:
             if not dry_run:
-                _store_conditions(cx, run_id, chatbot, chatbot["conditions"])
+                _store_conditions(cx, run_id, chatbot, chatbot["conditions"], config["groups"])
             counts = {state: 0 for state in archive.STATES}
             rows = []
             for answer in chatbot["answers"]:
@@ -1051,9 +1109,10 @@ def demo(cx, sets: list[dict] | None = None) -> dict:
     No app and no person was asked. `sets` is ignored (the track has its own questions)."""
     items = demo_items()
     ids = [q["id"] for q in items]
-    apps = [{"label": label, "name": name, "maker": maker, "attribution": DEMO_ATTRIBUTION.get(label, "")}
+    groups = [dict(DEFAULT_GROUP)]      # one group, as on the real site today; several groups are covered by the tests
+    apps = [{"label": label, "name": name, "maker": maker, "attribution": DEMO_ATTRIBUTION.get(label, ""), "group": groups[0]["id"]}
             for label, name, maker in DEMO_APPS]
-    digest = config_hash(apps, items, DEMO_HUMAN)
+    digest = config_hash(apps, items, DEMO_HUMAN, groups)
     written = 0
     for number, day in enumerate(DEMO_DATES, 1):
         stamp = f"{day}T12:00:00+00:00"
@@ -1063,7 +1122,7 @@ def demo(cx, sets: list[dict] | None = None) -> dict:
             label = app["label"]
             if DEMO_FIRST_RUN.get(label, 1) > number:
                 continue
-            _store_conditions(cx, run_id, app, _at(DEMO_CONDITIONS[label], number)[1])
+            _store_conditions(cx, run_id, app, _at(DEMO_CONDITIONS[label], number)[1], groups)
             for position, (question, (_text, _hook, script)) in enumerate(zip(items, DEMO_QUESTIONS), 1):
                 skipped, refusal = DEMO_SKIPPED.get((position, label, number)), DEMO_REFUSED.get((position, label, number))
                 if skipped:
@@ -1086,8 +1145,9 @@ def demo(cx, sets: list[dict] | None = None) -> dict:
 
 # ---- Public payload: the `chatbots` block of archive.public_payload ---------------------------------------
 
-BLOCK_KEYS = ("apps", "human", "questions", "runs", "answers", "human_answers")
-APP_KEYS = ("label", "name", "maker", "attribution")
+BLOCK_KEYS = ("groups", "apps", "human", "questions", "runs", "answers", "human_answers")
+APP_KEYS = ("label", "name", "maker", "attribution", "group")
+GROUP_KEYS = ("id", "name")
 HUMAN_KEYS = ("name", "meta")
 RUN_KEYS = ("number", "collected_on", "imported_at", "demo", "config_hash", "questions", "conditions", "human")
 ANSWER_KEYS_PUBLIC = ("id", "run", "question", "chatbot", "source", "state", "reason", "text", "changed", "screenshot_hash", "refused")
@@ -1097,7 +1157,9 @@ HUMAN_ANSWER_KEYS_PUBLIC = ("id", "run", "question", "source", "state", "reason"
 def public_block(cx, tables: set[str]) -> dict | None:
     """The chat-app track for the pages and the export, or None when the database holds no such run (the
     payload then has no `chatbots` key at all and is what it always was). Runs are ordered by the day
-    the owner asked. `questions` are the recorded questions (id, text, prompt, hook, added); `human` is
+    the owner asked. `groups` are the answerer groups ({id, name}) in the order their first app was
+    recorded, and every app carries its `group`; a row stored before groups existed belongs to the default
+    group. `questions` are the recorded questions (id, text, prompt, hook, added); `human` is
     the Human column's wording ({name, meta}) or None when no human answer was ever collected; each run
     carries the apps' `conditions` and `human` ({source, collected_on, count} or None). A reply the owner
     marked as a refusal is here (`refused`: true) and on no page. Never the imported file's hash or any
@@ -1116,6 +1178,7 @@ def public_block(cx, tables: set[str]) -> dict | None:
     number = {r["id"]: r["number"] for r in runs}
     conditions: dict[int, dict] = {}
     apps: dict[str, dict] = {}
+    groups: dict[str, dict] = {}
     for row in cx.execute("SELECT c.* FROM archive_chatbot_conditions c JOIN archive_chatbot_runs r ON r.id=c.run_id "
                           "ORDER BY r.collected_on,r.number,c.rowid"):
         row = dict(row)
@@ -1127,7 +1190,9 @@ def public_block(cx, tables: set[str]) -> dict | None:
             "memory_off": memory if memory == NOT_APPLICABLE else memory == "true", "web_search": row["web_search"],
             "country": row["country"], "app": row["app"], "shown_model": row["shown_model"], "note": row["note"]}
         known = apps.setdefault(row["chatbot"], {"label": row["chatbot"]})
-        known.update(name=row["display_name"], maker=row["maker"], attribution=row["attribution"])   # the newest run's wording
+        group = row["group_id"] or DEFAULT_GROUP["id"]
+        groups.setdefault(group, {"id": group})["name"] = row["group_name"] or DEFAULT_GROUP["name"]
+        known.update(name=row["display_name"], maker=row["maker"], attribution=row["attribution"], group=group)   # the newest run's wording
     human, collected = None, {}
     for row in cx.execute("SELECT c.* FROM archive_human_collections c JOIN archive_chatbot_runs r ON r.id=c.run_id "
                           "ORDER BY r.collected_on,r.number"):
@@ -1146,7 +1211,9 @@ def public_block(cx, tables: set[str]) -> dict | None:
                      for a in (dict(r) for r in cx.execute(
                          "SELECT a.* FROM archive_human_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id "
                          "ORDER BY r.collected_on,r.number,a.id"))]
-    block = {"apps": list(apps.values()), "human": human, "questions": questions,
+    used = {app["group"] for app in apps.values()}          # an app that moved leaves no empty group behind
+    block = {"groups": [group for group in groups.values() if group["id"] in used], "apps": list(apps.values()),
+             "human": human, "questions": questions,
              "runs": [{"number": r["number"], "collected_on": r["collected_on"], "imported_at": r["imported_at"],
                        "demo": r["kind"] == DEMO, "config_hash": r["config_sha256"], "questions": json.loads(r["question_ids"]),
                        "conditions": conditions.get(r["id"], {}), "human": collected.get(r["id"])} for r in runs],
@@ -1182,12 +1249,22 @@ def block_problem(block: Any, question_ids: set[str] | None = None) -> str | Non
             or "human" not in block:
         return "chatbots: a key is missing or has the wrong type"
     labels: list[str] = []
+    if len(block["apps"]) > MAX_CHATBOTS:
+        return "chatbots: too many chat apps"
+    for group in block["groups"]:
+        if not isinstance(group, dict) or not all(isinstance(group.get(key), str) for key in GROUP_KEYS) \
+                or not 0 < len(group["name"]) <= NAME_CHARS or "\n" in group["name"]:
+            return "chatbots: a group lacks its id or name"
     for app in block["apps"]:
         if not isinstance(app, dict) or not all(isinstance(app.get(key), str) for key in APP_KEYS) \
                 or not CHATBOT_LABEL.fullmatch(app["label"]) or app["label"] in labels or app["label"] in RESERVED_LABELS \
                 or not all(0 < len(app[key]) <= NAME_CHARS for key in ("name", "maker")) or len(app["attribution"]) > ATTRIBUTION_CHARS:
-            return "chatbots: a chat app lacks its label, name, maker or attribution, or a label repeats"
+            return "chatbots: a chat app lacks its label, name, maker, attribution or group, or a label repeats"
         labels.append(app["label"])
+    if block["apps"] or block["groups"]:
+        problem = groups_problem(block["groups"], block["apps"])
+        if problem:
+            return f"chatbots: {problem}"
     human = block["human"]
     if human is not None and (not isinstance(human, dict) or not isinstance(human.get("name"), str) or not isinstance(human.get("meta"), str)
                               or not 0 < len(human["name"]) <= NAME_CHARS or not 0 < len(human["meta"]) <= META_CHARS):
@@ -1289,6 +1366,7 @@ def closed_problem(block: dict) -> str | None:
     """For a file that is to be published: every object of the block holds exactly the keys
     `public_block` writes. `block` already passed block_problem."""
     checks = [("chatbots", block, BLOCK_KEYS)]
+    checks += [("a group", group, GROUP_KEYS) for group in block["groups"]]
     checks += [("a chat app", app, APP_KEYS) for app in block["apps"]]
     checks += [("the human column", block["human"], HUMAN_KEYS)] if block["human"] is not None else []
     checks += [(f"chat-app question {q['id']}", q, QUESTION_KEYS) for q in block["questions"]]
@@ -1318,8 +1396,11 @@ def export_problem(block: dict) -> str | None:
     for app in block["apps"]:
         if app["label"] not in known:
             return f"chat app {app['label']} is not in {CONFIG_FILE.name}"
-        if any(app[key] != known[app["label"]][key] for key in ("name", "maker", "attribution")):
-            return f"chat app {app['label']} does not carry the name, maker and attribution {CONFIG_FILE.name} gives it"
+        if any(app[key] != known[app["label"]][key] for key in ("name", "maker", "attribution", "group")):
+            return f"chat app {app['label']} does not carry the name, maker, attribution and group {CONFIG_FILE.name} gives it"
+    for group in block["groups"]:
+        if group not in config["groups"]:
+            return f"group {group['id']} is not a group of {CONFIG_FILE.name}, under the name that file gives it"
     if block["human"] is not None and block["human"] != config["human"]:
         return f"the human column does not carry the name and meta line {CONFIG_FILE.name} gives it"
     for question in block["questions"]:
@@ -1333,7 +1414,7 @@ def export_problem(block: dict) -> str | None:
 # `snapshot --export --archive-only` writes) is this payload: a schema marker and the `chatbots` block.
 # No model answer, answerer, model question list, set hash or model run is in it.
 
-SITE_SCHEMA = "live-genesis-chat-archive/1"
+SITE_SCHEMA = "live-genesis-chat-archive/2"   # /2: the block holds `groups` and every app its `group`
 SITE_KEYS = ("schema", "chatbots")
 
 
@@ -1343,7 +1424,7 @@ def site_payload(payload: dict) -> dict:
     block is empty: the pages then say that no chat app has been asked yet."""
     if payload.get("schema") == SITE_SCHEMA:
         return payload
-    empty = {"apps": [], "human": None, "questions": [], "runs": [], "answers": [], "human_answers": []}
+    empty = {"groups": [], "apps": [], "human": None, "questions": [], "runs": [], "answers": [], "human_answers": []}
     return {"schema": SITE_SCHEMA, "chatbots": payload.get("chatbots") or empty}
 
 
@@ -1361,7 +1442,8 @@ def status(cx) -> dict:
     """For `archive-status`: the configuration's state and the hand-entered runs (numbers and counts only)."""
     try:
         config = load_config()
-        state: dict = {"status": config["status"], "chatbots": [c["label"] for c in config["chatbots"]],
+        state: dict = {"status": config["status"], "groups": [g["id"] for g in config["groups"]],
+                       "chatbots": [c["label"] for c in config["chatbots"]],
                        "human": config["human"]["name"], "questions": config["questions"], "sha256": config["sha256"],
                        "problem": questions_problem(cx, config)}
     except archive.ArchiveRefused as err:

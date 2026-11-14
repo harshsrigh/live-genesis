@@ -26,7 +26,7 @@ answers are never in it) under the same hash, manifest, guard and ASCII rules, a
 snapshot holds the archive pages under `archive/` (archive_pages.py; plain HTML, no script).
 
 Replies the owner collected from chat apps BY HAND (archive_chatbots.py) are part of `archive.json`
-(its optional `chatbots` block, payload schema /5): they pass the same guards, the closed key sets and
+(its optional `chatbots` block, payload schema /6): they pass the same guards, the closed key sets and
 `--check`, which also refuses a chat app that is not in `archive_chatbots.json`, an answer to a question
 outside its run's recorded id list and an answer without recorded conditions. A screenshot is exported
 as its sha256 only. An archive that holds only such replies can be exported.

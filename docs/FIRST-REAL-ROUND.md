@@ -121,7 +121,7 @@ git push                                                    # 4. CI renders and 
 - **Export** (`--export --archive-only`) opens the database read-only and writes exactly two
   files, `archive.json` and `MANIFEST.json`. It never reads the society tables and never writes
   `overview.json`, so no post, document, proposal, game or profile is exported. `archive.json`
-  holds the chat-app track only: two keys, `schema` (`live-genesis-chat-archive/1`) and
+  holds the chat-app track only: two keys, `schema` (`live-genesis-chat-archive/2`) and
   `chatbots` (the replies entered by hand, the human answers, their questions and the recorded
   conditions). No model answer, answerer, model question list, set hash or model run is in it:
   model runs in the database are not exported. It refuses when no chat-app reply entered by

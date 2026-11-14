@@ -18,7 +18,21 @@ Pages (under `archive/`):
   changed answer shows what it was before; each card has its history; a table shows what changed.
 * `chatbots.html`: how the chat apps are asked, and the conditions recorded.
 * `card/<ID>.html` (a model question: up to three models; a chat-app question: the apps and Human),
-  `card/<ID>-<app label>.html`, `card/<ID>-human.html`: 9:16 share cards.
+  `card/<ID>-<app label>.html`, `card/<ID>-human.html`: 9:16 share cards. A card holds at most four bubbles:
+  more answerers go to further cards (`card/<ID>-2.html` ...), and with several answerer groups every
+  group has its own (`card/<ID>-<group id>.html`, `card/<ID>-<group id>-2.html`). Text is never made smaller.
+
+The look ("Group chat", owner's choice): each question is a thread in a pane and each answerer a bubble
+with a mark (a coloured shape holding a short initial) and its name; the Human answers from the right in
+a dark bubble; a changed answer has the earlier one directly above it, dashed and struck through, and
+the word "Changed". Nothing assumes a number of answerers: a thread renders as many as the payload
+holds. An answerer's colour and the shape of its mark come from its POSITION in its thread (`_dress`),
+never from its name and never from a brand; two answerers of one thread never look the same.
+
+Groups: the chat-app track's answerers belong to groups (`chatbots.groups`; "AI chat apps" today). With
+one group no group name appears anywhere. With several, the front page has a script-free group switch
+(radio inputs and labels), a question page shows one thread per group and the Human in a thread of its
+own, and the headline counts what the payload holds.
 * `data/<ID>.json`, `data/answers.jsonl`, `data/README.txt`: the same answers for machines.
 
 What is VISIBLE and what is metadata: the short honesty labels stay visible, once per page or card
@@ -50,6 +64,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import math
 import re
 from pathlib import Path
 
@@ -81,8 +96,11 @@ DATA_NOTICE = ("Answers Over Time. AI answers are recorded verbatim and may be w
                "belong to their owners; this archive is not affiliated with them.")
 ALL_CARD = "all"               # render_chatbot_card: the card with every app and Human
 HUMAN = "human"                # the Human column's key and its card suffix (archive_chatbots.HUMAN_LABEL)
-CARD_APPS = 4
-CARD_NAME = re.compile(r"(C[0-9]{3})-([a-z][a-z0-9-]{1,23})")
+CARD_APPS = 4                  # bubbles on one chat-app card; more answerers go to a further card, never to smaller text
+CARD_NAME = re.compile(r"(C[0-9]{3})-([a-z][a-z0-9-]{1,23}|[1-9][0-9]?)")
+PALETTE = 8                    # tint/ink pairs in the stylesheet (.who-1 ... .who-8)
+SHAPES = ("", " av-b", " av-c")   # the mark's shape for positions 1-8, 9-16, 17-24 of one thread
+WIDE_THREAD = 5                # from this many bubbles a thread reads in two columns on a wide screen, and the table in blocks
 CHAT_ID = re.compile(r"C[0-9]{3}")
 DATA_NAME = re.compile(r"(?:Q[0-9]{2}|T[0-9]{3}|C[0-9]{3})\.json|answers\.jsonl|README\.txt")
 CHAT_CARD_FOOT = "AI-generated · typed in by hand · not affiliated · may be wrong"
@@ -91,7 +109,9 @@ CARD_CLAMP_CHARS = {1: 160, 2: 115, 3: 100, 4: 110}   # panels on a card -> char
 # Server-side thresholds for the "More" control: longer than the first is clamped on a phone, than the second also on
 # a tablet, than the third everywhere. Chosen so that a shorter text always fits the clamp of that width.
 CLAMP_PHONE, CLAMP_TABLET, CLAMP_DESKTOP = 140, 240, 300
-BEFORE_CLAMP = 140
+# The earlier answer above a changed one is held to two lines: longer than the first is clamped on a phone, than the
+# second also on a tablet, than the third everywhere (the same three classes as an answer's clamp).
+BEFORE_CLAMP = (80, 170, 240)
 TABLE_CLAMP = 320
 MAX_PANELS = 24                # month panels on a question page (the stylesheet has rules for this many); the table has all
 # Why a model has no answers in a run it was dropped from (archive.SKIP_REASONS), in plain words.
@@ -161,21 +181,72 @@ def _listed(names: list[str], last: str = "and") -> str:
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + f" {last} " + names[-1]
 
 
+def _marks(names: list[str]) -> list[str]:
+    """A short mark per name, different for every name of the list: the first letter of each name when
+    those differ ("C", "G"), else the first letter of each name's last word ("Chat app A" -> "A"), else,
+    name by name, the first of these that is still free: first letter, last word's letter, first two
+    letters, first letter and position. The mark is a reading aid; the name is always shown as text."""
+    words = [re.findall(r"[^\W_]+", name) or [name or "?"] for name in names]
+    first = [word[0][0].upper() for word in words]
+    last = [word[-1][0].upper() for word in words]
+    for choice in (first, last):
+        if len(set(choice)) == len(choice):
+            return choice
+    out: list[str] = []
+    for position, word in enumerate(words, 1):
+        options = (word[0][0].upper(), word[-1][0].upper(), word[0][:2].capitalize(), f"{word[0][0].upper()}{position}")
+        out.append(next(option for option in options if option not in out))
+    return out
+
+
+def _dress(columns: list[dict]) -> None:
+    """Give the columns of ONE thread their look: `who` (the colour pair, by position), `shape` (the
+    mark's shape; it changes when the eight pairs repeat) and `mark` (a short initial). Position only:
+    never the name's meaning, never a brand's colour. The Human column has its own look (dark bubble,
+    outlined mark, on the right) and takes no colour of the palette."""
+    apps = [column for column in columns if column["kind"] != "human"]
+    for slot, (column, mark) in enumerate(zip(apps, _marks([column["name"] for column in apps]))):
+        column.update(who=f" who-{slot % PALETTE + 1}", shape=SHAPES[slot // PALETTE % len(SHAPES)], mark=mark)
+    for column in columns:
+        if column["kind"] == "human":
+            column.update(who="", shape="", mark=_marks([column["name"]])[0])
+
+
+def _av(column: dict) -> str:
+    """The mark of an answerer. Decorative (hidden from a screen reader): the name is right next to it."""
+    return f'<span class="av{column["shape"]}" aria-hidden="true">{esc(column["mark"])}</span>'
+
+
 class _Chat:
     """Lookups over the chat-app track of one payload (empty when the payload has none). Time is told in
     DATES here: one period per day on which the owner asked, whatever import carried it. The Human
     column is one more column with the key "human" and its own kind."""
 
     def __init__(self, payload: dict):
-        block = payload.get("chatbots") or {"apps": [], "human": None, "questions": [], "runs": [], "answers": [], "human_answers": []}
-        self.apps = block["apps"]
+        block = payload.get("chatbots") or {"groups": [], "apps": [], "human": None, "questions": [], "runs": [], "answers": [],
+                                            "human_answers": []}
+        self.groups = list(block["groups"])                  # [{id, name}], in the order their first app was recorded
+        order = {group["id"]: n for n, group in enumerate(self.groups)}
+        self.apps = sorted(block["apps"], key=lambda app: order[app["group"]])       # group by group; the recorded order within
         self.human = block["human"]
         self.labels = [app["label"] for app in self.apps]
         self.columns = [{"key": app["label"], "name": app["name"], "kind": "chat-app", "maker": app["maker"],
-                         "attribution": app.get("attribution", "")} for app in self.apps]
+                         "attribution": app.get("attribution", ""), "group": app["group"]} for app in self.apps]
         if self.human:
             self.columns.append({"key": HUMAN, "name": self.human["name"], "kind": "human", "maker": "", "attribution": "",
-                                 "meta": self.human["meta"]})
+                                 "meta": self.human["meta"], "group": None})
+        # The threads of a chat-app question: with one group, every app and the Human together; with several, one
+        # thread per group and the Human in a thread of its own. `pos` is the group's place in the group switch.
+        people = [column for column in self.columns if column["kind"] == "human"]
+        if len(self.groups) <= 1:
+            self.threads = [{"id": "", "name": "", "pos": 1, "columns": list(self.columns)}] if self.columns else []
+        else:
+            self.threads = [{"id": group["id"], "name": group["name"], "pos": n,
+                             "columns": [column for column in self.columns if column["group"] == group["id"]]}
+                            for n, group in enumerate(self.groups, 1)]
+            self.threads += [{"id": HUMAN, "name": people[0]["name"], "pos": 0, "columns": people}] if people else []
+        for thread in self.threads:
+            _dress(thread["columns"])
         self.name = {column["key"]: column["name"] for column in self.columns}
         self.maker = {app["label"]: app["maker"] for app in self.apps}
         self.questions = list(block["questions"])
@@ -405,6 +476,7 @@ def _model_board(view: _View, question_id: str) -> dict:
     periods = [{"key": f"run-{run['number']}", "date": iso_date(run["date"]), "label": label, "run": run}
                for run, label in zip(runs, labels)]
     columns = [{"key": label, "name": label, "kind": "model", "maker": "", "attribution": ""} for label in view.labels]
+    _dress(columns)
     cells: dict[tuple[str, str], dict] = {}
     for column in columns:
         previous = None
@@ -463,6 +535,7 @@ def _model_board(view: _View, question_id: str) -> dict:
         chips, why = [("chip", question["group"])], question["rationale"]
     return {"id": question_id, "text": question["text"], "prompt": question["prompt"], "hook": "", "why": why, "chips": chips,
             "track": "trending" if trending else "core", "columns": columns, "periods": periods, "cells": cells,
+            "threads": [{"id": "", "name": "", "pos": 1, "columns": columns}],
             "demo": view.models_demo, "kicker": question["topic"] if trending else question["group"],
             "prompt_note": "Sent on its own. The model gets no date, no other answers and no earlier replies."}
 
@@ -528,6 +601,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
     return {"id": question_id, "text": question["text"], "prompt": question["prompt"], "hook": question["hook"],
             "why": "No deep reason. We wanted to see who's funny, and whether they're still funny next month.",
             "chips": [("chip", "Chat apps")], "track": "chat", "columns": chat.columns, "periods": periods, "cells": cells,
+            "threads": chat.threads,
             "demo": sample, "kicker": "Chat apps",
             "prompt_note": "Typed into each app by hand, in a new chat. The first line is why the replies are short."}
 
@@ -749,41 +823,103 @@ def _key(view: _View, chat: bool) -> str:
             + '<span class="key-note">one square per check, oldest first</span></p>')
 
 
+def _changed_tag(human: bool) -> str:
+    """The word that goes with a changed answer (colour is never the only signal). People did not change
+    their mind: other people answered, so the Human's says "Different answer this month"."""
+    return f'<span class="tag-changed mono">{"Different answer this month" if human else "Changed"}</span>'
+
+
+def _before(previous: tuple[dict, dict], page: bool = False) -> str:
+    """The earlier answer as an old bubble: dashed and struck through, with "Before" and its month. It sits
+    directly above the new answer and is held to two lines by the stylesheet: on a list always, on a
+    question page (`page`) at the widths where its length needs it. It has no "More" of its own: the whole
+    text is in the same bubble's History, in the table "What changed" and in the data file."""
+    period, cell = previous
+    size = len(cell["text"])
+    clamp = " clamp" if not page else " clamp c-s c-m c-l" if size > BEFORE_CLAMP[2] else " clamp c-s c-m" if size > BEFORE_CLAMP[1] else \
+        " clamp c-s" if size > BEFORE_CLAMP[0] else ""
+    return (f'<div class="before"><p class="before-text{clamp}"><span class="before-when mono">Before · '
+            f'<time datetime="{esc(cell["collected"])}">{esc(period["label"])}</time></span>{esc(cell["text"])}</p></div>')
+
+
+def _mini(board: dict, column: dict) -> str:
+    """One answerer's newest answer on a list page, as a bubble: mark, name, timeline, the text clamped by
+    the stylesheet. "" for an answerer that was never asked this question."""
+    found = _latest(board, column["key"])
+    line = _timeline(board, column)
+    if found is None:
+        if not line:
+            return ""
+        return (f'<li class="mini mini-none{column["who"]}">{_av(column)}<div class="stack"><div class="bubble">'
+                f'<div class="mini-top"><span class="mini-name mono">{esc(column["name"])}</span>{line}</div>'
+                '<span class="mini-text muted">no answer yet</span></div></div></li>')
+    period, cell = found
+    human = column["kind"] == "human"
+    changed = cell["state"] == "changed" and board["periods"][-1]["key"] == period["key"]
+    previous = _previous(board, column["key"], cell) if changed else None
+    return (f'<li class="mini{" is-changed" if changed else ""}{" kind-human" if human else ""}{column["who"]}"'
+            f'{data_attrs(record(board, column, period, cell))}>{_av(column)}<div class="stack">'
+            + (_before(previous) if previous else '')
+            + f'<div class="bubble"><div class="mini-top"><span class="mini-name mono">{esc(column["name"])}</span>'
+            f'{_changed_tag(human) if changed else ""}{line}</div>'
+            f'<span class="mini-text">{esc(cell["text"])}</span></div></div></li>')
+
+
 def _row(board: dict, href: str) -> str:
-    """One question on a list page: the question as a heading with a link, then every answerer's newest
-    answer in a mini-cell (name, timeline, the text clamped by the stylesheet)."""
-    cells = []
-    for column in board["columns"]:
-        found = _latest(board, column["key"])
-        line = _timeline(board, column)
-        if found is None:
-            if not line:
-                continue
-            cells.append(f'<div class="mini mini-none"><span class="mini-name mono">{esc(column["name"])}</span>{line}'
-                         '<span class="mini-text muted">no answer yet</span></div>')
+    """One question on a list page, as a thread in a pane: the question as a heading with a link, then every
+    answerer's newest answer as a bubble. With several answerer groups each group is its own list (the
+    group switch of the page shows one at a time; without a stylesheet all of them show, each under its
+    name) and the Human's answer comes last, whatever group is chosen."""
+    several = len(board["threads"]) > 1
+    lists, total = [], 0
+    for thread in board["threads"]:
+        items = [item for item in (_mini(board, column) for column in thread["columns"]) if item]
+        if not items:
             continue
-        period, cell = found
-        rec = record(board, column, period, cell)
-        newest = board["periods"][-1]["key"] == period["key"]
-        cells.append(f'<div class="mini{" is-changed" if cell["state"] == "changed" and newest else ""}'
-                     f'{" kind-human" if column["kind"] == "human" else ""}"{data_attrs(rec)}>'
-                     f'<span class="mini-name mono">{esc(column["name"])}</span>{line}'
-                     f'<span class="mini-text">{esc(cell["text"])}</span></div>')
-    count = min(max(len(cells), 1), 6)
+        total += len(items)
+        if several and thread["id"] != HUMAN:
+            lists.append(f'<ol class="minis minis-g g-{thread["pos"]}" aria-label="{esc(thread["name"])}">{"".join(items)}</ol>')
+        else:
+            lists.append(f'<ol class="minis{" minis-human" if several else ""}">{"".join(items)}</ol>')
     hook = f'<span class="row-hook">{esc(board["hook"])}</span>' if board["hook"] else ''
-    body = (f'<div class="minis n-{count}">{"".join(cells)}</div>' if cells
-            else '<p class="muted small">Nothing recorded yet.</p>')
+    body = "\n    ".join(lists) if lists else '<p class="muted small row-none">Nothing recorded yet.</p>'
     return ('  <article class="row">\n'
             f'    <div class="row-head"><span class="q-id mono">{esc(board["id"])}</span>{hook}'
             f'<h3 class="row-q"><a href="{esc(href)}">{esc(board["text"])}</a></h3></div>\n'
-            f'    {body}\n  </article>\n')
+            f'    {body}\n'
+            f'    <p class="row-more"><a href="{esc(href)}" aria-label="Every month of {esc(board["id"])}">Every month of this one</a></p>\n'
+            '  </article>\n')
 
 
-def _list_head(tag: str, title: str, lede: str) -> str:
+def _list_head(tag: str, title: str | list[str], lede: str, steps: list[str] | None = None) -> str:
+    """The head of a list page. `title` is the headline, or its sentences (each its own span, so that a phone
+    can break between them; the last one is in the accent colour). `lede` is ready HTML."""
+    if isinstance(title, str):
+        heading = esc(title)
+    else:
+        heading = " ".join(f'<span class="hl{" hl-last" if n == len(title) and n > 1 else ""}">{esc(sentence)}</span>'
+                           for n, sentence in enumerate(title, 1))
     return ('<div class="list-head">\n'
             f'  <span class="tag tag-dark mono">{esc(tag)}</span>\n'
-            f'  <h1 class="display">{esc(title)}</h1>\n'
-            f'  <p class="lede">{lede}</p>\n</div>\n')
+            f'  <h1 class="display">{heading}</h1>\n'
+            f'  <p class="lede">{lede}</p>\n'
+            + (f'  <ol class="steps">{"".join(f"<li>{esc(step)}</li>" for step in steps)}</ol>\n' if steps else '')
+            + '</div>\n')
+
+
+def chat_headline(chat: _Chat) -> list[str]:
+    """The front page's headline, sentence by sentence, counted from the payload: "Same question." / "Three
+    AI apps." / "One human." with one group of AI apps; "N chatbots." for one group of any other kind; and
+    with several groups a neutral count of all of them and of the groups. Says nothing the data does not show."""
+    count = len(chat.labels)
+    number = count_word(count).capitalize()
+    if len(chat.groups) > 1:
+        apps = f"{number} chatbots in {count_word(len(chat.groups))} groups."
+    else:
+        from . import archive_chatbots   # lazy, as in render_chatbots
+        ai = bool(chat.groups) and chat.groups[0]["id"] == archive_chatbots.DEFAULT_GROUP["id"]
+        apps = f"{number} {'AI app' if ai else 'chatbot'}{'' if count == 1 else 's'}."
+    return ["Same question."] + ([apps] if count else []) + (["One human."] if chat.human else [])
 
 
 def _page(view: _View, head: str, bar: str, body: list[str], foot: str, schema: str = "") -> str:
@@ -835,8 +971,9 @@ def _trending_section(view: _View, heading: str = "Trending", key: str = "") -> 
     ordered = sorted(view.trending, key=lambda q: (q["added"], view.place[q["id"]][1]), reverse=True)
     out = [f'<section class="group">\n  <div class="group-head"><h2>{esc(heading)}</h2>'
            f'<span class="muted">From what people were searching for. Newest first.</span>{key}</div>\n']
-    out += _model_rows(view, ordered, "t")
-    if not ordered:
+    if ordered:
+        out += ['  <div class="qs">\n', *_model_rows(view, ordered, "t"), '  </div>\n']
+    else:
         out.append('  <p class="muted trend-none">No trending question has been added yet.</p>\n')
     out.append('</section>\n')
     return out
@@ -851,8 +988,7 @@ def _core_sections(view: _View, key: str = "") -> list[str]:
         out.append(f'<section class="group">\n  <div class="group-head"><h2>{esc(group["name"])}</h2>'
                    f'<span class="muted">{esc(group["why"])}</span>{key}</div>\n')
         key = ""
-        out += _model_rows(view, questions, "q")
-        out.append('</section>\n')
+        out += ['  <div class="qs">\n', *_model_rows(view, questions, "q"), '  </div>\n', '</section>\n']
     return out
 
 
@@ -895,17 +1031,26 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
                      _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
                      _foot(view, "chat", []))
     if chat.dates:
-        names = [column["name"] for column in chat.columns]
-        people = "one human" if chat.human else ""
-        apps = f"{count_word(len(chat.labels)).capitalize()} AI app{'' if len(chat.labels) == 1 else 's'}"
-        title = f"Same question. {apps}.{' One human.' if people else ''}"
-        lede = "Typed in by hand, every month. Tap a question to see who changed their answer."
-        body = [_list_head(view.tag("chat"), title, esc(lede)),
-                '<section class="group">\n  <div class="group-head"><h2>Newest answers</h2>'
-                f'{_key(view, True)}</div>\n']
         shown = [q["id"] for q in view.chat_questions]
-        body += [_row(_chat_board(view, question_id), f"c/{question_id}.html") for question_id in shown]
-        body.append('</section>\n')
+        several = len(chat.groups) > 1
+        lede = "Typed in by hand, every month. Tap a question to see who changed their answer."
+        if several:
+            lede = f"{_listed([group['name'] for group in chat.groups])}. {lede}"
+        steps = [_plural(len(shown), "question"), "Asked by hand", "Every answer kept"]
+        body = [_list_head(view.tag("chat"), chat_headline(chat), esc(lede), steps), '<section class="group">\n']
+        if several:
+            # The group switch: one radio per group, the first one chosen. No script; without the stylesheet every group shows.
+            body.append("".join(f'  <input class="g-radio" type="radio" name="group" id="grp-{n}"{" checked" if n == 1 else ""} />\n'
+                                for n in range(1, len(chat.groups) + 1)))
+        body.append(f'  <div class="group-head"><h2>Newest answers</h2>{_key(view, True)}</div>\n')
+        if several:
+            sizes = [sum(1 for app in chat.apps if app["group"] == group["id"]) for group in chat.groups]
+            body.append('  <div class="group-strip" role="group" aria-label="Choose a group">'
+                        + "".join(f'<label for="grp-{n}"><span class="g-name">{esc(group["name"])}</span>'
+                                  f'<span class="g-count">{size} asked</span></label>'
+                                  for n, (group, size) in enumerate(zip(chat.groups, sizes), 1)) + '</div>\n')
+        body += ['  <div class="qs">\n', *[_row(_chat_board(view, question_id), f"c/{question_id}.html") for question_id in shown],
+                 '  </div>\n', '</section>\n']
         body.append(f'<p class="list-note muted">{LEFT_OUT} The same words go to every app; '
                     '<a href="chatbots.html">here is how we ask</a>.'
                     + ('' if standalone else ' Want the plain models instead? <a href="models.html">Models</a> and '
@@ -1005,66 +1150,81 @@ def _history(board: dict, column: dict) -> str:
 
 
 def _card(board: dict, column: dict, period: dict, cell: dict, ids: _Ids, newest: bool) -> str:
-    """One answer of one month as a card. Visible: the name, the state, the answer, what it was before,
-    the app's own attribution line, quoted / summarised for a human answer. Everything else is metadata."""
+    """One answer of one month as a bubble with the answerer's mark. Visible: the name, the state, the answer,
+    what it was before (an old bubble directly above), the app's own attribution line, quoted / summarised
+    for a human answer. Everything else is metadata."""
     human = column["kind"] == "human"
     rec = record(board, column, period, cell)
     tags = []
+    if human and cell["form"]:          # short, so it shares the name's line; the longer state tag follows
+        tags.append(f'<span class="tag-form mono">{esc(cell["form"])}</span>')
     if cell["state"] == "changed":
-        tags.append(f'<span class="tag-changed mono">{"Different answer this month" if human else "Changed"}</span>')
+        tags.append(_changed_tag(human))
     if cell["state"] == "mixed":
         tags.append('<span class="tag-mixed mono">Mixed answers</span>')
     tags += [f'<span class="tag-cond mono">{esc(tag)}</span>' for tag in cell["tags"]]
-    if human and cell["form"]:
-        tags.append(f'<span class="tag-form mono">{esc(cell["form"])}</span>')
-    out = [f'    <article class="acard{" is-changed" if cell["state"] == "changed" else ""}{" is-mixed" if cell["state"] == "mixed" else ""}'
-           f'{" kind-human" if human else ""}"{data_attrs(rec)} itemprop="suggestedAnswer" itemscope itemtype="https://schema.org/Answer">'
-           f'<div class="acard-head">{_author(column, board["demo"])}'
-           + (f'<span class="tags">{"".join(tags)}</span>' if tags else '') + '</div>',
-           _more(ids, cell["text"], "ans", _clamp(cell["text"]), f"Show the whole answer of {column['name']}", ' itemprop="text"')]
+    out = [f'    <article class="acard{" is-changed" if cell["state"] == "changed" else ""}'
+           f'{" is-mixed" if cell["state"] == "mixed" else ""}'
+           f'{" kind-human" if human else ""}{column["who"]}"{data_attrs(rec)} itemprop="suggestedAnswer" itemscope itemtype="https://schema.org/Answer">'
+           f'{_av(column)}<div class="stack">']
+    previous = _previous(board, column["key"], cell)
+    if cell["state"] == "changed" and previous:
+        out.append(_before(previous, page=True))
+    out += [f'<div class="bubble"><div class="acard-head">{_author(column, board["demo"])}'
+            + (f'<span class="tags">{"".join(tags)}</span>' if tags else '') + '</div>',
+            _more(ids, cell["text"], "ans", _clamp(cell["text"]), f"Show the whole answer of {column['name']}", ' itemprop="text"')]
     if cell["others"]:
         out.append('<ul class="others" aria-label="Other answers from the same check">'
                    + "".join(f'<li><span class="mono">{esc(other["count"])} of {esc(rec["conditions"].get("samples", ""))}</span> '
                              f'{esc(other["text"])}</li>' for other in cell["others"]) + '</ul>')
-    previous = _previous(board, column["key"], cell)
-    if cell["state"] == "changed" and previous:
-        lead = ('<span class="before-when mono">Before · '
-                f'<time datetime="{esc(previous[1]["collected"])}">{esc(previous[0]["label"])}</time></span>')
-        out.append('<div class="before">'
-                   + _more(ids, previous[1]["text"], "before-text", "clamp c-s c-m c-l" if len(previous[1]["text"]) > BEFORE_CLAMP else "",
-                           f"Show the whole earlier answer of {column['name']}", lead=lead) + '</div>')
     if column["attribution"]:
         out.append(f'<p class="credit mono">{esc(column["attribution"])}</p>')
     if newest:
         out.append(_history(board, column))
-    out.append(f'<meta itemprop="dateCreated" content="{esc(cell["collected"])}" /></article>\n')
+    out.append(f'</div></div><meta itemprop="dateCreated" content="{esc(cell["collected"])}" /></article>\n')
     return "".join(out)
 
 
 def _panel(board: dict, period: dict, ids: _Ids, newest: bool, number: int) -> str:
-    cards, notes = [], []
+    """One month: a pane of bubbles per thread (one thread, or one per answerer group under its name)."""
+    panes, notes = [], []
     left_out = 0
-    for column in board["columns"]:
-        cell = board["cells"].get((column["key"], period["key"]))
-        if cell is None:
+    several = len(board["threads"]) > 1
+    for thread in board["threads"]:
+        cards = []
+        for column in thread["columns"]:
+            cell = board["cells"].get((column["key"], period["key"]))
+            if cell is None:
+                continue
+            if cell["shown"]:
+                cards.append(_card(board, column, period, cell, ids, newest))
+            elif board["track"] == "chat":
+                left_out += 1
+            else:
+                cards.append(f'    <article class="acard acard-none{column["who"]}">{_av(column)}<div class="stack"><div class="bubble">'
+                             f'<div class="acard-head"><span class="acard-name mono">{esc(column["name"])}</span></div>'
+                             f'<p class="ans-none">{esc(cell["why_not"])}</p></div></div></article>\n')
+        if not cards:
             continue
-        if cell["shown"]:
-            cards.append(_card(board, column, period, cell, ids, newest))
-        elif board["track"] == "chat":
-            left_out += 1
-        else:
-            cards.append(f'    <article class="acard acard-none"><div class="acard-head"><span class="acard-name mono">{esc(column["name"])}</span></div>'
-                         f'<p class="ans-none">{esc(cell["why_not"])}</p></article>\n')
+        count = min(len(cards), 6)
+        panes.append((f'  <h3 class="thread-name">{esc(thread["name"])}</h3>\n' if several else '')
+                     + f'  <div class="cards n-{count}{" n-wide" if len(cards) >= WIDE_THREAD else ""}">\n{"".join(cards)}  </div>\n')
     if left_out:
         notes.append(f"{_replies(left_out)} left out")
-    count = min(max(len(cards), 1), 6)
     when = full_date(period["date"])
-    body = (f'  <div class="cards n-{count}">\n{"".join(cards)}  </div>\n' if cards
-            else '  <p class="muted">Nothing to show for this month.</p>\n')
+    body = "".join(panes) if panes else '  <p class="muted panel-none">Nothing to show for this month.</p>\n'
     return (f'<section class="panel" id="m-{esc(period["key"])}" aria-label="{esc(period["label"])}">\n'
             f'  <h2 class="panel-when"><time datetime="{esc(period["date"])}">{esc(period["label"])}</time>'
             f'<span class="muted">asked {esc(when)}{" · " + esc(" ".join(notes)) if notes else ""}</span></h2>\n'
             + body + '</section>\n')
+
+
+def _month_mark(board: dict, period: dict) -> str:
+    """"2 changed" for the month pill: how many answerers (the Human apart: people do not "change") gave a
+    different answer that month. "" when none did."""
+    changed = sum(1 for column in board["columns"] if column["kind"] != "human"
+                  and board["cells"].get((column["key"], period["key"]), {}).get("state") == "changed")
+    return f'<span class="m-mark">{changed} changed</span>' if changed else ''
 
 
 def _table(board: dict) -> str:
@@ -1094,8 +1254,9 @@ def _table(board: dict) -> str:
                            f'<span class="t-word mono">{word}</span><span class="t-text{long}">{esc(cell["text"])}</span></td>')
         rows.append(f'    <tr role="row"><th scope="row" role="rowheader"><time datetime="{esc(period["date"])}">{esc(period["label"])}</time></th>'
                     + "".join(tds) + '</tr>\n')
+    tall = " history-tall" if len(board["columns"]) > WIDE_THREAD else ""    # many answerers: rows as blocks at every width
     return ('<section class="changes">\n  <h2>What changed</h2>\n'
-            '  <table class="history" role="table">\n'
+            f'  <table class="history{tall}" role="table">\n'
             f'    <caption>Every check of {esc(board["id"])}, newest first. Only a new or different answer is written out.</caption>\n'
             f'    <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Month</th>{head}</tr></thead>\n'
             '    <tbody role="rowgroup">\n' + "".join(rows) + '    </tbody>\n  </table>\n</section>\n')
@@ -1135,19 +1296,21 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
         if len(periods) > 1:
             body.append("".join(f'<input class="m-radio" type="radio" name="month" id="pick-{n}"{" checked" if n == 1 else ""} />\n'
                                 for n in range(1, len(periods) + 1)))
+            # Month pills, newest first. The newest says how many changed (words, not colour alone).
             body.append('<div class="month-strip" role="group" aria-label="Choose a month">'
-                        + "".join(f'<label for="pick-{n}">{esc(period["label"])}</label>' for n, period in enumerate(periods, 1))
+                        + "".join(f'<label for="pick-{n}"><span class="m-name">{esc(period["label"])}</span>'
+                                  f'{_month_mark(board, period) if n == 1 else ""}</label>' for n, period in enumerate(periods, 1))
                         + '</div>\n')
         body += [_panel(board, period, ids, n == 1, n) for n, period in enumerate(periods, 1)]
         body.append('</section>\n')
         if chat:
             line = LEFT_OUT + (" A changed answer may come from how it was asked that day, not from the app."
                                if any(cell["tags"] for cell in board["cells"].values()) else "")
-            cards = "".join(f'<a href="../card/{esc(question_id)}-{esc(column["key"])}.html">{esc(column["name"])}</a>'
-                            for column in board["columns"] if _latest(board, column["key"]))
+            cards = "".join(f'<a href="../card/{esc(question_id)}{"-" if suffix else ""}{esc(suffix)}.html">{esc(name)}</a>'
+                            for suffix, (_panels, _kicker, name) in _chat_cards(board).items()
+                            if _panels or not suffix)
             body.append(f'<p class="under muted">{esc(line)}</p>\n'
-                        f'<p class="card-links small"><span class="muted">Share cards:</span>'
-                        f'<a href="../card/{esc(question_id)}.html">Everyone</a>{cards}</p>\n')
+                        f'<p class="card-links small"><span class="muted">Share cards:</span>{cards}</p>\n')
         else:
             body.append(f'<p class="card-links card-links-one small"><a href="../card/{esc(question_id)}.html">Share card</a></p>\n')
         body.append(_table(board))
@@ -1215,30 +1378,36 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
     if chat.dates and chat.columns:
         body.append('<section class="group">\n  <div class="group-head"><h2>How each one was asked</h2>'
                     '<span class="muted">As recorded the last time.</span></div>\n')
-        for column in chat.columns:
-            key = column["key"]
-            if column["kind"] == "human":
-                dates = sorted(chat.collection)
-                if not dates:
+        for thread in chat.threads:
+            rows = []
+            for column in thread["columns"]:
+                key = column["key"]
+                if column["kind"] == "human":
+                    dates = sorted(chat.collection)
+                    if not dates:
+                        continue
+                    collection = chat.collection[dates[-1]]
+                    how = (f'<span>{esc(column["meta"])}</span>'
+                           f'<span class="muted small">From: {esc(collection["source"])} · collected {esc(full_date(collection["collected_on"]))} · '
+                           f'{esc(_plural(len(dates), "collection"))} in all · each answer is marked quoted or summarised · no names</span>')
+                    rows.append(f'  <div class="app-row kind-human">{_av(column)}<div class="app-name"><strong>{esc(column["name"])}</strong></div>'
+                                f'<div class="app-how">{how}</div></div>\n')
                     continue
-                collection = chat.collection[dates[-1]]
-                how = (f'<span>{esc(column["meta"])}</span>'
-                       f'<span class="muted small">From: {esc(collection["source"])} · collected {esc(full_date(collection["collected_on"]))} · '
-                       f'{esc(_plural(len(dates), "collection"))} in all · each answer is marked quoted or summarised · no names</span>')
-                body.append(f'  <div class="app-row"><div class="app-name"><strong>{esc(column["name"])}</strong></div>'
-                            f'<div class="app-how">{how}</div></div>\n')
-                continue
-            dates = [d for d in chat.dates if (key, d) in chat.conditions]
-            conditions = chat.conditions[(key, dates[-1])]
-            body.append('  <div class="app-row"><div class="app-name"><strong>' + esc(column["name"]) + '</strong>'
-                        f'<span class="muted small">{esc(column["maker"])}</span></div>'
-                        f'<div class="app-how"><span>{esc(conditions_line(conditions))}</span>'
-                        f'<span class="muted small">The app showed: {esc(conditions["shown_model"])} · '
-                        f'asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all · '
-                        f'{esc(SAMPLE_WORD if chat.demo else SOURCE_LABELS["manual"])}</span>'
-                        + (f'<span class="muted small">{esc(conditions["note"])}</span>' if conditions["note"] else '')
-                        + (f'<span class="mono small">{esc(column["attribution"])}</span>' if column["attribution"] else '')
-                        + '</div></div>\n')
+                dates = [d for d in chat.dates if (key, d) in chat.conditions]
+                conditions = chat.conditions[(key, dates[-1])]
+                rows.append(f'  <div class="app-row{column["who"]}">{_av(column)}<div class="app-name"><strong>' + esc(column["name"]) + '</strong>'
+                            f'<span class="muted small">{esc(column["maker"])}</span></div>'
+                            f'<div class="app-how"><span>{esc(conditions_line(conditions))}</span>'
+                            f'<span class="muted small">The app showed: {esc(conditions["shown_model"])} · '
+                            f'asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all · '
+                            f'{esc(SAMPLE_WORD if chat.demo else SOURCE_LABELS["manual"])}</span>'
+                            + (f'<span class="muted small">{esc(conditions["note"])}</span>' if conditions["note"] else '')
+                            + (f'<span class="mono small">{esc(column["attribution"])}</span>' if column["attribution"] else '')
+                            + '</div></div>\n')
+            if rows:
+                # A group's name appears only when there are several groups.
+                body.append((f'  <h3 class="apps-name">{esc(thread["name"])}</h3>\n' if len(chat.threads) > 1 else '')
+                            + '  <div class="apps">\n' + "".join(rows) + '  </div>\n')
         body.append('</section>\n')
         if chat.real:
             from . import archive_chatbots   # lazy: only a real chat-app page reads the owner's aside
@@ -1279,16 +1448,53 @@ def _card_size(text: str) -> str:
             + (" card-q-f1" if length <= 34 else " card-q-f2" if length <= 84 else " card-q-f3"))
 
 
+# The fitted card in cqw (a hundredth of its width), as the stylesheet sets it: the height of the safe box's body, the
+# width of a bubble's text, the answer's font size by the number of bubbles and the lines its clamp allows.
+CARD_BODY, CARD_TEXT_WIDTH = 108.33, 69.0
+CARD_ANSWER = {1: (4.6, 7), 2: (3.9, 4), 3: (3.5, 3), 4: (3.1, 3)}
+CARD_BEFORE_ROOM = 105.0       # show the earlier answers on a card of several only if this estimate is not passed
+
+
+def _lines(text: str, size: float, most: int, width: float = CARD_TEXT_WIDTH) -> int:
+    """A cautious count of the lines a text takes at a font size (cqw): 0.5 em per character is wider than
+    the body face runs on average, so the count errs on the high side."""
+    return min(most, max(1, math.ceil(len(text) * 0.5 * size / width)))
+
+
+def _card_room(board: dict, panels: list[tuple[dict, dict, dict]]) -> bool:
+    """Whether a card of several bubbles surely has room for the earlier answer above every changed one.
+    An estimate from text lengths, on the high side; when in doubt the card stays as it is and says
+    "changed" in words only (the earlier answer is on the single-answerer card and on the page)."""
+    count = min(max(len(panels), 1), 4)
+    size, most = CARD_ANSWER[count]
+    length = len(board["text"])
+    if count > 3:
+        font, most_lines = (7.0, 2) if length <= 34 else (5.6, 3) if length <= 84 else (3.9, 4)
+    else:
+        font, most_lines = (10.0, 2) if length <= 26 else (8.2, 3) if length <= 48 else (6.0, 4) if length <= 90 else (5.0, 6)
+    used = 3.6 + _lines(board["text"], font, most_lines, 80.9) * font * 1.08 + 5.0 + 3 * 1.8 + 1.3 * (count - 1)
+    for column, _period, cell in panels:
+        used += 5.6 + _lines(cell["text"], size, most) * size * 1.26
+        previous = _previous(board, column["key"], cell) if cell["state"] == "changed" else None
+        if previous:
+            used += 3.6 + _lines("Before · " + previous[0]["label"] + " " + previous[1]["text"], 2.6, 2) * 2.6 * 1.3
+    return used <= CARD_BEFORE_ROOM
+
+
 def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], versions: dict[str, str], *, title: str,
-               kicker: str, one: bool, track: str, extra: str = "", empty: str = "No answers recorded yet.") -> str:
+               kicker: str, one: bool, track: str, extra: str = "", empty: str = "No answers recorded yet.",
+               group: str = "", part: str = "") -> str:
     """A 9:16 share card. Laid out for a 1080 by 1920 image that a video app covers in part: the question,
     the names, the answers and the one honesty line sit inside x 65-940, y 270-1440 (`.card-safe`); the
     wordmark is above and the small print below. At any other window size the same page is ordinary
     flowing text that can be read and zoomed. An answer is clamped to three lines on the image; when one
-    may be cut the card says "full answer on the site". Recorded text is never edited."""
+    may be cut the card says "full answer on the site". Recorded text is never edited. `group` (only when
+    there are several answerer groups) is that group's name, shown before the hook inside the safe box;
+    `part` ("card 2 of 3") goes to the small print."""
     sample = board["demo"]
     question_id = board["id"]
     limit = CARD_CLAMP_CHARS[min(max(len(panels), 1), 4)]
+    earlier = one or _card_room(board, panels)
     cut = any(len(cell["text"]) > limit for _column, _period, cell in panels)
     out = [_head(title, "../../", versions, board["text"], _meta(view, "../", board=board, track=track)).replace(
                "<body>", '<body class="card-page">'),
@@ -1299,7 +1505,8 @@ def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], 
            'Answers Over Time</a>'
            f'<span class="card-kicker">{esc(kicker)}</span></header>\n'
            '  <div class="card-body">\n'
-           + (f'  <p class="card-hook">{esc(board["hook"])}</p>\n' if board["hook"] else '')
+           + (f'  <p class="card-hook">{esc(" · ".join(text for text in (group, board["hook"]) if text))}</p>\n'
+              if board["hook"] or group else '')
            + f'  <h1 class="card-q card-q-{_card_size(board["text"])}">{esc(board["text"])}</h1>\n'
            f'  <div class="card-panels {"one" if one else "n-" + str(max(len(panels), 1))}">\n']
     for column, period, cell in panels:
@@ -1310,19 +1517,21 @@ def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], 
         credit = f"{column['attribution']} · " if column["attribution"] else ""
         previous = _previous(board, column["key"], cell) if changed else None
         before = (f'<p class="card-before"><span class="mono">Before · {esc(previous[0]["label"])}</span> {esc(previous[1]["text"])}</p>'
-                  if previous and one else '')
-        out.append(f'    <section class="card-panel{" card-panel-changed" if changed else ""}{" card-panel-human" if human else ""}"'
-                   f'{data_attrs(record(board, column, period, cell))}>'
+                  if previous and earlier else '')
+        out.append(f'    <section class="card-panel{" card-panel-changed" if changed else ""}'
+                   f'{" card-panel-human" if human else ""}{column["who"]}"{data_attrs(record(board, column, period, cell))}>'
+                   f'{_av(column)}<div class="stack">{before}<div class="bubble">'
                    f'<div class="card-meta mono"><span class="card-label">{esc(column["name"])}</span>'
                    f'<span class="card-when">{esc(credit)}{esc(period["label"])}{esc(form)}{" · " + word if changed else ""}'
                    f'{" · mixed answers" if cell["state"] == "mixed" else ""}</span></div>'
-                   f'<p class="card-answer">{esc(cell["text"])}</p>{before}</section>\n')
+                   f'<p class="card-answer">{esc(cell["text"])}</p></div></div></section>\n')
     if not panels:
-        out.append(f'    <section class="card-panel"><p class="card-answer card-empty">{esc(empty)}</p></section>\n')
+        out.append(f'    <section class="card-none"><p class="card-answer card-empty">{esc(empty)}</p></section>\n')
     honesty = view.tag(track)
     if not sample and track == "chat":
         honesty = CHAT_CARD_FOOT
-    small = f"{question_id} · same question every month · read-only · no payments" + (f" · {CARD_FULL}" if cut else "")
+    small = (f"{question_id} · same question every month · read-only · no payments" + (f" · {part}" if part else "")
+             + (f" · {CARD_FULL}" if cut else ""))
     out.append('  </div>\n'
                f'  <p class="card-honest mono">{esc(honesty)}</p>\n'
                '  </div>\n'
@@ -1359,26 +1568,63 @@ def render_card(payload: dict, question_id: str, versions: dict[str, str] | None
                       one=False, track="models")
 
 
+def _chat_cards(board: dict) -> dict[str, tuple[list, str, str]]:
+    """Every share card of one chat-app question: {name suffix: (panels, part, name)}. The suffix is what
+    follows `card/<ID>` in the file name: "" (the first card), "2", "3" (further cards of the first group),
+    "<group id>", "<group id>-2" (the cards of a later group), "<app label>", "human" (one answerer).
+
+    A card holds at most CARD_APPS bubbles. A group with more answerers than that is spread over several
+    cards, in the thread's order, rather than set in smaller text. The Human's answer, when there is one,
+    is the last bubble of the FIRST card of every group. `part` is "" or "card 2 of 3"."""
+    out: dict[str, tuple[list, str, str]] = {}
+    people = [(column, *found) for column in board["columns"] if column["kind"] == "human"
+              for found in [_latest(board, column["key"])] if found]
+    groups = [thread for thread in board["threads"] if thread["id"] != HUMAN]
+    for place, thread in enumerate(groups):
+        apps = [(column, *found) for column in thread["columns"] if column["kind"] != "human"
+                for found in [_latest(board, column["key"])] if found]
+        first = CARD_APPS - len(people) if len(apps) + len(people) > CARD_APPS else len(apps)
+        pages = [apps[:first] + people] + [apps[n:n + CARD_APPS] for n in range(first, len(apps), CARD_APPS)]
+        stem = "" if place == 0 else thread["id"]
+        label = thread["name"] or "Everyone"
+        for number, panels in enumerate(pages, 1):
+            suffix = stem if number == 1 else f"{stem}-{number}" if stem else str(number)
+            part = f"card {number} of {len(pages)}" if len(pages) > 1 else ""
+            out[suffix] = (panels, part, label if number == 1 else f"{label} {number}")
+    if not groups:
+        out[""] = (people, "", "Everyone")
+    for column in board["columns"]:
+        found = _latest(board, column["key"])
+        out[column["key"]] = ([(column, *found)] if found else [], "", column["name"])
+    return out
+
+
 def render_chatbot_card(payload: dict, question_id: str, which: str = ALL_CARD, versions: dict[str, str] | None = None) -> str:
-    """A share card of the chat-app track. `which` is "all" (`card/<ID>.html`: the latest answer of up to
-    three apps and of Human, whose panel is outlined, not filled) or one column's key
-    (`card/<ID>-<app label>.html`, `card/<ID>-human.html`: that one's latest answer at a larger size).
-    Never the owner's aside. Raises KeyError for a question or a column that is not in the track."""
+    """A share card of the chat-app track. `which` is "all" (`card/<ID>.html`: the latest answers of up to
+    four answerers of the first group, the Human's among them) or the part of a card's file name after
+    `<ID>-`: one column's key (`card/<ID>-<app label>.html`, `card/<ID>-human.html`: that one's latest
+    answer at a larger size), a number (`card/<ID>-2.html`: a further card of the first group), a group's
+    id or a group's id and a number (`_chat_cards`). Never the owner's aside. Raises KeyError for a
+    question or a card that is not in the track."""
     view = _View(payload)
     chat = view.chat
     versions = versions or asset_versions()
-    single = which != ALL_CARD
-    if question_id not in chat.by_id or not view.shown(question_id) or (single and which not in chat.name):
+    if question_id not in chat.by_id or not view.shown(question_id):
         raise KeyError(question_id)
     board = _chat_board(view, question_id)
-    columns = [_column(board, which)] if single else board["columns"]
-    panels = [(column, *found) for column in columns for found in [_latest(board, column["key"])] if found]
-    if not single and len(panels) > CARD_APPS:      # keep Human on the card: it is the fourth panel
-        people = [panel for panel in panels if panel[0]["kind"] == "human"]
-        panels = [panel for panel in panels if panel[0]["kind"] != "human"][:CARD_APPS - len(people)] + people
-    name = chat.name[which] if single else "everyone"
-    return _card_page(view, board, panels, versions, title=f"{board['text']} · {name} · card · Answers Over Time",
-                      kicker="Chat apps", one=single, track="chat", empty="No answers recorded yet.")
+    cards = _chat_cards(board)
+    suffix = "" if which == ALL_CARD else which
+    if suffix not in cards or which == "":
+        raise KeyError(which)
+    panels, part, name = cards[suffix]
+    single = suffix in chat.name
+    several = len(chat.groups) > 1
+    group = next((thread["name"] for thread in board["threads"] if panels and panels[0][0] in thread["columns"]), "") \
+        if several and not single else ""
+    return _card_page(view, board, panels, versions,
+                      title=f"{board['text']} · {name if single or several or part else 'everyone'} · card · Answers Over Time",
+                      kicker="Chatbots" if several else "Chat apps", one=single, track="chat", empty="No answers recorded yet.",
+                      group=group, part=part)
 
 
 # ---- Data files: the same answers for machines ------------------------------------------------------------------
@@ -1564,7 +1810,8 @@ def render_site(payload: dict, *, standalone: bool = False, sibling: str | None 
             pages[f"{folder}/{question['id']}.html"] = _question_page(view, board, versions, **options)
             pages[f"card/{question['id']}.html"] = render_card(payload, question["id"], versions)
             if folder == "c":
-                for column in board["columns"]:
-                    pages[f"card/{question['id']}-{column['key']}.html"] = render_chatbot_card(payload, question["id"], column["key"], versions)
+                for suffix in _chat_cards(board):
+                    if suffix:
+                        pages[f"card/{question['id']}-{suffix}.html"] = render_chatbot_card(payload, question["id"], suffix, versions)
     pages.update(render_data(payload, chat_only=standalone))
     return pages
