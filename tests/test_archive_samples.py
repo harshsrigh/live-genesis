@@ -1,15 +1,15 @@
 """Answers Over Time: optional repeat samples per question (LIVE_ARCHIVE_SAMPLES / --samples).
 Offline: every model call is a replaced `engine.infer` or a fake SDK client; nothing here contacts a provider."""
+import copy
 import json
 import re
 import sqlite3
 
 import pytest
-from fastapi.testclient import TestClient
 
-from live_genesis import archive, archive_pages, controls, core, engine, snapshot
-from test_archive import (REPO, as_real, assert_page_is_safe, fake, question_file, ready, retarget_archive, rows,  # noqa: F401
-                          run_cli, trending_file)
+from live_genesis import archive, archive_pages, controls, core, engine
+from test_archive import (REPO, as_real, assert_page_is_safe, fake, publish_refusal, question_file, ready, rows,  # noqa: F401
+                          run_cli, society_state, society_tables, trending_file)
 from test_archive_endpoints import Status, fake_sdk, reply, three, three_endpoints, var  # noqa: F401
 
 V3_SCHEMA = REPO / 'tests' / 'fixtures' / 'archive_schema_v3.sql'
@@ -287,19 +287,13 @@ def test_mock_samples_are_never_public(ready, monkeypatch, tmp_path):
     assert [(r['kind'], r['samples']) for r in archive.status()['runs']] == [('mock', 3), ('mock', 2)]
 
 
-def test_outside_client_keeps_one_answer_per_run_and_question(ready, monkeypatch):
-    from live_genesis.app import app
-    keys = {item['name']: item['key'] for item in core.seed_agents()}
-    auth = {'Authorization': f"Bearer {keys['Astra']}", 'X-Agent-Model': 'vendor/outside-model-2'}
-    body = {'run': 1, 'question_id': 'Q03', 'answer': 'Canberra.'}
+def test_an_older_outside_answer_is_one_row_per_run_and_question(ready, monkeypatch):
     archive.lock()
-    with TestClient(app) as client:
-        monkeypatch.setenv('OPENAI_API_KEY', 'fake-key-never-used')        # the web app dropped it from this process on import
-        as_real(monkeypatch, 'Seven.')
-        archive.run_archive(max_usd=1, samples=3)
-        assert client.post('/api/agent/archive-answer', json=body, headers=auth).status_code == 200
-        again = client.post('/api/agent/archive-answer', json=body, headers=auth)
-        assert again.status_code == 409 and 'never replaced' in again.json()['detail']
+    as_real(monkeypatch, 'Seven.')
+    archive.run_archive(max_usd=1, samples=3)
+    with core.connect() as cx:      # as the removed route for outside clients stored one (source api); only an older database holds such rows
+        archive._store(cx, 1, 'basic-1', 'Q03', 'Astra', model='vendor/outside-model-2', source='api', state='answered',
+                       text='Canberra.', agent_id=1)
     assert rows("SELECT sample FROM archive_answers WHERE source='api'") == [{'sample': 1}]
     with core.connect() as cx:                                             # and the database refuses a second sample from a client
         with pytest.raises(sqlite3.IntegrityError, match='sample index'):
@@ -340,10 +334,10 @@ def test_database_rules_for_samples(ready, monkeypatch):
 def old_database(tmp_path, monkeypatch):
     """A database with the archive schema from before repeat samples (fixture v3), a lock of each set and one recorded run."""
     trending_file(tmp_path, monkeypatch, 2)
-    core.seed_agents()
     with core.connect() as cx:
         for table in ARCHIVE_TABLES:
             cx.execute(f'DROP TABLE {table}')
+        society_tables(cx)                         # an older database also holds the removed society's tables
         cx.executescript(V3_SCHEMA.read_text(encoding='utf-8'))
         assert 'sample' not in {r[1] for r in cx.execute('PRAGMA table_info(archive_answers)')}
         assert 'samples' not in {r[1] for r in cx.execute('PRAGMA table_info(archive_runs)')}
@@ -377,11 +371,13 @@ def test_a_database_from_before_repeat_samples_migrates_in_place(ready, tmp_path
         before_answers = [tuple(r) for r in cx.execute('SELECT * FROM archive_answers ORDER BY id')]
         before_runs = [tuple(r) for r in cx.execute('SELECT * FROM archive_runs')]
         before_other = {t: [tuple(r) for r in cx.execute(f'SELECT * FROM {t}')] for t in ARCHIVE_TABLES if t not in ('archive_answers', 'archive_runs')}
-    # Read-only before any migration (the observatory right after the upgrade): the old record is shown as it was.
+    # Read-only before any migration (the web app right after the upgrade): the old record is shown as it was.
+    society = society_state()
     before = archive.public_payload(readonly=True)
     assert archive.payload_problem(before) is None and len(before['answers']) == 3 and 'samples' not in before['runs'][0]
     pages_before = archive_pages.render_site(before)
-    core.init_db()                                  # what every CLI command and the app do on start
+    core.init_db()                                  # what every CLI command does on start
+    assert society_state() == society               # the society's table is neither altered nor dropped, and its rows are as they were
     with core.connect() as cx:
         schema_once = [tuple(r) for r in cx.execute('SELECT type,name,sql FROM sqlite_master ORDER BY name')]
     core.init_db()                                  # idempotent
@@ -440,31 +436,19 @@ def test_fresh_and_migrated_databases_have_the_same_archive_columns_with_samples
 
 # ---- export and --check ----------------------------------------------------------------------------------------
 
-def test_export_check_and_tampering_with_sample_fields(ready, tmp_path, monkeypatch):
-    core.seed_agents()
+def test_publication_rules_and_tampering_with_sample_fields(ready, tmp_path, monkeypatch):
     archive.lock()
     scripted(monkeypatch, lambda model, k: 'Seven.' if model == 'gpt-test-1' else ('Six.', 'Seven.', 'Seven.')[k - 1])
     archive.run_archive(max_usd=1, samples=3)
-    out = tmp_path / 'published'
-    manifest = snapshot.export_published(out)
-    assert manifest['schema'] == 'live-genesis-published/5' and manifest['archive']['answers_by_source']['engine'] == 40
-    exported = json.loads((out / 'archive.json').read_bytes())
-    assert exported['schema'] == 'live-genesis-archive/3' and exported == json.loads(json.dumps(archive.public_payload()))
-    assert exported['runs'][0]['samples'] == 3 and cell(exported)['others'] == [{'text': 'Six.', 'count': 1}]
-    snapshot.approve_published(out, confirmed=True)
-    assert snapshot.check_published(out)['reviewed'] is True
-    site = tmp_path / 'site'
-    snapshot.build_from_data(site, out)
-    assert 'same answer 2 times out of 3' in (site / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
-    good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
+    good = json.loads(json.dumps(archive.public_payload()))
+    assert good['schema'] == 'live-genesis-archive/3' and good['answers_by_source']['engine'] == 40 and publish_refusal(good) == ''
+    assert good['runs'][0]['samples'] == 3 and cell(good)['others'] == [{'text': 'Six.', 'count': 1}]
+    assert 'same answer 2 times out of 3' in archive_pages.render_question(good, 'Q01')
 
     def refused(edit, match):
-        retarget_archive(out, edit)
-        with pytest.raises(RuntimeError, match=match):
-            snapshot.check_published(out)
-        for name, content in good.items():
-            (out / name).write_bytes(content)
-        assert snapshot.check_published(out)['reviewed'] is True
+        data = copy.deepcopy(good)
+        edit(data)
+        assert re.search(match, publish_refusal(data)), match
 
     def split_cell(data):
         return next(a for a in data['answers'] if a['answerer'] == 'model-b')
@@ -477,8 +461,8 @@ def test_export_check_and_tampering_with_sample_fields(ready, tmp_path, monkeypa
     refused(lambda d: d['runs'][0].pop('samples'), 'do not belong')
     refused(lambda d: d['runs'][0].update(samples=6), "run's sample count")
     refused(lambda d: split_cell(d).update(state='no_answer', text=None), 'do not fit its state')
-    # A guard hit in one of the other sampled answers blocks the file like one in the answer shown.
-    refused(lambda d: split_cell(d)['others'][0].update(text='write to someone@example.org'), 'guard')
+    # A guard hit in one of the other sampled answers is named like one in the answer shown.
+    refused(lambda d: split_cell(d)['others'][0].update(text='write to someone@example.org'), 'looks like an email address')
 
 
 def test_payload_rules_for_sample_fields(ready, monkeypatch):

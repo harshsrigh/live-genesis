@@ -1,4 +1,4 @@
-# LIVE Genesis: local development image. Not hardened for public hosting.
+# Answers Over Time: local development image. Not hardened for public hosting.
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 \

@@ -380,7 +380,6 @@ def test_human_answers_are_short_marked_and_carry_no_handle_or_link(chat, tmp_pa
 
 
 def test_model_answers_and_hand_entered_answers_never_touch_each_other(chat, tmp_path, monkeypatch):
-    core.seed_agents()
     archive.lock()
     as_real(monkeypatch, 'Seven.')
     archive.run_archive(max_usd=1)
@@ -570,7 +569,6 @@ def test_chatbot_tables_are_append_only_and_need_a_recorded_question(chat, tmp_p
 # ---- migration --------------------------------------------------------------------------------------------
 
 def test_a_database_from_before_the_chat_app_track_migrates_in_place(ready, monkeypatch):
-    core.seed_agents()
     archive.lock()
     as_real(monkeypatch, 'Seven.')
     archive.run_archive(max_usd=1)
@@ -587,7 +585,7 @@ def test_a_database_from_before_the_chat_app_track_migrates_in_place(ready, monk
         before = {t: [tuple(r) for r in cx.execute(f'SELECT * FROM {t} ORDER BY rowid')]
                   for t in ('archive_answers', 'archive_runs', 'archive_run_sets', 'archive_questions', 'archive_sets', 'operator_audit')}
         rules_before = sorted(r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE type IN ('trigger','index') AND tbl_name LIKE 'archive_%'"))
-    payload_before = archive.public_payload()                        # an unmigrated database still reads (read-only, e.g. the observatory)
+    payload_before = archive.public_payload()                        # an unmigrated database still reads (read-only, e.g. the web app)
     assert 'chatbots' not in payload_before and payload_before['schema'] == 'live-genesis-archive/3'
     core.init_db()
     with core.connect() as cx:
@@ -816,7 +814,6 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
 
 
 def test_the_front_page_is_the_chat_app_comparison_only_once_a_chat_app_run_exists(ready, monkeypatch, tmp_path):
-    core.seed_agents()
     archive.lock()
     as_real(monkeypatch, 'Seven.')
     archive.run_archive(max_usd=1)
@@ -910,12 +907,11 @@ def test_hostile_text_in_the_chat_track_is_escaped_also_in_the_attributes(chat, 
     assert '<script>' not in data['data/answers.jsonl'].replace('\\u003c', '<') or '<script>alert(1)</script>' in json.loads(data['data/answers.jsonl'].splitlines()[0])['text'] or True
 
 
-def test_both_web_apps_serve_the_chat_pages_cards_and_data_files(chat, tmp_path):
-    from live_genesis.app import app as combined
-    from live_genesis.observatory import app as readonly
+def test_the_web_app_serves_the_chat_pages_cards_and_data_files(chat, tmp_path):
+    from live_genesis.app import app
     payload = two_dates(tmp_path)
     data = archive_pages.render_data(payload)
-    for application in (combined, readonly):
+    for application in (app,):
         with TestClient(application) as client:
             assert client.get('/archive/index.html').text == archive_pages.render_index(payload)
             assert client.get('/archive/models.html').text == archive_pages.render_models(payload)
@@ -933,7 +929,7 @@ def test_both_web_apps_serve_the_chat_pages_cards_and_data_files(chat, tmp_path)
                             '/archive/c/Q11.html', '/archive/q/C001.html', '/archive/data/C099.json', '/archive/data/Q99.json',
                             '/archive/data/..%2Farchive.json', '/archive/data/answers.json', '/archive/data/'):
                 assert client.get(missing).status_code == 404, missing
-    with TestClient(readonly) as client:
+    with TestClient(app) as client:
         for path in ('/archive/chatbots.html', '/archive/c/C001.html', '/archive/data/answers.jsonl', '/archive/data/C001.json'):
             assert client.head(path).status_code == 200
             assert client.post(path).status_code == 405, path
@@ -1116,7 +1112,6 @@ def test_machine_readable_labels_mark_every_sample_record_and_element(ready):
 def model_runs(monkeypatch):
     """Two real-shaped model runs from a fake adapter (no model is called): three samples each; model-b's samples split
     in the second run and model-a changes its answer there."""
-    core.seed_agents()
     archive.lock()
     monkeypatch.setenv('LIVE_ARCHIVE_SAMPLES', '3')
     asked = {}
@@ -1290,13 +1285,11 @@ def test_check_refuses_a_tampered_chat_track(chat, tmp_path, monkeypatch):
 
 
 def test_a_payload_without_the_track_is_exactly_what_it_was(ready, monkeypatch):
-    core.seed_agents()
     archive.lock()
     as_real(monkeypatch, 'Seven.')
     archive.run_archive(max_usd=1)
     payload = archive.public_payload()
     assert 'chatbots' not in payload and payload['schema'] == 'live-genesis-archive/3' and archive.payload_problem(payload) is None
-    assert 'chatbots' not in snapshot._archive_counts(payload)
     empty = {'apps': [], 'human': None, 'questions': [], 'runs': [], 'answers': [], 'human_answers': []}
     assert archive.payload_problem({**payload, 'chatbots': empty}) == \
         'the schema marker does not fit the file (/5 exactly when it holds the chat-app track)'
@@ -1433,10 +1426,6 @@ def test_a_real_site_does_not_say_how_replies_were_collected_and_keeps_its_other
 
 
 def test_the_sample_site_does_not_say_how_replies_were_collected_and_still_says_it_is_scripted(ready, tmp_path, monkeypatch):
-    from live_genesis import cli
-    monkeypatch.setattr(cli, 'ROOT', tmp_path)
-    core.seed_agents()
-    cli.demo()
     archive.demo_archive()
     site = tmp_path / 'site'
     assert snapshot.build(site, archive_only=True)['demo_only'] is True

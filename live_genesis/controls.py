@@ -1,37 +1,26 @@
-"""Operator controls: credential lifecycle, receipts, budget gates, quotas, audit, backup.
+"""Operator controls: budget gates, reconciliation, the operator audit log, the request limit, backup.
 
-Ported (behaviour, not code) from the reference branch `codex/local-0.2` onto this
-codebase's tables. Everything here is local bookkeeping: nothing contacts a provider,
-nothing moves money, and no function returns or stores a bearer key except
-`rotate_key`, which hands the new key to the operator CLI exactly once.
+Everything here is local bookkeeping: nothing contacts a provider and nothing moves money.
 
 Honest limits:
 * Budget figures are ESTIMATES plus whatever the operator declares in
   `LIVE_OTHER_COMMITTED_USD`. The provider's billing page is the only source of truth.
-* Receipts stop a caller from *labelling* an action `engine` without a settled
-  reservation. Code running inside this process with database access could still forge
-  rows; this is a consistency control, not a sandbox.
 * `RateLimiter` state lives in one process's memory and is lost on restart; the client
   address is the direct peer unless `LIVE_TRUSTED_PROXIES` names the proxy in front.
 
-`now` is the single time source for expiry, quota windows and the HTTP limiter; tests
-replace it (`monkeypatch.setattr(controls, "now", ...)`) instead of sleeping.
+`now` is the single time source for the HTTP limiter; tests replace it
+(`monkeypatch.setattr(controls, "now", ...)`) instead of sleeping.
 """
 from __future__ import annotations
 
-import hashlib
 import ipaddress
 import math
 import os
-import re
-import secrets
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
-
-from fastapi import HTTPException
 
 from . import providers
 
@@ -47,26 +36,18 @@ def _stamp() -> str:
 
 
 # ---- Schema ---------------------------------------------------------------------------
-KEY_LIFETIME_SECONDS = 90 * 86400
-
 _COLUMNS = [
-    ("agents", "enabled", "INTEGER NOT NULL DEFAULT 1"),
-    ("agents", "key_expires", "REAL NOT NULL DEFAULT 0"),  # epoch seconds; 0 = no expiry
-    # 1 = operated by an outside client holding the key (cli set-external): the engine never calls or pays for it.
-    ("agents", "external", "INTEGER NOT NULL DEFAULT 0"),
-    # Reservations made before this migration keep NULL here; nothing is inferred for them.
+    # Added to budget_reservations after it first shipped. Rows from before keep NULL here; nothing is inferred.
     ("budget_reservations", "provider", "TEXT"),
-    ("budget_reservations", "round_id", "INTEGER"),
     ("budget_reservations", "input_rate", "REAL"),
     ("budget_reservations", "output_rate", "REAL"),
-    ("budget_reservations", "used", "INTEGER NOT NULL DEFAULT 0"),  # 1 = receipt consumed
     ("budget_reservations", "reconciled_usd", "REAL"),  # operator-verified charge, if entered
-    ("action_provenance", "reservation_id", "INTEGER"),
 ]
 
 
 def migrate(cx: sqlite3.Connection) -> None:
-    """Additive and repeatable: safe on a new database and on one created by any earlier version."""
+    """Additive and repeatable: safe on a new database and on one created by any earlier version.
+    Only the tables named here are touched; an older database's other tables are left as they are."""
     for table, column, declaration in _COLUMNS:
         if column not in {r[1] for r in cx.execute(f"PRAGMA table_info({table})")}:
             cx.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
@@ -78,376 +59,14 @@ def migrate(cx: sqlite3.Connection) -> None:
         BEGIN SELECT RAISE(ABORT, 'operator_audit is append-only'); END;
     CREATE TRIGGER IF NOT EXISTS operator_audit_no_delete BEFORE DELETE ON operator_audit
         BEGIN SELECT RAISE(ABORT, 'operator_audit is append-only'); END;
-    CREATE TABLE IF NOT EXISTS agent_limits (
-        agent_id INTEGER NOT NULL REFERENCES agents(id), kind TEXT NOT NULL,
-        maximum INTEGER NOT NULL, PRIMARY KEY (agent_id, kind)
-    );
-    CREATE TABLE IF NOT EXISTS quota_windows (
-        agent_id INTEGER NOT NULL, kind TEXT NOT NULL, bucket INTEGER NOT NULL,
-        count INTEGER NOT NULL, PRIMARY KEY (agent_id, kind)
-    );
-    CREATE INDEX IF NOT EXISTS budget_reservations_round ON budget_reservations(round_id, agent_id);
-    -- One row per engine turn, for the operator only (`cli turns`). Categories and counts: never model text,
-    -- never provider error text. Not part of /api/overview or of any export.
-    CREATE TABLE IF NOT EXISTS engine_turns (
-        id INTEGER PRIMARY KEY, round_id INTEGER NOT NULL REFERENCES rounds(id),
-        agent_id INTEGER NOT NULL REFERENCES agents(id),
-        reservation_id INTEGER REFERENCES budget_reservations(id),
-        outcome TEXT NOT NULL CHECK(outcome IN ('recorded','truncated','invalid_json','invalid_schema',
-                                                'action_refused','inference_failed','not_called')),
-        stop TEXT CHECK(stop IN ('end','length','other','unknown')),
-        input_tokens INTEGER, output_tokens INTEGER,
-        memory TEXT NOT NULL DEFAULT 'none' CHECK(memory IN ('written','unchanged','omitted','not_text','refused','none')),
-        memory_refusal TEXT, created_at TEXT NOT NULL, refusal TEXT, verb TEXT
-    );
-    CREATE INDEX IF NOT EXISTS engine_turns_round ON engine_turns(round_id, id);
-    CREATE TRIGGER IF NOT EXISTS engine_turns_no_update BEFORE UPDATE ON engine_turns
-        BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
-    CREATE TRIGGER IF NOT EXISTS engine_turns_no_delete BEFORE DELETE ON engine_turns
-        BEGIN SELECT RAISE(ABORT, 'engine_turns is append-only'); END;
-    -- Who the engine selected for a round and in what speaking order: one row per seat, written once before the
-    -- round's first call (plan_round). A resume follows these rows; a longer resume only appends seats.
-    CREATE TABLE IF NOT EXISTS round_plan (
-        round_id INTEGER NOT NULL REFERENCES rounds(id), position INTEGER NOT NULL CHECK(position >= 0),
-        agent_id INTEGER NOT NULL REFERENCES agents(id),
-        mode TEXT NOT NULL CHECK(mode IN ('rotation','id','only')),
-        paid_turns INTEGER NOT NULL,  -- the agent's paid-call count the selection saw
-        created_at TEXT NOT NULL, PRIMARY KEY (round_id, position), UNIQUE (round_id, agent_id)
-    );
-    CREATE TRIGGER IF NOT EXISTS round_plan_no_update BEFORE UPDATE ON round_plan
-        BEGIN SELECT RAISE(ABORT, 'round_plan is append-only'); END;
-    CREATE TRIGGER IF NOT EXISTS round_plan_no_delete BEFORE DELETE ON round_plan
-        BEGIN SELECT RAISE(ABORT, 'round_plan is append-only'); END;
     ''')
-    # Added after the table first shipped: why an action_refused / invalid_schema turn recorded nothing.
-    # ADD COLUMN is not an UPDATE: the append-only triggers stay, and existing rows read NULL.
-    if "refusal" not in {r[1] for r in cx.execute("PRAGMA table_info(engine_turns)")}:
-        cx.execute("ALTER TABLE engine_turns ADD COLUMN refusal TEXT")
-    # Added later still: WHICH verb a schema-valid reply chose (idle included: an idle turn records no event,
-    # so this column is its only trace). Same additive pattern; rows written before it read NULL.
-    if "verb" not in {r[1] for r in cx.execute("PRAGMA table_info(engine_turns)")}:
-        cx.execute("ALTER TABLE engine_turns ADD COLUMN verb TEXT")
-
-
-# ---- Engine turn diagnostics (operator-only) -------------------------------------------
-# outcome: recorded (an action was stored) | truncated (reply cut off at the output limit) | invalid_json |
-#          invalid_schema | action_refused (validation, guards, quota, engine contribute cap) |
-#          inference_failed (the call or its usage failed; see the reservation) | not_called (nothing was sent).
-# memory:  written | unchanged (same text as the previous note, or blank) | omitted (the reply had no `memory`) |
-#          not_text (`memory` was not a string) | refused (a content guard; category in memory_refusal) |
-#          none (no action was recorded, so memory was not considered).
-# refusal: only for invalid_schema / action_refused: a category built by engine.refusal_category from a fixed
-#          vocabulary (`422:validation`, `404:not_found`, `409:conflict`, `429:quota`, `<status>:guard:<guard category>`,
-#          `schema:<request field names>`, `contribute_cap`, `error:<ExceptionClass>`). Never model text, never the
-#          free-text error detail.
-# verb:    the action verb of a reply that passed the request schema (recorded and action_refused turns), and only
-#          when it is one of the known verbs (known_verbs); NULL otherwise and for rows older than the column.
-REFUSAL_SHAPE = re.compile(r"[A-Za-z0-9_:,.()' -]{1,120}")
-
-def record_turn(round_id: int, agent_id: int, outcome: str, *, reservation: int | None = None, stop: str | None = None,
-                input_tokens: int | None = None, output_tokens: int | None = None, memory: str = "none",
-                memory_refusal: str | None = None, refusal: str | None = None, verb: str | None = None) -> int:
-    """Append one engine-turn diagnostic. Callers pass categories and counts only: `memory_refusal` is a guard
-    CATEGORY (as returned by core.update_memory), never model text or a provider message. `refusal` is a
-    category from engine.refusal_category; a value that does not look like one is stored as 'unrecognised'.
-    `verb` is stored only when it is a known action verb (known_verbs); anything else is stored as NULL."""
-    if refusal is not None and not (isinstance(refusal, str) and REFUSAL_SHAPE.fullmatch(refusal)):
-        refusal = "unrecognised"
-    from . import core  # local import: core imports this module
-    if not (isinstance(verb, str) and verb in known_verbs()):
-        verb = None
-    with core.connect() as cx:
-        return int(cx.execute(
-            "INSERT INTO engine_turns(round_id,agent_id,reservation_id,outcome,stop,input_tokens,output_tokens,memory,"
-            "memory_refusal,created_at,refusal,verb) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (round_id, agent_id, reservation, outcome, stop, input_tokens, output_tokens, memory,
-             memory_refusal[:120] if isinstance(memory_refusal, str) else None, _stamp(), refusal, verb)).lastrowid)
-
-
-def known_verbs() -> frozenset[str]:
-    """Every action verb core.submit_action accepts: the only values engine_turns.verb may hold."""
-    from . import core, documents, games, governance
-    return frozenset((*core.BASE_VERBS, *games.VERBS, *documents.VERBS, *governance.VERBS))
-
-
-def turns(round_id: int | None = None) -> dict[str, Any]:
-    """Engine turns of one round (default: the latest round that has any), oldest first, with counts by outcome."""
-    from . import core
-    with core.connect() as cx:
-        if round_id is None:
-            round_id = cx.execute("SELECT MAX(round_id) FROM engine_turns").fetchone()[0]
-        rows = [] if round_id is None else [dict(r) for r in cx.execute(
-            "SELECT t.id,t.round_id AS round,a.name AS agent,t.reservation_id AS reservation,t.outcome,t.verb,t.stop,"
-            "t.input_tokens,t.output_tokens,t.memory,t.memory_refusal,t.refusal,t.created_at "
-            "FROM engine_turns t JOIN agents a ON a.id=t.agent_id WHERE t.round_id=? ORDER BY t.id", (round_id,))]
-        plan = [] if round_id is None else stored_plan(cx, round_id)
-    counts: dict[str, int] = {}
-    for row in rows:
-        counts[row["outcome"]] = counts.get(row["outcome"], 0) + 1
-    return {"round": round_id, "outcomes": counts, "turns": rows,
-            # Who was selected for the round and in what speaking order (round_plan); null for a round without a plan.
-            "plan": {"mode": plan[0]["mode"], "order": [s["name"] for s in plan]} if plan else None,
-            "note": "Operator diagnostics: categories and token counts only, no model text. Never shown on the public page."}
-
-
-# ---- last_turn: what happened to an agent's previous engine turn (its own context only) ---
-# Fixed sentences keyed by outcome / refusal category. `{fields}` is filled with request field names of our own
-# schema and `{category}` with a guard's fixed category string; nothing else is ever inserted.
-LAST_TURN_NOTES: dict[str, str] = {
-    "truncated": "Your last reply was cut off at the output limit and nothing was recorded. Write less.",
-    "invalid_json": "Your last reply was not one valid JSON object and nothing was recorded. Return only the JSON object.",
-    "schema": "Your last action had a missing or wrong-typed field: {fields}. Nothing was recorded.",
-    "schema:other": "Your last reply did not have the required shape and nothing was recorded. Fill in an example from available_actions.",
-    "guard": "Your last action was refused by a content check ({category}). Do not repeat that content.",
-    "guard:unnamed": "Your last action was refused by a content check. Do not repeat that content.",
-    "422:validation": "Your last action was refused as invalid (a value was missing, too long or not allowed). Fill in an example from available_actions.",
-    "404:not_found": "Your last action named an id that does not exist. Use only ids listed in available_actions.",
-    "409:conflict": "Your last action did not fit the current state (for example a stale base_revision or a step not open to you). Read your context again and pick from available_actions.",
-    "429:quota": "Your last action was refused because an action quota was already used. Nothing was recorded.",
-    "contribute_cap": "Your last contribute was above the per-turn limit and was refused. Stay within max_amount in available_actions.",
-    "inference_failed": "Your last turn failed before a reply was read and nothing was recorded. Your reply did not cause it.",
-    "memory": "Your last action was recorded, but its memory note was refused by a content check ({category}) and not saved.",
-    "memory:unnamed": "Your last action was recorded, but its memory note was refused by a content check and not saved.",
-    "other": "Your last action was refused and nothing was recorded. Do not repeat it unchanged.",
-}
-_LAST_TURN_REFUSALS = ("422:validation", "404:not_found", "409:conflict", "429:quota", "contribute_cap")
-
-
-def _last_turn_note(outcome: str, refusal: Any, memory_refusal: Any) -> str:
-    def shaped(value: Any) -> str:
-        return value if isinstance(value, str) and REFUSAL_SHAPE.fullmatch(value) else ""
-    if outcome == "recorded":  # only reached when the memory note was refused
-        category = shaped(memory_refusal)
-        return LAST_TURN_NOTES["memory"].format(category=category) if category else LAST_TURN_NOTES["memory:unnamed"]
-    if outcome in ("truncated", "invalid_json", "inference_failed"):
-        return LAST_TURN_NOTES[outcome]
-    refusal = shaped(refusal)
-    if outcome == "invalid_schema":
-        from .action_schema import ActionRequest
-        names = refusal[len("schema:"):].split(",") if refusal.startswith("schema:") else []
-        fields = [f for f in names if f in ActionRequest.model_fields]
-        return LAST_TURN_NOTES["schema"].format(fields=", ".join(fields)) if fields else LAST_TURN_NOTES["schema:other"]
-    status, _, rest = refusal.partition(":")
-    if status.isdigit() and rest.startswith("guard:"):
-        category = rest[len("guard:"):]
-        return LAST_TURN_NOTES["guard"].format(category=category) if category else LAST_TURN_NOTES["guard:unnamed"]
-    return LAST_TURN_NOTES[refusal if refusal in _LAST_TURN_REFUSALS else "other"]
-
-
-def last_turn(cx: sqlite3.Connection, agent_id: int) -> dict[str, Any] | None:
-    """The `last_turn` entry of one agent's own context: what happened to its most recent engine turn in which
-    a call was sent, when that turn left something to act on. None (the key is then absent) when the agent has
-    had no such turn, when that turn was recorded in full, or when the agent is operated by an outside client
-    (an API client already got its refusal in the HTTP response).
-
-    Built ONLY from the non-content columns of engine_turns: {"round", "outcome", "verb" (when known), "note"}.
-    `note` is one of LAST_TURN_NOTES; the only inserted values are request field names of our own schema and a
-    guard category that passes REFUSAL_SHAPE. Never model text, a title, a body or a free-text error detail.
-    Not a score, and never part of the overview, an export or another agent's context."""
-    agent = cx.execute("SELECT external FROM agents WHERE id=?", (agent_id,)).fetchone()
-    if agent is None or agent[0]:
-        return None
-    row = cx.execute("SELECT round_id,outcome,verb,memory,memory_refusal,refusal FROM engine_turns "
-                     "WHERE agent_id=? AND outcome!='not_called' ORDER BY id DESC LIMIT 1", (agent_id,)).fetchone()
-    if row is None or (row["outcome"] == "recorded" and row["memory"] != "refused"):
-        return None
-    out: dict[str, Any] = {"round": row["round_id"], "outcome": row["outcome"]}
-    if row["verb"] in known_verbs():
-        out["verb"] = row["verb"]
-    out["note"] = _last_turn_note(row["outcome"], row["refusal"], row["memory_refusal"])
-    return out
 
 
 def audit(cx: sqlite3.Connection, operation: str, agent_id: int | None = None) -> None:
-    """Append one operator change. Callers must never put key material in `operation`."""
+    """Append one operator change. Callers must never put key material in `operation`.
+    `agent_id` is a column of the table as it first shipped; nothing writes it any more (NULL)."""
     cx.execute("INSERT INTO operator_audit(operation,agent_id,created_at) VALUES (?,?,?)",
                (operation[:200], agent_id, _stamp()))
-
-
-def active_agent_ids(cx: sqlite3.Connection) -> list[int]:
-    """Ids of agents whose access has not been revoked, in id order."""
-    return [r[0] for r in cx.execute("SELECT id FROM agents WHERE enabled=1 ORDER BY id")]
-
-
-# ---- Credential lifecycle -------------------------------------------------------------
-
-def check_credential(agent: Any, credential_hash: str | None = None) -> None:
-    """Refuse a disabled agent (403) or an expired / replaced key (401).
-
-    `credential_hash` is the key hash the caller authenticated with. core.submit_action
-    passes it again INSIDE its write transaction, so a request that authenticated just
-    before a rotation or revocation is not recorded after it.
-    """
-    if not agent["enabled"]:
-        raise HTTPException(403, DISABLED)
-    if credential_hash is not None and not secrets.compare_digest(agent["key_hash"], credential_hash):
-        raise HTTPException(401, EXPIRED)
-    if agent["key_expires"] and agent["key_expires"] <= now():
-        raise HTTPException(401, EXPIRED)
-
-
-def check_actor(agent: Any, credential_hash: str | None) -> None:
-    """submit_action hook. Expiry concerns the bearer key, so it is checked only for
-    callers that present one; the operator's own engine is not locked out by it."""
-    if credential_hash is None:
-        if not agent["enabled"]:
-            raise HTTPException(403, DISABLED)
-        return
-    check_credential(agent, credential_hash)
-
-
-def rotate_key(agent_id: int, *, revoke: bool = False) -> str | None:
-    """Replace an agent's key. The old key stops working when this transaction commits.
-
-    rotate: returns the new key (the only copy; the database keeps its SHA-256 hash),
-    re-enables the agent and sets expiry to now + 90 days.
-    revoke: disables the agent, stores the hash of a discarded random key, returns None.
-    """
-    from .core import connect
-    key = "live_" + secrets.token_urlsafe(32)
-    with connect() as cx:
-        cx.execute("BEGIN IMMEDIATE")
-        if not cx.execute("SELECT 1 FROM agents WHERE id=?", (agent_id,)).fetchone():
-            raise ValueError("Unknown agent")
-        cx.execute("UPDATE agents SET key_hash=?,enabled=?,key_expires=? WHERE id=?",
-                   (hashlib.sha256(key.encode()).hexdigest(), int(not revoke),
-                    0 if revoke else now() + KEY_LIFETIME_SECONDS, agent_id))
-        audit(cx, "revoke-key" if revoke else "rotate-key", agent_id)
-    return None if revoke else key
-
-
-# ---- Per-agent limits and fixed-window quotas -----------------------------------------
-# kind -> (environment variable, built-in default, window seconds or None for "per round")
-LIMITS: dict[str, tuple[str, int, int | None]] = {
-    "actions-round": ("LIVE_ACTIONS_PER_ROUND", 1, None),
-    "actions-minute": ("LIVE_ACTIONS_PER_MINUTE", 10, 60),
-    "actions-day": ("LIVE_ACTIONS_PER_DAY", 100, 86400),
-    "inference-hour": ("LIVE_CALLS_PER_HOUR", 12, 3600),
-    "searches-minute": ("LIVE_SEARCHES_PER_MINUTE", 30, 60),  # GET /api/agent/search, per agent
-    "archive-minute": ("LIVE_ARCHIVE_ANSWERS_PER_MINUTE", 30, 60),  # POST /api/agent/archive-answer, per agent
-}
-# Only windows this short answer 429 with a Retry-After header; for longer ones (hour, day)
-# the detail says that retrying soon is pointless.
-RETRY_AFTER_MAX_WINDOW = 60
-DISABLED = "Agent disabled by the operator. Do not retry; only the operator can enable it again."
-EXPIRED = "Agent credential expired or rotated. Do not retry with it; ask the operator for the current key."
-
-
-class CallRefused(Exception):
-    """A paid call was refused for ONE agent before anything was sent (disabled, hourly quota)."""
-
-
-def default_limit(kind: str) -> int:
-    """Environment default (minimum 1). An unreadable value falls back to the built-in default."""
-    variable, builtin, _ = LIMITS[kind]
-    try:
-        return max(1, int(os.getenv(variable, str(builtin))))
-    except ValueError:
-        return builtin
-
-
-def limit(cx: sqlite3.Connection, agent_id: int | None, kind: str) -> int:
-    """Effective limit for one agent: the operator's override if set, else the default."""
-    if agent_id is not None:
-        row = cx.execute("SELECT maximum FROM agent_limits WHERE agent_id=? AND kind=?", (agent_id, kind)).fetchone()
-        if row:
-            return int(row[0])
-    return default_limit(kind)
-
-
-def set_limit(agent_id: int, kind: str, maximum: int | None) -> None:
-    """Operator-only. maximum=None restores the default; 0 blocks that kind for the agent."""
-    from .core import connect
-    if kind not in LIMITS:
-        raise ValueError(f"Unknown quota kind; choose from {sorted(LIMITS)}")
-    if maximum is not None and (type(maximum) is not int or not 0 <= maximum <= 10000):
-        raise ValueError("Quota must be an integer from 0 to 10000")
-    with connect() as cx:
-        cx.execute("BEGIN IMMEDIATE")
-        if not cx.execute("SELECT 1 FROM agents WHERE id=?", (agent_id,)).fetchone():
-            raise ValueError("Unknown agent")
-        if maximum is None:
-            cx.execute("DELETE FROM agent_limits WHERE agent_id=? AND kind=?", (agent_id, kind))
-        else:
-            cx.execute("INSERT INTO agent_limits VALUES (?,?,?) ON CONFLICT(agent_id,kind) DO UPDATE SET maximum=excluded.maximum",
-                       (agent_id, kind, maximum))
-        audit(cx, f"set-quota {kind}: {'default' if maximum is None else maximum}", agent_id)
-
-
-def consume_window(cx: sqlite3.Connection, agent_id: int, kind: str) -> None:
-    """Count one use in the current fixed window, or raise 429. Runs inside the caller's
-    write transaction, so a later rejection of the same request rolls the count back."""
-    seconds = LIMITS[kind][2]
-    bucket = int(now() // seconds)
-    maximum = limit(cx, agent_id, kind)
-    row = cx.execute("SELECT bucket,count FROM quota_windows WHERE agent_id=? AND kind=?", (agent_id, kind)).fetchone()
-    used = row["count"] if row and row["bucket"] == bucket else 0
-    if used >= maximum:
-        head = f"{kind} quota exhausted ({used}/{maximum})"
-        if maximum <= 0:
-            raise HTTPException(429, f"{head}: the operator has set this limit to 0. Retrying will not help.")
-        wait = max(1, math.ceil((bucket + 1) * seconds - now()))
-        if seconds <= RETRY_AFTER_MAX_WINDOW:
-            # A short window: a real, bounded wait, so the response says how long.
-            raise HTTPException(429, f"{head}. Wait {wait} second(s), then resend (same Idempotency-Key for an action).",
-                                headers={"Retry-After": str(wait)})
-        raise HTTPException(429, f"{head}. The window resets in about {max(1, round(wait / 60))} minute(s); "
-                                 "retrying sooner will not help.")
-    cx.execute("INSERT INTO quota_windows(agent_id,kind,bucket,count) VALUES (?,?,?,1) "
-               "ON CONFLICT(agent_id,kind) DO UPDATE SET bucket=excluded.bucket,count=?", (agent_id, kind, bucket, used + 1))
-
-
-def count_search(agent_id: int) -> None:
-    """Count one GET /api/agent/search for this agent in its per-minute window, or raise 429
-    (with Retry-After). The only thing a search writes; it records no event."""
-    from .core import connect
-    with connect() as cx:
-        cx.execute("BEGIN IMMEDIATE")
-        consume_window(cx, agent_id, "searches-minute")
-
-
-def set_external(agent_id: int, external: bool) -> str:
-    """Mark one agent as operated by an outside client (True) or by this server's engine (False). Audited.
-
-    An external agent stays a resident (it can post, vote, be seated in games); only engine.run_round skips it."""
-    from .core import connect
-    with connect() as cx:
-        cx.execute("BEGIN IMMEDIATE")
-        row = cx.execute("SELECT name FROM agents WHERE id=?", (agent_id,)).fetchone()
-        if not row:
-            raise ValueError("Unknown agent id")
-        cx.execute("UPDATE agents SET external=? WHERE id=?", (int(bool(external)), agent_id))
-        audit(cx, f"set-external {'on' if external else 'off'}", agent_id)
-        return row["name"]
-
-
-# ---- Receipt-bound engine provenance --------------------------------------------------
-
-def before_record(cx: sqlite3.Connection, agent_id: int, origin: dict[str, Any], demo: bool) -> dict[str, Any]:
-    """submit_action hook, after the replay and round-quota checks and before any write.
-
-    * Engine provenance: `origin["receipt"]` must be a budget reservation of THIS agent,
-      closed with recorded provider usage and not used before. It is marked used here, in
-      the caller's transaction, and its provider/model replace anything the caller said.
-    * Non-demo actions (idle included) count against the per-minute and per-day windows.
-    """
-    receipt = origin.get("receipt")
-    if receipt is not None:
-        row = None
-        if not demo and type(receipt) is int:
-            row = cx.execute("SELECT * FROM budget_reservations WHERE id=? AND agent_id=? AND used=0 "
-                             "AND usage_id IS NOT NULL AND status IN ('settled','unconfirmed')", (receipt, agent_id)).fetchone()
-        if row is None or not (row["provider"] or origin.get("provider")):
-            raise HTTPException(409, "Invalid or consumed model receipt")
-        if cx.execute("SELECT external FROM agents WHERE id=?", (agent_id,)).fetchone()[0]:
-            # Second line of defence behind engine.run_round, which never selects such an agent.
-            raise HTTPException(409, "Externally operated agent cannot record engine actions")
-        cx.execute("UPDATE budget_reservations SET used=1 WHERE id=?", (receipt,))
-        origin = {**origin, "provider": row["provider"] or origin["provider"], "model": row["model"]}
-    if not demo:
-        consume_window(cx, agent_id, "actions-minute")
-        consume_window(cx, agent_id, "actions-day")
-    return origin
 
 
 # ---- Budget gates ---------------------------------------------------------------------
@@ -490,7 +109,7 @@ def spend_config() -> dict[str, float]:
 
 
 def budget_config() -> dict[str, float]:
-    """Everything a paid round needs, validated up front.
+    """Everything a paid run needs, validated up front.
 
     Rates must be positive (fail closed). The one exception: `openai-compatible` with a loopback
     base URL may use zero rates, so a model running on this machine is recorded as $0 estimated
@@ -543,26 +162,12 @@ def reconcile_message(ids: list[int]) -> str:
             f"`python -m live_genesis.cli reconcile --receipt {ids[0]} --actual-usd <amount charged for that call>`.")
 
 
-def before_reserve(cx: sqlite3.Connection, agent_id: int | None, count_call: bool) -> None:
-    """reserve_budget hook, inside its write transaction and after the ceiling check."""
-    if agent_id is None:
-        return
-    row = cx.execute("SELECT enabled FROM agents WHERE id=?", (agent_id,)).fetchone()
-    if row is not None and not row["enabled"]:
-        raise CallRefused("Agent disabled by the operator; no call made")
-    if count_call:
-        try:
-            consume_window(cx, agent_id, "inference-hour")
-        except HTTPException as err:
-            raise CallRefused(f"{err.detail.rstrip('.')}; no call made") from None
-
-
 def reconcile_reservation(reservation_id: int, actual_usd: float) -> dict[str, Any]:
     """Operator-entered, verified charge for ONE held or unconfirmed reservation.
 
     The figure is typed in from the provider's bill; nothing is fetched. Usage already
     recorded for the call (an overrun) is not counted twice: only the difference is added.
-    The reservation is closed and can never serve as an engine receipt afterwards.
+    The reservation is closed.
     """
     from .core import _budget, connect
     if isinstance(actual_usd, bool) or not isinstance(actual_usd, (int, float)) or not math.isfinite(actual_usd) \
@@ -582,136 +187,27 @@ def reconcile_reservation(reservation_id: int, actual_usd: float) -> dict[str, A
             cur = cx.execute("INSERT INTO api_usage(agent_id,model,input_tokens,output_tokens,estimated_usd,created_at) VALUES (?,?,0,0,?,?)",
                              (row["agent_id"], row["model"], actual_usd - recorded, _stamp()))
             usage_id = usage_id if usage_id is not None else cur.lastrowid
-        cx.execute("UPDATE budget_reservations SET status='settled',used=1,usage_id=?,reconciled_usd=?,closed_at=? WHERE id=?",
+        cx.execute("UPDATE budget_reservations SET status='settled',usage_id=?,reconciled_usd=?,closed_at=? WHERE id=?",
                    (usage_id, float(actual_usd), _stamp(), reservation_id))
-        audit(cx, f"reconcile reservation {reservation_id}: {float(actual_usd)}", row["agent_id"])
+        audit(cx, f"reconcile reservation {reservation_id}: {float(actual_usd)}")
         return _budget(cx)
 
 
-# ---- Resumable rounds -----------------------------------------------------------------
-
-def agents_done_in_round(cx: sqlite3.Connection, round_id: int) -> set[int]:
-    """Agents that must not be called again in this round: they already recorded an action
-    in it, or a paid call was reserved for them in it and not released (settled,
-    unconfirmed, or still held by a run that died mid-call)."""
-    done = {r[0] for r in cx.execute("SELECT agent_id FROM round_actions WHERE round_id=? AND verb!='idle'", (round_id,))}
-    done |= {r[0] for r in cx.execute("SELECT agent_id FROM budget_reservations WHERE round_id=? AND status!='released' "
-                                      "AND agent_id IS NOT NULL", (round_id,))}
-    return done
-
-
-# ---- Round plan: who the engine calls in a round, and in what order ---------------------
-PLAN_ORDERS = ("rotation", "id")  # round --order; a third stored mode, 'only', is an explicit list (round --only)
-MAX_ROUND_AGENTS = 10
+# ---- Estimates shared by every paid run --------------------------------------------------
+# Input-token bound for a hold: one token is at least one byte for byte-level BPE tokenizers,
+# so UTF-8 bytes of system + prompt, plus this margin for message framing, bounds the count.
+# If a provider ever reports more, the call settles as `unconfirmed` and the run stops.
+INPUT_TOKEN_MARGIN = 200
+EPSILON_USD = 1e-9  # float slack only; never a spending allowance
+# core rounds committed spend to 6 decimals, so the ceiling handed to reserve_budget carries this
+# much slack. The exact cap is the run's own check (sum of settled estimates + next hold <= max_usd).
+LEDGER_ROUNDING_USD = 2e-6
+COST_CAVEAT = "estimated from token counts and configured rates, not a provider invoice"
 
 
-class PlanError(ValueError):
-    """The requested selection cannot be used (bad --only list, or flags that contradict a stored plan)."""
-
-
-def engine_agents(cx: sqlite3.Connection) -> dict[int, dict[str, Any]]:
-    """Agents the engine may call: enabled and not operated by an outside client. id -> {id, name, model}."""
-    return {r["id"]: dict(r) for r in cx.execute("SELECT id,name,model FROM agents WHERE enabled=1 AND external=0 ORDER BY id")}
-
-
-def paid_turns(cx: sqlite3.Connection) -> dict[int, tuple[int, int]]:
-    """agent id -> (paid engine calls so far, id of the newest one).
-
-    Counted from budget_reservations that carry a round id and were not released: one per call that was sent
-    (settled, unconfirmed, or still held). That record exists for every engine round ever run, unlike
-    engine_turns, and it counts a paid call whose reply recorded nothing (idle, refused, cut off) as a turn.
-    Study calls have no agent id and API actions make no reservation: neither is counted."""
-    return {r[0]: (r[1], r[2]) for r in cx.execute(
-        "SELECT agent_id,COUNT(*),MAX(id) FROM budget_reservations WHERE round_id IS NOT NULL AND agent_id IS NOT NULL "
-        "AND status!='released' GROUP BY agent_id")}
-
-
-def stored_plan(cx: sqlite3.Connection, round_id: int) -> list[dict[str, Any]]:
-    """Seats of one round's stored plan in speaking order: position, agent_id, name, mode, paid_turns."""
-    return [dict(r) for r in cx.execute(
-        "SELECT p.position,p.agent_id,a.name,p.mode,p.paid_turns FROM round_plan p JOIN agents a ON a.id=p.agent_id "
-        "WHERE p.round_id=? ORDER BY p.position", (round_id,))]
-
-
-def check_only(cx: sqlite3.Connection, only: list[int]) -> None:
-    """Validate an explicit agent list (round --only) before a round is opened or anything is reserved."""
-    eligible = engine_agents(cx)
-    if not only or len(only) > MAX_ROUND_AGENTS or any(type(i) is not int for i in only) or len(set(only)) != len(only):
-        raise PlanError(f"--only takes 1 to {MAX_ROUND_AGENTS} distinct agent ids. No call was made.")
-    missing = [i for i in only if i not in eligible]
-    if missing:
-        raise PlanError("--only names agents the engine cannot call (unknown, revoked or external): "
-                        + ", ".join(map(str, missing)) + ". No call was made.")
-
-
-def _fewest_turns(eligible: dict[int, dict[str, Any]], turns: dict[int, tuple[int, int]], count: int) -> list[int]:
-    """`count` ids with the fewest paid turns; ties: acted longest ago (never first), then lowest id."""
-    return sorted(eligible, key=lambda i: (*turns.get(i, (0, 0)), i))[:count]
-
-
-def plan_round(round_id: int, limit: int, *, order: str | None = None, only: list[int] | None = None) -> list[dict[str, Any]]:
-    """Return the first `limit` seats of the round's plan, storing the plan first if the round has none.
-
-    One write transaction, so two runs of the same round agree on one plan. Rules:
-    * No stored plan: `only` (explicit ids, in that order), else `order`, else 'rotation'; except that a round
-      which already has paid calls and no plan was run by a version without plans, which called by id: 'id'.
-        rotation - the `limit` engine agents with the fewest paid turns (paid_turns; ties: longest ago, then id).
-                   They speak in id order starting from the one that has opened the fewest planned rounds
-                   (ties: opened longest ago, then id), wrapping around.
-        id       - the first `limit` engine agents by id, in id order (the behaviour before plans existed).
-    * Stored plan: it is followed as written; `order` / `only` are refused (PlanError). A `limit` below its length
-      uses its first seats; a `limit` above it appends seats chosen by the plan's own mode from agents not yet in
-      it (in id order). An 'only' plan is never extended. Existing seats are never changed (append-only table).
-    """
-    from . import core
-    if order is not None and order not in PLAN_ORDERS:
-        raise PlanError("order must be rotation or id")
-    with core.connect() as cx:
-        cx.execute("BEGIN IMMEDIATE")
-        seats = stored_plan(cx, round_id)
-        eligible, turns = engine_agents(cx), paid_turns(cx)
-        if seats:
-            if order is not None or only is not None:
-                raise PlanError(f"Round {round_id} already has a stored plan ({seats[0]['mode']}); --resume follows it. "
-                                "Run it again without --order / --only. No call was made.")
-            mode, start = seats[0]["mode"], len(seats)
-            taken = {s["agent_id"] for s in seats}
-            rest = {i: a for i, a in eligible.items() if i not in taken}
-            extra = max(0, limit - start) if mode != "only" else 0
-            new = sorted(_fewest_turns(rest, turns, extra)) if mode == "rotation" else sorted(rest)[:extra]
-        else:
-            start = 0
-            if only is not None:
-                check_only(cx, only)
-                mode, new = "only", list(only)
-            else:
-                legacy = cx.execute("SELECT 1 FROM budget_reservations WHERE round_id=? AND agent_id IS NOT NULL "
-                                    "AND status!='released' LIMIT 1", (round_id,)).fetchone() is not None
-                mode = order or ("id" if legacy else "rotation")
-                if mode == "id":
-                    new = sorted(eligible)[:limit]
-                else:
-                    new = sorted(_fewest_turns(eligible, turns, limit))
-                    opened = {r[0]: (r[1], r[2]) for r in cx.execute(
-                        "SELECT agent_id,COUNT(*),MAX(round_id) FROM round_plan WHERE position=0 GROUP BY agent_id")}
-                    if new:
-                        first = new.index(min(new, key=lambda i: (*opened.get(i, (0, 0)), i)))
-                        new = new[first:] + new[:first]
-        stamp = _stamp()
-        for offset, agent_id in enumerate(new):
-            cx.execute("INSERT INTO round_plan(round_id,position,agent_id,mode,paid_turns,created_at) VALUES (?,?,?,?,?,?)",
-                       (round_id, start + offset, agent_id, mode, turns.get(agent_id, (0, 0))[0], stamp))
-        return stored_plan(cx, round_id)[:limit]
-
-
-def mixed_origin_agents() -> list[str]:
-    """Names of agents that are NOT marked external but have recorded both `api` and `engine`
-    actions: a sign that an outside client is using an identity the engine also runs (cli status)."""
-    from .core import connect
-    with connect() as cx:
-        return [r[0] for r in cx.execute("""SELECT a.name FROM agents a JOIN events e ON e.agent_id=a.id
-            JOIN action_provenance ap ON ap.event_id=e.id WHERE a.external=0 AND ap.source IN ('api','engine')
-            GROUP BY a.id HAVING COUNT(DISTINCT ap.source)=2 ORDER BY a.id""")]
+def suggested_cap(worst_case_usd: float) -> str:
+    """The worst case rounded UP to the next cent, as text for the command line."""
+    return f"{max(math.ceil(worst_case_usd * 100 - 1e-9), 1) / 100:.2f}"  # at least 0.01: --max-usd must be positive (zero local rates)
 
 
 # ---- In-memory HTTP rate limits -------------------------------------------------------
@@ -728,15 +224,12 @@ class RateLimiter:
     counted and is allowed (fail open): refusing it would let an attacker who rotates
     addresses lock out everyone else.
 
-    Two instances guard /api/agent/* (see app.requires_agent):
-    * `api_limiter`: requests per AUTHENTICATED agent id, counted after authentication.
-    * `auth_failure_limiter`: FAILED authentications per client address.
-    A third, `public_limiter`, counts every other request except /health per client address
-    (web.limit_public_requests, both web apps).
+    One instance exists: `public_limiter` counts every request except /health per client address
+    (web.limit_public_requests).
     """
 
     def __init__(self, maximum: int | None = None, seconds: int = 60, clock: Callable[[], float] | None = None,
-                 *, variable: str = "LIVE_API_REQUESTS_PER_MINUTE", default: int = 120, max_keys: int = LIMITER_MAX_KEYS):
+                 *, variable: str = "LIVE_PUBLIC_REQUESTS_PER_MINUTE", default: int = 300, max_keys: int = LIMITER_MAX_KEYS):
         self.maximum, self.seconds, self.clock = maximum, seconds, clock
         self.variable, self.default, self.max_keys = variable, default, max_keys
         self._lock = threading.Lock()
@@ -788,11 +281,9 @@ class RateLimiter:
         return max(1, math.ceil((int(current // self.seconds) + 1) * self.seconds - current))
 
 
-api_limiter = RateLimiter()  # keyed on the authenticated agent id
-auth_failure_limiter = RateLimiter(variable="LIVE_AUTH_FAILURES_PER_MINUTE", default=10)  # keyed on the client address
-# Every request outside /api/agent/* and /health, in both web apps, keyed on the client address
-# (web.limit_public_requests). Generous: one page view is about a dozen requests (page, script, styles, fonts, overview).
-public_limiter = RateLimiter(variable="LIVE_PUBLIC_REQUESTS_PER_MINUTE", default=300)
+# Every request except /health, keyed on the client address (web.limit_public_requests).
+# Generous: one page view is a handful of requests (page, stylesheet, mark, fonts).
+public_limiter = RateLimiter()
 
 
 def trusted_proxies() -> frozenset[str]:
@@ -811,7 +302,7 @@ def _address(text: str) -> str:
 
 
 def client_address(peer: str | None, forwarded: list[str] | None = None) -> str:
-    """The address the failed-authentication limit is keyed on.
+    """The address the per-address request limit is keyed on.
 
     Default: the direct peer, and X-Forwarded-For is ignored (any client can send that header).
     Only when the peer is listed in LIVE_TRUSTED_PROXIES: the right-most X-Forwarded-For entry
@@ -834,111 +325,13 @@ def client_address(peer: str | None, forwarded: list[str] | None = None) -> str:
     return peer_text
 
 
-# ---- Hidden characters in rows stored before the character rule (cli scrub-hidden) -----
-# guards.check_characters refuses invisible, control and text-direction characters on WRITE. Rows stored
-# before that rule may still hold them. Two answers, per table:
-#   * every read path that reaches a page, /api/overview, the export or a prompt strips them
-#     (guards.clean_for_reading in core.overview, core.agent_context and the search results), whatever
-#     the table, and without touching the row;
-#   * `scrub-hidden --apply` REWRITES the row only for the display fields listed in SCRUB_FIELDS, and
-#     only when no trigger of the table forbids the update. Append-only and hash-chained tables
-#     (document revisions, the credit ledger, archive answers, audit rows ...) are never rewritten: their
-#     hashes cover the stored bytes, so a rewrite would read as tampering.
-SCRUB_FIELDS: dict[str, tuple[str, ...]] = {
-    "posts": ("title", "body"),
-    "proposals": ("title", "body"),
-    "events": ("summary",),
-    "memory_notes": ("note",),
-    "agents": ("memory",),
-    "action_provenance": ("model", "client"),
-}
-SCRUB_EMPTY = "(empty after hidden characters were removed)"
-SCRUB_IDS_SHOWN = 20
-_UPDATE_TRIGGER = re.compile(r"\bBEFORE\s+UPDATE(?:\s+OF\s+([\w\s,]+?))?\s+ON\s", re.IGNORECASE)
-SCRUB_WHY_PROTECTED = ("left: an append-only or hash-protected table (a trigger forbids the update; a rewrite would "
-                       "break its history). Hidden characters are removed when the row is read")
-SCRUB_WHY_UNLISTED = ("left: not a display field this command rewrites. Hidden characters are removed when the row "
-                      "is read for a page, the overview, the export or a prompt")
-
-
-def _update_protected(cx: sqlite3.Connection, table: str) -> set[str] | None:
-    """Columns of `table` that a BEFORE UPDATE trigger guards: a set of column names, or None when a
-    trigger guards the whole row. Any such trigger counts, whatever it checks: this command never
-    argues with one."""
-    columns: set[str] = set()
-    for (sql,) in cx.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name=?", (table,)):
-        found = _UPDATE_TRIGGER.search(sql or "")
-        if found:
-            if found.group(1) is None:
-                return None
-            columns |= {name.strip().lower() for name in found.group(1).split(",")}
-    return columns
-
-
-def scrub_hidden(apply: bool = False) -> dict[str, Any]:
-    """Count (and with apply=True remove, where allowed) the characters guards.check_characters refuses
-    in text already stored. Scans every text value of every table. Reports table, field, row count and
-    row ids only: never text. See the comment above for which rows may be rewritten and why.
-
-    apply=True rewrites in ONE transaction and appends one operator_audit row; a report alone changes
-    nothing and is not audited."""
-    from . import guards
-    from .core import connect
-    found: list[dict[str, Any]] = []
-    changed = left = 0
-    with connect() as cx:
-        if apply:
-            cx.execute("BEGIN IMMEDIATE")
-        tables = [r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
-        for table in tables:
-            guarded = _update_protected(cx, table)
-            for column in [r[1] for r in cx.execute(f'PRAGMA table_info("{table}")')]:
-                try:
-                    rows = cx.execute(f'SELECT rowid,"{column}" FROM "{table}" WHERE typeof("{column}")=\'text\' ORDER BY rowid').fetchall()
-                except sqlite3.OperationalError:
-                    continue  # a table without rowid: none in this schema; nothing here is rewritten blind
-                hits = [(r[0], r[1]) for r in rows if guards.has_forbidden_character(r[1], multiline=True)]
-                if not hits:
-                    continue
-                protected = guarded is None or column.lower() in guarded
-                listed = column in SCRUB_FIELDS.get(table, ())
-                entry: dict[str, Any] = {"table": table, "field": column, "rows": len(hits),
-                                         "row_ids": [h[0] for h in hits[:SCRUB_IDS_SHOWN]]}
-                if len(hits) > SCRUB_IDS_SHOWN:
-                    entry["row_ids_truncated"] = True
-                if protected:
-                    entry.update(action="left", why=SCRUB_WHY_PROTECTED)
-                elif not listed:
-                    entry.update(action="left", why=SCRUB_WHY_UNLISTED)
-                elif apply:
-                    for rowid, text in hits:
-                        clean = guards.strip_forbidden_characters(text, multiline=True)
-                        cx.execute(f'UPDATE "{table}" SET "{column}"=? WHERE rowid=?', (clean if clean.strip() else SCRUB_EMPTY, rowid))
-                    entry.update(action="changed", why="rewritten without the hidden characters (an unprotected display field)")
-                else:
-                    entry.update(action="would change", why="an unprotected display field: --apply rewrites it without the hidden characters")
-                if entry["action"] == "changed":
-                    changed += len(hits)
-                elif entry["action"] == "left":
-                    left += len(hits)
-                found.append(entry)
-        if apply:
-            audit(cx, f"scrub-hidden apply: {changed} value(s) rewritten, {left} left")
-    return {"applied": bool(apply), "found": found, "values_changed": changed, "values_left": left,
-            "values_would_change": sum(e["rows"] for e in found if e["action"] == "would change"),
-            "note": ("Counts and row ids only; no text is printed. Rows that are left are still shown and fed to prompts "
-                     "WITHOUT their hidden characters: the public overview, the pages, the export and each agent's context "
-                     "strip them on read. A changed post, proposal or note keeps its id, author and date. "
-                     "Not covered by the read-side stripping: the agent routes GET /api/agent/documents/* "
-                     "(see docs/SECURITY.md).")}
-
-
 # ---- Backup ---------------------------------------------------------------------------
 
 def backup(destination: str | os.PathLike[str]) -> Path:
     """Copy the live database with SQLite's online backup API. Never overwrites a file.
 
-    The copy holds everything the database holds: private agent memory and key hashes.
+    The copy holds everything the database holds. For a database made before the agent society was
+    removed that includes its tables: private agent memory and agent key hashes.
     """
     from .core import connect
     target = Path(destination).expanduser().resolve()

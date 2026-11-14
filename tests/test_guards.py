@@ -1,14 +1,7 @@
-"""Content guards: PII/secrets, money solicitation, spam/duplicates. Offline; no model calls."""
+"""Content guards: PII/secrets and money solicitation. Offline; no model calls."""
 import pytest
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 
 from live_genesis import guards
-from live_genesis.app import app
-from live_genesis.cli import demo
-from live_genesis.core import agent_context, authenticate, open_round, overview, seed_agents, submit_action
-
-POST={'action':'post','title':'Guard test','body':'A perfectly ordinary note about shared work.','topic':'engineering'}
 
 # Synthetic values only: none of these is a real account, key or address.
 FAKE_SK='sk-'+'a1B2c3D4'*5
@@ -38,7 +31,6 @@ ALLOWED=[
 @pytest.mark.parametrize('text',ALLOWED)
 def test_ordinary_prose_and_numbers_pass(text):
     assert guards.content_reason(text) is None
-    assert guards.degenerate_reason(text) is None
 
 
 @pytest.mark.parametrize('text,category',[
@@ -99,133 +91,3 @@ def test_money_solicitation_is_blocked(text,category):
 def test_invalid_checksums_are_not_treated_as_accounts():
     assert guards.solicitation_reason('GB83 WEST 1234 5698 7654 32') is None
     assert guards.solicitation_reason(BTC_GENESIS[:-1]+'b') is None
-
-
-def test_degenerate_text():
-    assert 'character' in guards.degenerate_reason('aaaaaaaaaaaaaaaaaaaaaaaa!!')
-    assert 'word' in guards.degenerate_reason('spam spam spam SPAM spam, spam. eggs spam')
-    assert guards.degenerate_reason('We have streets but no footsteps, memory but no weather.') is None
-
-
-def test_normalize_ignores_case_whitespace_and_punctuation():
-    assert guards.normalize('  Hello,   WORLD!!\n(again) ')==guards.normalize('hello world again')=='hello world again'
-    assert guards.normalize('hello world')!=guards.normalize('hello worlds')
-
-
-@pytest.fixture
-def world(isolated_db,monkeypatch):
-    """Seeded agents with the duplicate guard on (conftest turns it off for older tests)."""
-    monkeypatch.setenv('LIVE_DUPLICATE_GUARD','1')
-    return [authenticate(i['key']) for i in seed_agents()]
-
-
-SECRETS=['astra@example.org',FAKE_SK,FAKE_LIVE,'4111 1111 1111 1111','hunter2!',BTC_GENESIS,'paypal.me/livegenesis',IBAN_EXAMPLE]
-
-
-@pytest.mark.parametrize('verb',['post','propose'])
-@pytest.mark.parametrize('field',['title','body'])
-@pytest.mark.parametrize('secret',SECRETS)
-def test_rejection_is_422_names_category_and_never_echoes(world,verb,field,secret):
-    text=('password: ' if secret=='hunter2!' else 'See ')+secret
-    action={'action':verb,'title':'Note','body':'Some ordinary body text.',field:text}
-    with pytest.raises(HTTPException) as err:
-        submit_action(world[0]['id'],action)
-    assert err.value.status_code==422
-    detail=err.value.detail
-    assert detail.startswith('Content rejected: ')
-    assert secret not in detail and secret.split()[-1] not in detail and secret[:8] not in detail
-    state=overview()
-    assert state['metrics']['posts']==0 and state['metrics']['recorded_actions']==0
-
-
-def test_rejected_content_uses_no_quota_key_or_event(world):
-    a=world[0]['id']
-    for bad in ({**POST,'body':'mail me: astra@example.org'},{**POST,'body':'ha '*40},
-                {'action':'propose','kind':'fundraising','title':'Fund us','body':'Pay at gofundme.com/f/x','requested_usd':50}):
-        with pytest.raises(HTTPException) as err:
-            submit_action(a,bad,idempotency_key='guard-key-0001')
-        assert err.value.status_code==422
-    assert agent_context(a)['round']['actions_used']==0
-    state=overview()
-    assert state['metrics']['posts']==0 and state['metrics']['recorded_actions']==0 and not state['events']
-    # Quota and the idempotency key are both still available for a clean action.
-    ok=submit_action(a,POST,idempotency_key='guard-key-0001')
-    assert ok['id']==1 and 'replayed' not in ok
-    assert agent_context(a)['round']['actions_used']==1
-
-
-def test_fundraising_proposal_in_words_is_allowed(world):
-    out=submit_action(world[0]['id'],{'action':'propose','kind':'fundraising','title':'Sponsor a puzzle tournament',
-        'body':'Ask the operator to seek $100 in sponsorship or donations for compute. No outreach or payment collection is authorized yet.',
-        'requested_usd':100})
-    assert out['id']==1
-
-
-def test_duplicates_are_rejected_with_409(world):
-    astra,moss=world[0]['id'],world[1]['id']
-    first=submit_action(astra,POST)
-    open_round()
-    shouted={**POST,'title':'  GUARD   test!! ','body':'a perfectly ordinary note -- about shared work'}
-    for who,phrase in ((astra,'you already published'),(moss,"another agent's recent content")):
-        with pytest.raises(HTTPException) as err:
-            submit_action(who,shouted,idempotency_key='dup-key-0001')
-        assert err.value.status_code==409 and phrase in err.value.detail
-        assert POST['body'] not in err.value.detail
-        assert agent_context(who)['round']['actions_used']==0
-    # The same text as a proposal is still a duplicate; different text is fine.
-    with pytest.raises(HTTPException) as err:
-        submit_action(astra,{'action':'propose','title':POST['title'],'body':POST['body']})
-    assert err.value.status_code==409
-    assert submit_action(moss,{**POST,'body':POST['body']+' With one addition.'},idempotency_key='dup-key-0001')['id']==first['id']+1
-    assert overview()['metrics']['posts']==2
-
-
-def test_idempotent_replay_is_not_reported_as_duplicate(world):
-    a=world[0]['id']
-    first=submit_action(a,POST,idempotency_key='replay-key-01')
-    assert submit_action(a,POST,idempotency_key='replay-key-01')=={**first,'replayed':True}
-
-
-def test_other_agents_duplicates_only_checked_in_recent_window(world,monkeypatch):
-    monkeypatch.setattr(guards,'RECENT_WINDOW',2)
-    monkeypatch.setenv('LIVE_ACTIONS_PER_ROUND','10')
-    astra,moss=world[0]['id'],world[1]['id']
-    submit_action(astra,POST)
-    for n in ('first','second'):
-        submit_action(astra,{**POST,'body':f'The {n} follow-up on the shared work.'})
-    assert submit_action(moss,POST)['id']==4          # outside the window for other agents
-    with pytest.raises(HTTPException):
-        submit_action(astra,POST)                     # an agent's own history is always checked
-
-
-def test_duplicate_guard_switch_leaves_other_guards_on(world,monkeypatch):
-    monkeypatch.setenv('LIVE_DUPLICATE_GUARD','0')
-    monkeypatch.setenv('LIVE_ACTIONS_PER_ROUND','3')
-    a=world[0]['id']
-    submit_action(a,POST); submit_action(a,POST)
-    with pytest.raises(HTTPException) as err:
-        submit_action(a,{**POST,'body':'astra@example.org'})
-    assert err.value.status_code==422
-
-
-def test_api_returns_category_without_echo(isolated_db,monkeypatch):
-    monkeypatch.setenv('LIVE_DUPLICATE_GUARD','1')
-    auth={'Authorization':'Bearer '+seed_agents()[0]['key']}
-    client=TestClient(app)
-    bad=client.post('/api/agent/action',json={**POST,'body':'Use '+FAKE_SK},headers=auth)
-    assert bad.status_code==422 and bad.json()=={'detail':'Content rejected: looks like an API key or credential. Remove that part and resend; the matched text is not shown here.'}
-    # An agent pasting its own bearer key is stopped too, and the response does not repeat it.
-    own=client.post('/api/agent/action',json={**POST,'body':'my key is '+auth['Authorization'][7:]},headers=auth)
-    assert own.status_code==422 and auth['Authorization'][7:] not in own.text
-    assert client.get('/api/agent/context',headers=auth).json()['round']['actions_used']==0
-    assert client.post('/api/agent/action',json=POST,headers=auth).status_code==200
-    assert overview()['metrics']['posts']==1
-
-
-def test_demo_still_succeeds_with_guards_on(isolated_db,monkeypatch):
-    monkeypatch.setenv('LIVE_DUPLICATE_GUARD','1')
-    demo()
-    state=overview()
-    assert state['metrics']['posts']==9 and state['metrics']['proposals']==3  # 7 posts and 2 scripted replies
-    assert state['mode']=='DEMO'
-    assert agent_context(1)['round']['actions_used']==0

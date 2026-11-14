@@ -5,10 +5,8 @@ Every answer is kept with its date, model id and where it came from, so the publ
 cadence is about one run a month; nothing here enforces or schedules it.
 
 What this module is, honestly:
-* Answerers are MODELS, not resident agents. No persona and no resident CONSTITUTION: the
-  system text is the single line `SYSTEM_LINE` and the user message is exactly the question's
-  prompt. No post, event, round, round action, memory note or provenance row is written,
-  and reservations carry `agent_id=NULL` (as in study.py).
+* Answerers are MODELS. No persona: the system text is the single line `SYSTEM_LINE` and the
+  user message is exactly the question's prompt. Reservations carry `agent_id=NULL`.
 * A model never sees another model's answer or any earlier answer: there is no text channel
   between answerers at all.
 * "Changed" (`normalise`, `CHANGED_RULE`) is a plain text comparison with that answerer's
@@ -21,14 +19,16 @@ What this module is, honestly:
   locked rows before every real answer); only new questions are appended. A run asks every
   locked question of both tracks unless `--set` limits it, and `archive_run_sets` records how
   many questions of each track a run covered, so a question has no cell before its first run.
-* Sources stay apart: `engine` (this server called the model; reservation id kept), `api`
-  (an outside client sent it and named its own model: self-declared), `demo` (scripted by
-  `cli demo-archive`), `mock` (dry run or a replaced `engine.infer`; never public).
+* Sources stay apart: `engine` (this server called the model; reservation id kept), `demo`
+  (scripted by `cli demo-archive`), `mock` (dry run or a replaced `engine.infer`; never public).
+  A fourth, `api` (an outside client sent the answer and named its own model: self-declared), is
+  no longer written: the route that took such answers went with the agent society on 14 November
+  2026. A database from before may hold such rows; they are still read and shown as self-declared.
 
-Money safety (local ESTIMATES only; nothing here moves money): `run_archive` passes the same
-gates as `engine.run_round` and `study.run_study` (provider, key, `LIVE_ALLOW_PAID_CALLS=YES`,
-validated budget config, no unconfirmed reservation, a required `max_usd` that the worst case
-must fit under before the first call), and every call is reserve -> infer -> settle.
+Money safety (local ESTIMATES only; nothing here moves money): `run_archive` passes every gate
+(provider, key, `LIVE_ALLOW_PAID_CALLS=YES`, validated budget config, no unconfirmed reservation,
+a required `max_usd` that the worst case must fit under before the first call), and every call
+is reserve -> infer -> settle.
 
 Several services in one run: a model is reached through `openai`, `anthropic`, the single
 `openai-compatible` endpoint, or a NAMED endpoint (`LIVE_ARCHIVE_ENDPOINTS`, providers.endpoints)
@@ -45,7 +45,6 @@ A failed call (FAILURE RULE, printed by `archive-plan`):
 * priced endpoint (`rates`): unchanged. The hold stays `unconfirmed`, the run STOPS, and every
   paid command is blocked until the operator reconciles. Zero-priced answerers are asked
   first, so a priced failure never costs a free column.
-`engine.run_round` and `study.run_study` are not touched by any of this.
 
 Repeat samples (optional; `LIVE_ARCHIVE_SAMPLES` / `archive-run --samples`, 1-5, default 1): a run may ask
 each question several times of each model. Every sample is its own call with its own hold and its own
@@ -60,8 +59,8 @@ the replies from a file. Its rows live in their own tables and reach the payload
 `chatbots` block; they are never rows of `archive_answers`, never in a model grid and never part of a
 model's `changed`. That module is imported lazily here (it imports this one).
 
-`live_genesis.core` imports this module for `SCHEMA`, so the engine is imported lazily: the
-web processes must never load the engine or a provider SDK.
+`live_genesis.core` imports this module for its tables, so the engine is imported lazily: the
+web process must never load the engine or a provider SDK.
 """
 from __future__ import annotations
 
@@ -78,9 +77,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from fastapi import HTTPException
-
-from . import config, controls, guards, providers, study
+from . import config, controls, guards, providers
 from . import core  # attributes are used at call time only (core imports this module for SCHEMA)
 
 QUESTIONS_FILE = Path(__file__).resolve().parent / "archive_questions.json"
@@ -136,10 +133,9 @@ CHANGED_RULE = ("An answer counts as changed when its text differs from the same
 TRUNCATED = "reply cut off at the output limit"
 EMPTY = "empty reply"
 TOO_LONG = "reply longer than the archive stores"
-# Model ids of ARCHIVE answerers only (the operator's own setting). Wider than core.declared_ok, which stays as it
-# is for what agents declare about themselves: a tag after a colon ("gemma3:4b", "vendor/model:free"), several
-# slashes and a leading @ ("@cf/meta/llama-..."), dated ids. Still nothing shaped like a domain name, because the id
-# is shown on public pages; every page escapes it.
+# Model ids of archive answerers (the operator's own setting): a tag after a colon ("gemma3:4b",
+# "vendor/model:free"), several slashes and a leading @ ("@cf/meta/llama-..."), dated ids. Nothing shaped like a
+# domain name, because the id is shown on public pages; every page escapes it.
 MODEL_ID = re.compile(r"[A-Za-z0-9._:/@-]{1,120}")
 MODEL_ID_RULE = ("must be 1-120 characters of A-Z a-z 0-9 . _ : / @ - with no space and no '..'; a dot may not be "
                  "followed by letters that end a name (nothing shaped like a domain name)")
@@ -175,7 +171,7 @@ SAMPLES_RULE = ("In a run with several samples each question is asked that many 
 ANSWERS_TABLE = '''CREATE TABLE IF NOT EXISTS archive_answers (
     id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL REFERENCES archive_runs(id),
     question_set TEXT NOT NULL, question_id TEXT NOT NULL, answerer TEXT NOT NULL,
-    agent_id INTEGER REFERENCES agents(id), provider TEXT, model TEXT NOT NULL,
+    agent_id INTEGER, provider TEXT, model TEXT NOT NULL,   -- agent_id: set only on `api` rows of an older database
     source TEXT NOT NULL CHECK(source IN ('engine','api','demo','mock')),
     reservation_id INTEGER REFERENCES budget_reservations(id),
     state TEXT NOT NULL CHECK(state IN ('answered','no_answer','withheld')),
@@ -809,8 +805,7 @@ def max_output_tokens() -> int:
 
 
 def model_id_ok(value: Any) -> bool:
-    """The shape rule for an archive answerer's model id (MODEL_ID_RULE). Separate from, and wider
-    than, core.declared_ok, which keeps ruling what agents declare about themselves."""
+    """The shape rule for an archive answerer's model id (MODEL_ID_RULE)."""
     return (isinstance(value, str) and MODEL_ID.fullmatch(value) is not None and ".." not in value
             and not core.DECLARED_DOMAIN.search(value) and not guards.has_forbidden_character(value)
             and not guards.content_reason(value))
@@ -863,9 +858,9 @@ def answerers(only: str | None = None) -> list[dict]:
 # ---- Plan (free) ------------------------------------------------------------------------------
 
 def call_hold(prompt: str, input_rate: float, output_rate: float, tokens_out: int) -> float:
-    """Worst-case estimated USD for one call: the arithmetic of study.call_hold / engine.call_hold
-    (UTF-8 bytes of system + prompt plus study.INPUT_TOKEN_MARGIN bound the input tokens)."""
-    tokens_in = len(SYSTEM_LINE.encode("utf-8")) + len(prompt.encode("utf-8")) + study.INPUT_TOKEN_MARGIN
+    """Worst-case estimated USD for one call: UTF-8 bytes of system + prompt plus
+    controls.INPUT_TOKEN_MARGIN bound the input tokens; the output term is the whole output limit."""
+    tokens_in = len(SYSTEM_LINE.encode("utf-8")) + len(prompt.encode("utf-8")) + controls.INPUT_TOKEN_MARGIN
     return tokens_in * input_rate / 1e6 + tokens_out * output_rate / 1e6
 
 
@@ -970,7 +965,7 @@ def plan(only: str | None = None, question_set: str | None = None, samples: Any 
 def render_plan(planned: dict, *, locked: dict | None = None) -> str:
     """Text for `archive-plan`. `locked` is accepted for older callers; the lock state of each
     track is read from the plan itself. Prints endpoint NAMES only: no URL, no host, no key."""
-    cap = study.suggested_cap(planned["worst_case_usd"])
+    cap = controls.suggested_cap(planned["worst_case_usd"])
     lines, unlocked = [], []
     for state in planned["tracks"]:
         flag = "" if state["track"] == "core" else " --set trending"
@@ -1018,7 +1013,7 @@ def render_plan(planned: dict, *, locked: dict | None = None) -> str:
                      "tokens (openai, anthropic and openai-compatible entries; a named endpoint uses its own).")
     lines += [f"Worst-case estimate for one run: ${planned['worst_case_usd']:.6f} "
               f"(at most ${planned['worst_case_usd_per_model']:.6f} per model; largest single hold ${planned['largest_call_hold_usd']:.6f}).",
-              f"This is {study.COST_CAVEAT}.",
+              f"This is {controls.COST_CAVEAT}.",
               "If a call fails: " + FAILURE_RULE,
               "Nothing was called. The PAID command, to be run only on the owner's explicit word (--max-usd and "
               "LIVE_ALLOW_PAID_CALLS=YES are required for every run, a free one included):",
@@ -1283,9 +1278,12 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
             if _has(cx, "demo"):
                 raise ArchiveRefused("This database holds scripted demo answers; real answers are never mixed with them. "
                                      "Use the real database. No paid call was made.")
-            taken = {r[0].casefold() for r in cx.execute("SELECT name FROM agents")}
+            # An older database may hold answers an outside client sent under its own name (source `api`):
+            # a label equal to such a name would continue that client's series.
+            taken = {r[0].casefold() for r in cx.execute("SELECT DISTINCT answerer FROM archive_answers WHERE source='api'")}
             if any(a["label"].casefold() in taken for a in models):
-                raise ArchiveRefused("A LIVE_ARCHIVE_MODELS label equals an agent name; choose another label.")
+                raise ArchiveRefused("A LIVE_ARCHIVE_MODELS label equals the name of an outside answerer already recorded in this "
+                                     "database; choose another label.")
         pending = controls.unconfirmed_ids(cx)
         baseline = core._budget(cx)["committed_usd"]
     if pending:
@@ -1294,7 +1292,7 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
     if baseline + worst > ceiling:
         raise ArchiveRefused(f"Worst-case estimate ${worst:.6f} does not fit under the local ceiling: ${baseline:.6f} of "
                              f"${ceiling:.2f} is already committed. No paid call was made.")
-    cap_ceiling = min(planned["spend_limit_usd"], baseline + max_usd + study.LEDGER_ROUNDING_USD)
+    cap_ceiling = min(planned["spend_limit_usd"], baseline + max_usd + controls.LEDGER_ROUNDING_USD)
     kind, source = ("real", "engine") if real else ("mock", "mock")
     with core.connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
@@ -1325,7 +1323,7 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
             except providers.ProviderConfigError:
                 where = None
             digest = state_of["digest"] = lookup_model_digest(where, answerer["model"])
-            extra: dict[str, Any] = {}   # only what this call needs: a resident-style call passes neither
+            extra: dict[str, Any] = {}   # only what this call needs
             if record is not None:
                 extra["endpoint"] = record
             wait = max(float(pause_seconds or 0.0), answerer["pause_seconds"], 0.0)
@@ -1335,7 +1333,7 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
                 hold = planned["holds_by_model"][answerer["label"]][question["id"]]
                 if answerer["send_sampling"]:
                     extra["sampling"] = sampling_for(sample)
-                if math.fsum(spent) + hold > max_usd + study.EPSILON_USD:
+                if math.fsum(spent) + hold > max_usd + controls.EPSILON_USD:
                     reason = "run cap reached; no further calls made"
                     break
                 try:
@@ -1636,9 +1634,8 @@ def demo_archive() -> dict:
     trending = demo_trending()
     with core.connect() as cx:
         cx.execute("BEGIN IMMEDIATE")
-        if (_has(cx, "real") or _locked(cx, "core") or _locked(cx, "trending") or cx.execute("SELECT 1 FROM events WHERE demo=0 LIMIT 1").fetchone()
-                or cx.execute("SELECT 1 FROM api_usage LIMIT 1").fetchone()):
-            raise ArchiveRefused("Real activity, real archive answers or a locked question list found. To keep data honest, "
+        if _has(cx, "real") or _locked(cx, "core") or _locked(cx, "trending") or cx.execute("SELECT 1 FROM api_usage LIMIT 1").fetchone():
+            raise ArchiveRefused("Recorded model usage, real archive answers or a locked question list found. To keep data honest, "
                                  "use a fresh DB for the scripted archive: LIVE_DB=demo.db")
         if _has(cx, "demo") or cx.execute("SELECT 1 FROM archive_chatbot_runs LIMIT 1").fetchone():
             raise ArchiveRefused("The scripted archive already exists in this database; use a fresh DB.")
@@ -1665,62 +1662,6 @@ def demo_archive() -> dict:
         chat = archive_chatbots.demo(cx)
     return {"runs": len(DEMO_DATES), "answerers": list(DEMO_MODELS), "answers": written,
             "trending_questions": len(DEMO_TRENDING), **chat}
-
-
-# ---- Outside clients (POST /api/agent/archive-answer) ----------------------------------------------
-
-def submit_api_answer(agent: dict, run: int, question_id: str, answer: Any, model: str | None) -> dict:
-    """One self-declared answer from an outside client, for its own model, in the latest real run.
-
-    Stored with source `api`, labelled with the agent's name; `model` is whatever the caller put
-    in X-Agent-Model (shape-checked, never verified). The text passes the character rule and the
-    content guards (refused with 422, nothing stored). One answer per (run, question, agent): always
-    sample 1, also in a run that asks its own models several times.
-    Uses no round quota; counted in the `archive-minute` window."""
-    if model is None or not core.declared_ok(model):
-        raise HTTPException(422, f"X-Agent-Model is required for an archive answer and {core.DECLARED_RULE}.")
-    if guards.content_reason(model):
-        raise HTTPException(422, "X-Agent-Model rejected by the content guards. Send only a model name.")
-    if not isinstance(answer, str) or not answer.strip() or len(answer.strip()) > ANSWER_CHARS:
-        raise HTTPException(422, f"answer must be 1-{ANSWER_CHARS} characters")
-    text = answer.strip()
-    guards.check_characters(text, "answer", multiline=True)
-    reason = guards.content_reason(text)
-    if reason:
-        raise guards.refusal(reason)
-    if not normalise(text):
-        raise HTTPException(422, "answer holds no words")
-    with core.connect() as cx:
-        cx.execute("BEGIN IMMEDIATE")
-        row = cx.execute("SELECT * FROM agents WHERE id=?", (agent["id"],)).fetchone()
-        if row is None:
-            raise HTTPException(401, "Unknown agent")
-        controls.check_actor(row, agent.get("key_hash"))
-        controls.consume_window(cx, row["id"], "archive-minute")
-        track = track_of(question_id)
-        try:
-            data = require_lock(cx, track)
-        except ArchiveRefused:
-            raise HTTPException(409, "The answer archive is not accepting answers (the question list is not locked, or "
-                                     "its file changed). Retrying will not help; ask the operator.") from None
-        latest = cx.execute("SELECT id,number FROM archive_runs WHERE kind='real' ORDER BY number DESC LIMIT 1").fetchone()
-        if _has(cx, "demo") or latest is None:
-            raise HTTPException(409, "No archive run is open for answers. Runs are opened by the operator, about once a month.")
-        if run != latest["number"]:
-            raise HTTPException(409, f"Answers are accepted only for the latest run, which is run {latest['number']}.")
-        position = {q["id"]: q["position"] for q in data["questions"]}.get(question_id)
-        if position is None:
-            raise HTTPException(404, "Unknown question id. The ids and exact prompts are in the published archive.json.")
-        covered = {r["track"]: r["questions"] for r in cx.execute("SELECT track,questions FROM archive_run_sets WHERE run_id=?", (latest["id"],))}
-        if position > (covered or {"core": len(data["questions"])}).get(track, 0):
-            raise HTTPException(409, f"Run {latest['number']} did not ask this question. It can be answered from the next run that includes it.")
-        if cx.execute("SELECT 1 FROM archive_answers WHERE run_id=? AND question_id=? AND answerer=?",
-                      (latest["id"], question_id, row["name"])).fetchone():
-            raise HTTPException(409, "This agent already answered this question in this run. Answers are never replaced.")
-        stored = _store(cx, latest["id"], data["question_set"], question_id, row["name"], model=model, source="api",
-                        state="answered", text=text, agent_id=row["id"])
-    return {"recorded": True, "run": run, "question_id": question_id, "answerer": row["name"], "source": "api",
-            "model": model, "model_verified": False, "changed": stored["changed"]}
 
 
 # ---- Public payload (read-only; what the pages and published/archive.json hold) ---------------------
@@ -1789,7 +1730,7 @@ def public_payload(readonly: bool = True) -> dict:
         current = {"archive_sets", "archive_set_versions", "archive_run_sets"} <= tables
         locked = _locked(cx, "core") if current else None
         if not current and "archive_sets" in tables:
-            # Opened read-only before migrate() ran (the observatory on a database from before the
+            # Opened read-only before migrate() ran (the web app on a database from before the
             # trending track): the one lock such a database can hold is the core lock.
             row = cx.execute("SELECT * FROM archive_sets ORDER BY locked_at, question_set LIMIT 1").fetchone()
             locked = dict(row) if row else None
@@ -2147,6 +2088,40 @@ def payload_problem(data: object) -> str | None:
     return None
 
 
+def publish_problem(answers: object) -> str | None:
+    """Why a WHOLE payload (the model track included) may not be published, or None: the payload rules, no
+    mock answer ever, no scripted demo answer (the demo is published without review), the endpoint fields,
+    the chat-app block's own rules, answers only to locked questions, and closed key sets.
+
+    Nothing calls this today. It was the gate of the full reviewed export, which went with the agent society
+    (14 November 2026); the public site and the reviewed export hold the chat-app track only
+    (archive_chatbots.site_problem / export_problem). It is kept, with its tests, as the rules a publication
+    of model answers would have to pass, together with the content guards and `set_hash_problem`."""
+    problem = payload_problem(answers)
+    if problem:
+        return problem
+    if any(a["source"] == "mock" for a in answers["answers"]):
+        return "it holds mock answers, which are never published"
+    problem = export_problem(answers)   # the endpoint fields: present on every answer, set on server calls only
+    if problem:
+        return problem
+    if any(a["source"] == "demo" for a in answers["answers"]) or any(run["demo"] for run in answers["runs"]):
+        return "it holds scripted demo answers; the demo is published without review"
+    if "chatbots" in answers:
+        from . import archive_chatbots
+        problem = archive_chatbots.export_problem(answers["chatbots"])
+        if problem:
+            return problem
+    if answers["answers"] and not answers["locked"] and not answers["trending"]["locked"]:
+        return "it holds answers but the question list is not locked"
+    for track, ids in (("core", {q["id"] for q in answers["questions"]}), ("trending", {q["id"] for q in answers["trending"]["questions"]})):
+        holder = answers if track == "core" else answers["trending"]
+        if not holder["locked"] and (any(a["question"] in ids for a in answers["answers"]) or any(run["asked"][track] for run in answers["runs"])):
+            return ("it holds answers but the question list is not locked" if track == "core"
+                    else "it holds answers to trending questions that are not locked")
+    return closed_problem(answers)   # exactly the keys the payload holds, and the values the code derives
+
+
 def _file_state(track: str, locked: dict | None) -> tuple[dict, bool | None]:
     try:
         data = load_questions(track=track)
@@ -2202,7 +2177,7 @@ def status() -> dict:
             "last_run_answerers": last_run, "chatbots": chat,
             "samples_configured": os.getenv(SAMPLES_VARIABLE, "").strip() or None,
             "note": "mock runs are never published; `samples` is how many times a run asked each question of each model, and "
-                    "`answers` counts one row per sample; estimated_usd is " + study.COST_CAVEAT
+                    "`answers` counts one row per sample; estimated_usd is " + controls.COST_CAVEAT
                     + "; a declared-free endpoint is the operator's unverified statement and always shows $0"}
 
 
@@ -2258,8 +2233,8 @@ def handle_command(args, parser) -> bool:
         elif args.command == "archive-run":
             print(render_plan(plan(args.models, args.question_set, args.samples)))
             print("PAID RUN: provider requests follow. A failed call is handled by the rule printed above (\"If a call fails\").")
-            config.load_provider_credentials()  # with `cli round` and `cli study-run`, the only place .env provider keys enter a process
-            # Answers are plain sentences, not JSON objects: JSON mode is for resident turns only.
+            config.load_provider_credentials()  # with `cli check-provider`, the only place .env provider keys enter a process
+            # Answers are plain sentences, not JSON objects: JSON mode is never wanted here.
             os.environ["LIVE_COMPAT_JSON_MODE"] = "off"
             done = run_archive(max_usd=args.max_usd, only=args.models, pause_seconds=args.pause, question_set=args.question_set,
                                samples=args.samples)
@@ -2270,8 +2245,8 @@ def handle_command(args, parser) -> bool:
                 print("RUN COMPLETE WITH GAPS:", done["stop_reason"])
             elif done["status"] != "complete":
                 print("RUN INCOMPLETE:", done["stop_reason"])
-            print(f"Estimated cost is {study.COST_CAVEAT}. Answers are published only through the reviewed path: "
-                  "python -m live_genesis.snapshot --export")
+            print(f"Estimated cost is {controls.COST_CAVEAT}. Model answers are not published: the public site is the "
+                  "chat-app comparison. Look at them locally (docs/DEVELOPER.md).")
         elif args.command == "archive-status":
             print(json.dumps(status(), indent=2))
         else:

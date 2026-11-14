@@ -2,6 +2,7 @@
 share cards (archive_pages.py), and the upgrade of a database from before it. Offline: every
 model call is a replaced `engine.infer`."""
 import hashlib
+import copy
 import json
 import re
 import sqlite3
@@ -10,9 +11,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from live_genesis import archive, archive_pages, controls, core, engine, snapshot
+from live_genesis import archive, archive_pages, controls, core, engine
 from test_archive import (HOSTILE, MODELS, REPO, STATIC, TREND, as_real, assert_page_is_safe, fake, question_file,  # noqa: F401
-                          ready, retarget_archive, rows, run_cli, trending_file)
+                          publish_refusal, ready, rendered_site, rows, run_cli, society_state, society_tables, trending_file)
 
 OLD_SCHEMA = REPO / 'tests' / 'fixtures' / 'archive_schema_v1.sql'
 
@@ -292,11 +293,11 @@ def test_dry_run_covers_both_files_and_is_never_public(ready, tmp_path, monkeypa
 def old_database(monkeypatch):
     """Rebuild the archive tables as first released and fill them the way that release did: a
     locked core set, one run, answers. Returns the locked hash."""
-    core.seed_agents()
     data = archive.load_questions()
     with core.connect() as cx:
         for table in ('archive_run_sets', 'archive_answers', 'archive_runs', 'archive_questions', 'archive_set_versions', 'archive_sets'):
             cx.execute(f'DROP TABLE {table}')
+        society_tables(cx)                         # an older database also holds the removed society's tables
         cx.executescript(OLD_SCHEMA.read_text(encoding='utf-8'))
         cx.execute("INSERT INTO archive_sets VALUES (?,?,20,'2026-10-01T10:00:00+00:00')", (data['question_set'], data['sha256']))
         why = {g['name']: g['why'] for g in data['groups']}
@@ -319,14 +320,16 @@ def old_database(monkeypatch):
 def test_a_database_from_before_the_trending_track_keeps_working(ready, tmp_path, monkeypatch):
     digest = old_database(monkeypatch)
     trending_file(tmp_path, monkeypatch, 2)
-    # Read-only, before any migration (the observatory right after the upgrade): the old record is shown as it was.
+    # Read-only, before any migration (the web app right after the upgrade): the old record is shown as it was.
+    society = society_state()
     before = archive.public_payload(readonly=True)
     assert archive.payload_problem(before) is None
     assert before['locked'] is True and before['set_hash'] == digest and before['locked_at'] == '2026-10-01T10:00:00+00:00'
     assert len(before['answers']) == 20 and before['runs'][0]['asked'] == {'core': 20, 'trending': 0}
     assert before['trending']['locked'] is False
-    core.init_db()                                                   # what every CLI command and the app do on start
+    core.init_db()                                                   # what every CLI command does on start
     core.init_db()                                                   # and it is idempotent
+    assert society_state() == society                                # the society's table is left exactly as it was
     with core.connect() as cx:
         names = {r[0] for r in cx.execute("SELECT name FROM sqlite_master WHERE name LIKE 'archive%'")}
         assert 'archive_runs_real_needs_lock' not in names and {'archive_runs_real_needs_version', 'archive_set_versions',
@@ -356,8 +359,7 @@ def test_a_database_from_before_the_trending_track_keeps_working(ready, tmp_path
     as_real(monkeypatch, 'Canberra.')
     done = archive.run_archive(max_usd=1)
     assert done['run'] == 2 and done['answers']['answered'] == 40 and done['questions_asked'] == {'core': 20}
-    assert core.seed_agents() == []
-    with core.connect() as cx:
+    with core.connect() as cx:                                       # one more row of the kind the old database holds
         cx.execute('BEGIN IMMEDIATE')
         stored = archive._store(cx, 2, 'basic-1', 'Q03', 'Astra', model='outside-model-2', source='api', state='answered',
                                 text='Sydney.', agent_id=1)
@@ -372,85 +374,37 @@ def test_a_database_from_before_the_trending_track_keeps_working(ready, tmp_path
     assert 'Canberra.' in pages['q/Q03.html'] and 'id="m-run-1"' in pages['q/Q03.html'] and 't/T001.html' in pages
 
 
-# ---- outside clients ------------------------------------------------------------------------------------------
+# ---- publication rules ---------------------------------------------------------------------------------------------
 
-def test_outside_client_can_answer_a_trending_question_a_run_asked(ready, tmp_path, monkeypatch):
-    from live_genesis.app import app
-    keys = {item['name']: item['key'] for item in core.seed_agents()}
-    auth = {'Authorization': f"Bearer {keys['Astra']}", 'X-Agent-Model': 'vendor/outside-model-2'}
-    body = {'run': 1, 'question_id': 'T001', 'answer': 'The newest one I know about came out in 2025.'}
-    trending_file(tmp_path, monkeypatch, 1)
-    archive.lock()
-    as_real(monkeypatch, 'Seven.')
-    with TestClient(app) as client:
-        monkeypatch.setenv('OPENAI_API_KEY', 'fake-key-never-used')        # the web app dropped it from this process on import
-        archive.run_archive(max_usd=1)                                # run 1: core only
-        refused = client.post('/api/agent/archive-answer', json=body, headers=auth)
-        assert refused.status_code == 409 and 'not accepting answers' in refused.json()['detail']       # trending not locked
-        archive.lock('trending')
-        late = client.post('/api/agent/archive-answer', json=body, headers=auth)
-        assert late.status_code == 409 and 'Run 1 did not ask this question' in late.json()['detail']
-        assert client.post('/api/agent/archive-answer', json={**body, 'question_id': 'Q03'}, headers=auth).status_code == 200
-        archive.run_archive(max_usd=1)                                # run 2: both
-        done = client.post('/api/agent/archive-answer', json={**body, 'run': 2}, headers=auth)
-        assert done.status_code == 200 and done.json()['question_id'] == 'T001' and done.json()['source'] == 'api'
-        for question, status in (('T002', 404), ('T01', 422), ('T0001', 422), ('X001', 422)):
-            response = client.post('/api/agent/archive-answer', json={**body, 'run': 2, 'question_id': question}, headers=auth)
-            assert response.status_code == status, question
-        trending_file(tmp_path, monkeypatch, 2)                       # T002 is in the file but not locked: still unknown
-        assert client.post('/api/agent/archive-answer', json={**body, 'run': 2, 'question_id': 'T002'}, headers=auth).status_code == 404
-        archive.lock('trending')                                      # locked now, but run 2 did not ask it
-        response = client.post('/api/agent/archive-answer', json={**body, 'run': 2, 'question_id': 'T002'}, headers=auth)
-        assert response.status_code == 409 and 'did not ask' in response.json()['detail']
-    stored = rows("SELECT question_set,question_id,source FROM archive_answers WHERE source='api' ORDER BY id")
-    assert stored == [{'question_set': 'basic-1', 'question_id': 'Q03', 'source': 'api'},
-                      {'question_set': 'trending', 'question_id': 'T001', 'source': 'api'}]
-    assert 'Sent in by someone else, not checked · version vendor/outside-model-2' in archive_pages.render_question(archive.public_payload(), 'T001')
-
-
-# ---- reviewed export -----------------------------------------------------------------------------------------------
-
-def test_export_and_check_understand_both_sets(ready, tmp_path, monkeypatch):
-    core.seed_agents()
+def test_publication_rules_understand_both_sets(ready, tmp_path, monkeypatch):
     trending_file(tmp_path, monkeypatch, 2)
     archive.lock(); archive.lock('trending')
     as_real(monkeypatch, 'Seven.')
     archive.run_archive(max_usd=1, question_set='core')
     archive.run_archive(max_usd=1)
-    out = tmp_path / 'published'
-    manifest = snapshot.export_published(out)
-    assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']        # still one archive file
+    good = json.loads(json.dumps(archive.public_payload()))
     trend_hash = rows("SELECT sha256 FROM archive_set_versions WHERE question_set='trending'")[0]['sha256']
-    assert manifest['schema'] == 'live-genesis-published/5' and manifest['archive']['runs'] == 2
-    assert manifest['archive']['trending'] == {'questions': 2, 'question_set': 'trending', 'set_hash': trend_hash, 'version': 1}
-    assert manifest['archive']['answers_by_source'] == {'engine': 84, 'api': 0, 'demo': 0, 'mock': 0}
-    exported = json.loads((out / 'archive.json').read_bytes())
-    assert exported == json.loads(json.dumps(archive.public_payload())) and exported['schema'] == 'live-genesis-archive/3'
-    snapshot.approve_published(out, confirmed=True)
-    good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
-    site = tmp_path / 'site'
-    monkeypatch.setenv('LIVE_DB', str(tmp_path / 'no-such.sqlite'))
-    snapshot.build_from_data(site, out)
+    assert good['schema'] == 'live-genesis-archive/3' and len(good['runs']) == 2 and publish_refusal(good) == ''
+    assert (len(good['trending']['questions']), good['trending']['question_set'], good['trending']['set_hash'], good['trending']['version']) == \
+        (2, 'trending', trend_hash, 1)
+    assert good['answers_by_source'] == {'engine': 84, 'api': 0, 'demo': 0}
+    pages = archive_pages.render_site(good)
     for name in ('trending.html', 't/T001.html', 't/T002.html', 'card/T001.html', 'card/Q01.html', 'q/Q01.html'):
-        assert (site / 'archive' / name).is_file(), name
-    page = (site / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8')
+        assert name in pages, name
+    page = pages['card/T001.html']
     assert 'AI-generated · we asked it ourselves · may be wrong' in page and 'scripted' not in page.lower()
     assert 'data-method="asked-by-server"' in page and 'data-provenance="recorded"' in page
 
     def refused(edit, match):
-        retarget_archive(out, edit)
-        for call in (lambda: snapshot.check_published(out), lambda: snapshot.build_from_data(tmp_path / 'again', out)):
-            with pytest.raises(RuntimeError, match=match):
-                call()
-        for name, content in good.items():
-            (out / name).write_bytes(content)
-        assert snapshot.check_published(out)['reviewed'] is True
+        data = copy.deepcopy(good)
+        edit(data)
+        assert re.search(match, publish_refusal(data)), match
 
     refused(lambda d: d['trending'].update(locked=False, version=0), 'trending questions that are not locked')
     refused(lambda d: d['trending'].update(locked=False), 'version does not fit its lock state')
-    assert archive.payload_problem({k: v for k, v in json.loads(good['archive.json']).items() if k != 'trending'}) == \
+    assert archive.payload_problem({k: v for k, v in good.items() if k != 'trending'}) == \
         'key trending is missing or has the wrong type'
-    broken = json.loads(good['archive.json']); del broken['trending']['set_hash']
+    broken = copy.deepcopy(good); del broken['trending']['set_hash']
     assert archive.payload_problem(broken) == 'trending: key set_hash is missing or has the wrong type'
     refused(lambda d: d['trending']['questions'][0].update(id='../x'), 'trending question ids must be distinct and look like T001')
     refused(lambda d: d['trending']['questions'][1].update(id='T001'), 'trending question ids must be distinct')
@@ -464,32 +418,19 @@ def test_export_and_check_understand_both_sets(ready, tmp_path, monkeypatch):
     refused(lambda d: d['runs'][1]['asked'].update(trending=1), 'a question its run did not ask')          # an answer to T002 is there
     refused(lambda d: [a.update(run=1) for a in d['answers'] if a['question'] == 'T001'], 'a question its run did not ask')
     refused(lambda d: d.update(schema='live-genesis-archive/1'), 'unknown schema')
-    # The manifest's own figures for the trending set are compared too.
-    manifest = json.loads(good['MANIFEST.json']); manifest['archive']['trending']['questions'] = 3
-    (out / 'MANIFEST.json').write_text(json.dumps(manifest))
-    with pytest.raises(RuntimeError, match='counts in the manifest do not match archive.json'):
-        snapshot.check_published(out)
-    manifest = json.loads(good['MANIFEST.json']); manifest['schema'] = 'live-genesis-published/2'
-    (out / 'MANIFEST.json').write_text(json.dumps(manifest))
-    with pytest.raises(RuntimeError, match='not a live-genesis-published/5 manifest'):                       # an export made before the upgrade
-        snapshot.check_published(out)
 
 
-def test_a_trending_only_archive_can_be_exported(ready, tmp_path, monkeypatch):
-    core.seed_agents()
+def test_a_trending_only_archive_passes_the_publication_rules(ready, tmp_path, monkeypatch):
     trending_file(tmp_path, monkeypatch, 1)
     archive.lock('trending')
     as_real(monkeypatch, 'Seven.')
     done = archive.run_archive(max_usd=1)                            # the core list is still a draft: only the locked set is asked
     assert done['questions_asked'] == {'trending': 1} and done['answers']['answered'] == 2
-    out = tmp_path / 'published'
-    snapshot.export_published(out)
-    snapshot.approve_published(out, confirmed=True)
-    exported = json.loads((out / 'archive.json').read_bytes())
-    assert exported['locked'] is False and exported['trending']['locked'] is True and exported['runs'][0]['asked'] == {'core': 0, 'trending': 1}
-    retarget_archive(out, lambda d: d['runs'][0]['asked'].update(core=20))
-    with pytest.raises(RuntimeError, match='question list is not locked'):
-        snapshot.check_published(out)
+    payload = json.loads(json.dumps(archive.public_payload()))
+    assert payload['locked'] is False and payload['trending']['locked'] is True and payload['runs'][0]['asked'] == {'core': 0, 'trending': 1}
+    assert publish_refusal(payload) == ''
+    payload['runs'][0]['asked'].update(core=20)
+    assert 'question list is not locked' in publish_refusal(payload)
 
 
 # ---- the scripted demo --------------------------------------------------------------------------------------------------
@@ -676,16 +617,15 @@ def test_hostile_text_is_escaped_on_trending_pages_and_cards():
 
 # ---- web apps, snapshot, command line ----------------------------------------------------------------------------------------
 
-def test_both_web_apps_serve_the_trending_pages_and_cards(ready):
-    from live_genesis.app import app as combined
-    from live_genesis.observatory import app as readonly
+def test_the_web_app_serves_the_trending_pages_and_cards(ready):
+    from live_genesis.app import app
     archive.demo_archive()
     payload = archive.public_payload()
     expected = {'/archive/trending.html': archive_pages.render_trending(payload),
                 '/archive/t/T002.html': archive_pages.render_question(payload, 'T002'),
                 '/archive/card/T002.html': archive_pages.render_card(payload, 'T002'),
                 '/archive/card/Q11.html': archive_pages.render_card(payload, 'Q11')}
-    for application in (combined, readonly):
+    for application in (app,):
         with TestClient(application) as client:
             for path, page in expected.items():
                 response = client.get(path)
@@ -695,20 +635,17 @@ def test_both_web_apps_serve_the_trending_pages_and_cards(ready):
                             '/archive/card/T099.html', '/archive/card/Q99.html', '/archive/card/Q11', '/archive/card/..%2Fx.html',
                             '/archive/card/index.html', '/archive/trending', '/archive/t/'):
                 assert client.get(missing).status_code == 404, missing
-    with TestClient(readonly) as client:
+    with TestClient(app) as client:
         for path in expected:
             assert client.head(path).status_code == 200
             for method in ('post', 'put', 'delete', 'patch'):
                 assert getattr(client, method)(path).status_code == 405, (method, path)
 
 
-def test_snapshot_holds_trending_pages_and_cards_at_the_same_addresses(ready, tmp_path):
-    from live_genesis import cli
-    core.seed_agents()
-    cli.demo()
+def test_the_default_rendering_holds_trending_pages_and_cards_at_the_same_addresses(ready, tmp_path):
     archive.demo_archive()
     out = tmp_path / 'site'
-    snapshot.build(out)
+    payload = json.loads(json.dumps(rendered_site(out)))
     names = sorted(str(p.relative_to(out / 'archive')) for p in (out / 'archive').rglob('*.html'))
     chat = [f'C00{n}' for n in range(1, 7)]
     assert names == sorted(['index.html', 'models.html', 'trending.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)]
@@ -716,7 +653,6 @@ def test_snapshot_holds_trending_pages_and_cards_at_the_same_addresses(ready, tm
                            + [f'card/Q{n:02d}.html' for n in range(1, 21)] + [f'card/T00{n}.html' for n in (1, 2, 3)]
                            + ['chatbots.html'] + [f'card/{q}{s}.html' for q in chat
                                                   for s in ('', '-chat-app-a', '-chat-app-b', '-chat-app-c', '-human')])
-    payload = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
     # /5: the scripted archive also holds the scripted chat-app track
     assert payload['schema'] == 'live-genesis-archive/5' and len(payload['trending']['questions']) == 3
     assert (out / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8') == archive_pages.render_card(payload, 'T001')

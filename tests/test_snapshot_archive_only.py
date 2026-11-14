@@ -1,8 +1,10 @@
-"""Reviewed export of Answers Over Time alone (`snapshot --export --archive-only`): archive.json and
-MANIFEST.json, no overview.json, and the society tables are never read. Owner decision: the public site
-is the chat-app comparison only, so this export holds the chat-app track ALONE (replies entered by hand)
-and nothing of the model track, whatever the database holds. Offline; no model is called."""
+"""The reviewed export (`snapshot --export`; `--archive-only` is accepted and changes nothing): archive.json
+and MANIFEST.json and nothing else. Owner decision: the public site is the chat-app comparison only, so the
+export holds the chat-app track ALONE (replies entered by hand) and nothing of the model track, whatever the
+database holds. The file name keeps "archive_only" from the time a second, full kind of export existed (it also
+held the agent society's overview.json); that kind is now only recognised to be refused. Offline; no model is called."""
 import contextlib
+import copy
 import hashlib
 import json
 import re
@@ -11,13 +13,13 @@ import sqlite3
 import pytest
 
 from live_genesis import archive, archive_chatbots as chatbots, core, engine, snapshot
-from test_archive import as_real, fake, ready, recorded_archive, retarget_archive, trending_file  # noqa: F401
+from test_archive import as_real, fake, publish_refusal, ready, recorded_archive, trending_file  # noqa: F401
 from test_archive_chatbots import APPS, IDS, TODAY, config_file, filled
 from test_archive_chatbots import retarget as retarget_chat
 from test_published import symlinks_work
 from test_snapshot import ARCHIVE_STATIC, assert_every_address_resolves, files_of, run_main
 
-SOCIETY_TEXT = 'society-only-marker-violet-heron-42'
+PLANTED_TEXT = 'planted-marker-violet-heron-42'                   # text planted in a hand-edited file; never echoed by a refusal
 MODEL_TEXT = 'Model-only marker: seven grey herons.'       # what the recorded MODEL run answered; never in an archive-only export
 CHAT_TEXT = 'PLACEHOLDER reply 1 of chatgpt.'
 ARCHIVE_KEYS = ['schema', 'contents', 'file', 'exported_at', 'archive', 'reviewed', 'reviewed_at']
@@ -31,12 +33,6 @@ CHAT_SITE = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', '
              | {f'archive/card/{name}{suffix}.html' for name in IDS for suffix in ('', '-chatgpt', '-gemini', '-grok', '-human')})
 
 
-def society_post():
-    core.submit_action(1, {'action': 'post', 'topic': 'research', 'title': 'A society post', 'body': f'Private to the society: {SOCIETY_TEXT}.'})
-    with core.connect(readonly=True) as cx:
-        assert cx.execute('SELECT COUNT(*) FROM posts WHERE body LIKE ?', (f'%{SOCIETY_TEXT}%',)).fetchone()[0] == 1
-
-
 def hand_entered(monkeypatch, tmp_path, reply=None):
     """One collection of chat-app replies and human answers, entered by hand (placeholders)."""
     config_file(tmp_path, monkeypatch)
@@ -45,19 +41,10 @@ def hand_entered(monkeypatch, tmp_path, reply=None):
 
 
 def world(monkeypatch, tmp_path, chat_reply=None):
-    """A recorded MODEL run, hand-entered chat-app replies and a society post. Only the chat-app replies
-    may reach an archive-only export."""
+    """A recorded MODEL run and hand-entered chat-app replies. Only the chat-app replies may reach an export."""
     recorded_archive(monkeypatch, MODEL_TEXT)
-    society_post()
     hand_entered(monkeypatch, tmp_path, chat_reply)
     assert any(a['text'] == MODEL_TEXT for a in archive.public_payload()['answers'])
-
-
-def no_society(monkeypatch):
-    def refuse(*args, **kwargs):
-        raise AssertionError('an archive-only export must not read the society')
-    monkeypatch.setattr(snapshot, '_capture', refuse)
-    monkeypatch.setattr(snapshot, 'overview', refuse)
 
 
 def approved(monkeypatch, tmp_path, name='published'):
@@ -82,13 +69,16 @@ def all_text(root):
     return ''.join(path.read_text(encoding='utf-8') for path in root.rglob('*') if path.suffix in ('.html', '.json', '.jsonl', '.txt'))
 
 
-def test_archive_only_export_writes_two_files_the_chat_track_only_and_no_society_text(ready, tmp_path, monkeypatch):
+def test_export_writes_two_files_and_the_chat_track_only(ready, tmp_path, monkeypatch):
     world(monkeypatch, tmp_path, chat_reply=lambda app, question: f'Café answer of {app} to {question}.')
     before = hashlib.sha256(ready.read_bytes()).hexdigest()
-    no_society(monkeypatch)                                   # the society tables are not consulted at all
     out = tmp_path / 'published'
     manifest = snapshot.export_published(out, archive_only=True)
     assert hashlib.sha256(ready.read_bytes()).hexdigest() == before
+    # Without the flag: the same export (it is the only kind).
+    plain = snapshot.export_published(tmp_path / 'plain')
+    assert {**plain, 'exported_at': manifest['exported_at']} == manifest
+    assert (tmp_path / 'plain' / 'archive.json').read_bytes() == (out / 'archive.json').read_bytes()
     assert files_of(out) == {'archive.json', 'MANIFEST.json'} and sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json']
     raw = (out / 'archive.json').read_bytes()
     assert raw.isascii() and b'Caf\\u00e9' in raw
@@ -111,7 +101,7 @@ def test_archive_only_export_writes_two_files_the_chat_track_only_and_no_society
     assert manifest['archive'] == {**snapshot._chat_counts(exported), 'sha256': hashlib.sha256(raw).hexdigest()}
     for name in files_of(out):
         text = (out / name).read_text(encoding='utf-8')
-        assert SOCIETY_TEXT not in text and 'A society post' not in text and '"posts"' not in text and '"agents"' not in text, name
+        assert '"posts"' not in text and '"agents"' not in text, name
         assert MODEL_TEXT not in text, name
 
 
@@ -137,12 +127,8 @@ def test_archive_only_round_trip_renders_the_chat_track_and_nothing_else(ready, 
     assert 'no model answer is exported' in described and 'archive.json: 1 chat-app run(s), 12 chat-app answer row(s), 4 human answer row(s)' in described
     assert 'ENTERED BY HAND' in described and 'answers by source' not in described
     assert snapshot.published_non_ascii(out) == []
-    # Rendering opens no database and reads no society data.
-    no_society(monkeypatch)
+    # Rendering opens no database.
     monkeypatch.setenv('LIVE_DB', str(tmp_path / 'no-such.sqlite'))
-    with pytest.raises(RuntimeError, match='holds Answers Over Time only; render it with --archive-only'):
-        snapshot.build_from_data(tmp_path / 'full-site', out)
-    assert not (tmp_path / 'full-site').exists()
     site = tmp_path / 'site'
     info = snapshot.build_from_data(site, out, archive_only=True)
     assert info['demo_only'] is False and info['generated_at'] == manifest['exported_at'] and info['manifest'] == manifest
@@ -158,7 +144,7 @@ def test_archive_only_round_trip_renders_the_chat_track_and_nothing_else(ready, 
     assert 'Not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI' in page and 'Read-only archive.' in page and 'No payments' in page
     assert 'scripted' not in page.lower() and not re.search(r'(?i)sample', page)
     everything = all_text(site)
-    assert MODEL_TEXT not in everything and SOCIETY_TEXT not in everything
+    assert MODEL_TEXT not in everything
     for gone in ('models.html', 'trending.html', '>Models<', '>Trending<', 'Want the plain models', 'We asked it ourselves', 'asked-by-server',
                  'model-a', 'Q01', 'T001'):
         assert gone not in everything, gone
@@ -169,25 +155,24 @@ def test_archive_only_round_trip_renders_the_chat_track_and_nothing_else(ready, 
     snapshot.build_from_data(paired, out, sibling='demo/', archive_only=True)
     assert files_of(paired) == written
     assert (paired / 'archive' / 'index.html').read_text(encoding='utf-8').count('<a href="../demo/archive/index.html">Sample site</a>') == 1
-    with pytest.raises(RuntimeError, match='--api-base cannot be used with --archive-only'):
-        snapshot.build_from_data(tmp_path / 'kit', out, api_base='https://api.example.org', archive_only=True)
+    # Without the flag: the same site.
+    snapshot.build_from_data(tmp_path / 'plain', out)
+    assert {name: (tmp_path / 'plain' / name).read_bytes() for name in files_of(tmp_path / 'plain')} == \
+        {name: (site / name).read_bytes() for name in written}
 
 
-def test_archive_only_folder_and_manifest_tampering_is_refused(ready, tmp_path, monkeypatch):
+def test_folder_and_manifest_tampering_is_refused(ready, tmp_path, monkeypatch):
     out = approved(monkeypatch, tmp_path)
     good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
-    full = tmp_path / 'full'
-    snapshot.export_published(full)
-    snapshot.approve_published(full, confirmed=True)
-    overview_bytes = (full / 'overview.json').read_bytes()
-    assert SOCIETY_TEXT.encode() in overview_bytes
+    overview_bytes = json.dumps({'posts': [{'id': 1, 'body': PLANTED_TEXT}]}).encode('ascii')   # what a full export also held
 
     def refused(match):
         for call in (lambda: snapshot.check_published(out), lambda: snapshot.approve_published(out, confirmed=True),
                      lambda: snapshot.build_from_data(tmp_path / 'site', out, archive_only=True),
                      lambda: snapshot.build_from_data(tmp_path / 'site', out)):
-            with pytest.raises(RuntimeError, match=match):
+            with pytest.raises(RuntimeError, match=match) as err:
                 call()
+            assert PLANTED_TEXT not in str(err.value)
         assert not (tmp_path / 'site').exists()
         for entry in list(out.iterdir()):
             entry.rmdir() if entry.is_dir() else entry.unlink()
@@ -202,15 +187,15 @@ def test_archive_only_folder_and_manifest_tampering_is_refused(ready, tmp_path, 
     refused('unexpected entries')
     (out / 'notes.txt').write_text('x')
     refused('unexpected entries')
-    # ... and calling the folder "full" by hand does not help: every full-export check then applies.
+    # ... and calling the folder "full" by hand does not help: that kind (it also held the removed society's
+    # overview.json) is no longer checked or rendered at all.
     (out / 'overview.json').write_bytes(overview_bytes)
-    edit_manifest(out, contents='full')
-    refused('manifest is not a live-genesis-published/5 manifest')
-    (out / 'overview.json').write_bytes(overview_bytes)
-    edit_manifest(out, contents='full', file='overview.json')
-    refused('overview.json does not match the sha256')
+    edit_manifest(out, contents='full', file='overview.json', sha256=hashlib.sha256(overview_bytes).hexdigest())
+    refused(r'unexpected entries \(1\).*overview\.json is there')
     edit_manifest(out, contents='full', file='overview.json')            # "archive" -> "full" with no overview.json
-    refused('overview.json is missing')
+    refused('it is a full export.*removed with the agent society.*export again')
+    edit_manifest(out, contents='full')
+    refused('it is a full export')
     # The manifest must say what it holds, in the current schema, with the archive fields and no others.
     for value in (KeyError, None, 'society', '', ['archive'], 5, True):
         edit_manifest(out, contents=value)
@@ -267,73 +252,11 @@ def test_archive_only_folder_and_manifest_tampering_is_refused(ready, tmp_path, 
     (out / 'archive.json').write_bytes(payload); (out / 'MANIFEST.json').write_text(json.dumps(manifest))
     refused('archive.json holds a non-ASCII byte')
 
-    # The other direction: a full export called "archive" by hand still has its overview.json, so it is refused.
-    edit_manifest(full, contents='archive')
-    with pytest.raises(RuntimeError, match='manifest is not a live-genesis-published/5 manifest'):
-        snapshot.check_published(full)
-    edit_manifest(full, contents='archive', file='archive.json')
-    for call in (lambda: snapshot.check_published(full), lambda: snapshot.build_from_data(tmp_path / 'site', full, archive_only=True)):
-        with pytest.raises(RuntimeError, match='unexpected entries'):
-            call()
-    (full / 'overview.json').unlink()                                    # ... and without it, the full manifest's fields give it away
-    with pytest.raises(RuntimeError, match='must hold exactly'):
-        snapshot.check_published(full)
-    assert not (tmp_path / 'site').exists()
 
-
-def test_full_export_still_round_trips_and_its_archive_only_site_has_no_model_track(ready, tmp_path, monkeypatch):
-    world(monkeypatch, tmp_path)
+def test_export_refuses_when_no_chat_reply_was_entered_by_hand(ready, tmp_path, monkeypatch):
     out = tmp_path / 'published'
-    manifest = snapshot.export_published(out)
-    assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']
-    assert list(manifest) == ['schema', 'contents', 'file', 'sha256', 'exported_at', 'mode', 'actions_by_source', 'records',
-                              'archive', 'reviewed', 'reviewed_at']
-    assert manifest['schema'] == 'live-genesis-published/5' and manifest['contents'] == 'full' and manifest['file'] == 'overview.json'
-    assert manifest['sha256'] == hashlib.sha256((out / 'overview.json').read_bytes()).hexdigest()
-    assert SOCIETY_TEXT in (out / 'overview.json').read_text(encoding='utf-8')
-    # The full export is unchanged: its archive.json is the whole public payload, model answers included.
-    exported = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
-    assert exported == json.loads(json.dumps(archive.public_payload())) and exported['schema'] == 'live-genesis-archive/5'
-    assert manifest['archive']['answers_by_source'] == {'engine': 40, 'api': 0, 'demo': 0, 'mock': 0} and manifest['archive']['runs'] == 1
-    assert manifest['archive']['chatbots'] == CHAT_COUNTS and MODEL_TEXT in (out / 'archive.json').read_text(encoding='utf-8')
-    with pytest.raises(RuntimeError, match=r'Read overview\.json and archive\.json, then run'):
-        snapshot.check_published(out)
-    with pytest.raises(RuntimeError, match='overview.json and .*archive.json in full'):
-        snapshot.approve_published(out)
-    snapshot.approve_published(out, confirmed=True)
-    assert snapshot.check_published(out)['contents'] == 'full'
-    assert 'data mode' in snapshot._describe(manifest) and 'records in file' in snapshot._describe(manifest)
-    assert 'archive.json: 1 run(s), answers by source: engine 40' in snapshot._describe(manifest)
-    edit_manifest(out, contents=KeyError)
-    with pytest.raises(RuntimeError, match='does not say what the export holds'):
-        snapshot.check_published(out)
-    edit_manifest(out, contents='full')
-    monkeypatch.setenv('LIVE_DB', str(tmp_path / 'no-such.sqlite'))
-    info = snapshot.build_from_data(tmp_path / 'site', out)
-    assert info['demo_only'] is False and (tmp_path / 'site' / 'overview.json').is_file() and (tmp_path / 'site' / 'stats.html').is_file()
-    # A full site keeps every model page and the whole archive.json.
-    whole = files_of(tmp_path / 'site')
-    assert {'archive/models.html', 'archive/trending.html', 'archive/q/Q01.html', 'archive/card/Q01.html', 'archive/data/Q01.json',
-            'archive/c/C001.html', 'archive/chatbots.html'} <= whole
-    assert (tmp_path / 'site' / 'archive.json').read_bytes() == (out / 'archive.json').read_bytes()
-    assert MODEL_TEXT in (tmp_path / 'site' / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
-    # A full export may still be rendered as the public site: the whole export is checked, the chat-app track alone is written.
-    only = tmp_path / 'only'
-    snapshot.build_from_data(only, out, archive_only=True)
-    assert files_of(only) == CHAT_SITE | ARCHIVE_STATIC
-    site_data = json.loads((only / 'archive.json').read_text(encoding='utf-8'))
-    assert site_data == {'schema': chatbots.SITE_SCHEMA, 'chatbots': exported['chatbots']}
-    assert (only / 'archive.json').read_bytes() == snapshot._encode(site_data)
-    assert MODEL_TEXT not in all_text(only) and SOCIETY_TEXT not in all_text(only) and CHAT_TEXT in all_text(only)
-    assert_every_address_resolves(only)
-
-
-def test_archive_only_export_refuses_when_no_chat_reply_was_entered_by_hand(ready, tmp_path, monkeypatch):
-    out = tmp_path / 'published'
-    core.seed_agents()
-    society_post()
     nothing = r'holds no chat-app reply entered by hand.*leaves the model track out.*nothing to review'
-    # No archive rows at all: a recorded society does not make an archive export possible.
+    # No archive rows at all.
     with pytest.raises(RuntimeError, match=nothing):
         snapshot.export_published(out, archive_only=True)
     # Mock answers only (the adapter was replaced; nothing real is recorded).
@@ -352,8 +275,7 @@ def test_archive_only_export_refuses_when_no_chat_reply_was_entered_by_hand(read
         snapshot.export_published(out, archive_only=True)
     assert not out.exists()
     assert run_main(monkeypatch, '--export', str(out), '--archive-only') == 2 and not out.exists()
-    full = snapshot.export_published(tmp_path / 'full')                    # the full export is as before: it carries the model answers
-    assert full['archive']['answers_by_source']['engine'] == 40 and 'chatbots' not in full['archive']
+    assert run_main(monkeypatch, '--export', str(out)) == 2 and not out.exists()        # no flag: the same export, the same refusal
     # An export folder whose archive.json holds a run and no answer row is refused by the check as well.
     hand_entered(monkeypatch, tmp_path)
     snapshot.export_published(out, archive_only=True)
@@ -363,7 +285,7 @@ def test_archive_only_export_refuses_when_no_chat_reply_was_entered_by_hand(read
         snapshot.check_published(out)
 
 
-def test_archive_only_export_refuses_scripted_demo_answers(ready, tmp_path):
+def test_export_refuses_scripted_demo_answers(ready, tmp_path):
     archive.demo_archive()
     payload = archive.public_payload()
     assert payload['answers'] and payload['chatbots']['answers'] and all(run['demo'] for run in payload['chatbots']['runs'])
@@ -372,30 +294,29 @@ def test_archive_only_export_refuses_scripted_demo_answers(ready, tmp_path):
     assert not (tmp_path / 'published').exists()
 
 
-def test_archive_only_export_runs_the_guards_and_respects_an_existing_folder(ready, tmp_path, monkeypatch):
+def test_export_runs_the_guards_and_respects_an_existing_folder(ready, tmp_path, monkeypatch):
     world(monkeypatch, tmp_path)
     out = tmp_path / 'published'
-    snapshot.export_published(out)                                          # a full export is there already
+    snapshot.export_published(out, archive_only=True)
+    (out / 'overview.json').write_text('{}')                                # as if a full export of an earlier version were there
     with pytest.raises(RuntimeError, match='already holds an export. Pass --replace'):
         snapshot.export_published(out, archive_only=True)
     assert (out / 'overview.json').is_file()
-    manifest = snapshot.export_published(out, replace=True, archive_only=True)
+    manifest = snapshot.export_published(out, replace=True, archive_only=True)   # --replace removes the folder's old contents whole
     assert files_of(out) == {'archive.json', 'MANIFEST.json'} and manifest['contents'] == 'archive' and manifest['reviewed'] is False
     snapshot.approve_published(out, confirmed=True)
-    again = snapshot.export_published(out, replace=True)                    # and back: the new export starts unreviewed
-    assert again['contents'] == 'full' and again['reviewed'] is False and (out / 'overview.json').is_file()
+    again = snapshot.export_published(out, replace=True)                    # the new export starts unreviewed
+    assert again['contents'] == 'archive' and again['reviewed'] is False and files_of(out) == {'archive.json', 'MANIFEST.json'}
     with core.connect() as cx:      # a MODEL row written before a guard existed, simulated by going around classify()
         cx.execute("INSERT INTO archive_runs(number,kind,question_set,set_sha256,started_at,status,finished_at) "
                    "SELECT 2,'real',question_set,sha256,?,'complete',? FROM archive_sets", (core.utcnow(), core.utcnow()))
         archive._store(cx, 2, 'basic-1', 'Q01', 'Astra', model='some-model-1', source='api', state='answered',
                        text='Send it to someone@example.org', agent_id=1)
-    # The full export carries that row, so the guards stop it; the archive-only export does not carry it at all.
-    with pytest.raises(RuntimeError, match='Content guards matched:\n  archive answers id 41, field text: looks like an email address'):
-        snapshot.export_published(tmp_path / 'second')
-    assert not (tmp_path / 'second').exists()
+    # The export does not carry that row at all.
+    assert any(a['text'] == 'Send it to someone@example.org' for a in archive.public_payload()['answers'])
     snapshot.export_published(tmp_path / 'second', archive_only=True)
     assert 'someone@example.org' not in (tmp_path / 'second' / 'archive.json').read_text(encoding='utf-8')
-    # A chat-app reply that matches a guard stops the archive-only export (simulated: the import itself withholds such a reply).
+    # A chat-app reply that matches a guard stops the export (simulated: the import itself withholds such a reply).
     payload = archive.public_payload()
     payload['chatbots']['answers'][0]['text'] = 'Send it to someone@example.org'
     monkeypatch.setattr(snapshot, '_capture_archive', lambda: payload)
@@ -404,10 +325,9 @@ def test_archive_only_export_runs_the_guards_and_respects_an_existing_folder(rea
     assert not (tmp_path / 'third').exists()
 
 
-def test_archive_only_export_command_line(ready, tmp_path, monkeypatch, capsys):
+def test_export_command_line(ready, tmp_path, monkeypatch, capsys):
     world(monkeypatch, tmp_path)
     out, site = tmp_path / 'published', tmp_path / 'site'
-    no_society(monkeypatch)
     assert run_main(monkeypatch, '--export', str(out), '--archive-only') == 0
     printed = capsys.readouterr().out
     assert 'NOT yet approved' in printed and 'Answers Over Time only: the chat-app track' in printed
@@ -440,8 +360,6 @@ def test_archive_only_export_command_line(ready, tmp_path, monkeypatch, capsys):
     assert 'OK: export is intact and approved.' in printed and 'Answers Over Time only' in printed and 'overview.json' not in printed
     # What the workflow runs: --from-data published --sibling demo/ --archive-only.
     monkeypatch.setenv('LIVE_DB', str(tmp_path / 'no-such.sqlite'))
-    assert run_main(monkeypatch, str(site), '--from-data', str(out)) == 2
-    assert 'render it with --archive-only' in capsys.readouterr().err and not site.exists()
     assert run_main(monkeypatch, str(site), '--from-data', str(out), '--sibling', 'demo/', '--archive-only') == 0
     printed = capsys.readouterr().out
     assert 'rendered from approved data' in printed and 'INCLUDES NON-DEMO DATA' in printed
@@ -451,24 +369,11 @@ def test_archive_only_export_command_line(ready, tmp_path, monkeypatch, capsys):
     assert not (site / 'post').exists() and not (site / 'profile').exists()
 
 
-def test_full_export_command_line_is_unchanged(ready, tmp_path, monkeypatch, capsys):
-    world(monkeypatch, tmp_path)
-    out = tmp_path / 'published'
-    assert run_main(monkeypatch, '--export', str(out)) == 0
-    printed = capsys.readouterr().out
-    assert f"Next: read {out / 'overview.json'} and {out / 'archive.json'} in full" in printed and 'data mode' in printed
-    assert 'archive.json: 1 run(s), answers by source: engine 40' in printed and 'Answers Over Time run 1: complete, 40 answer(s) recorded' in printed
-    assert run_main(monkeypatch, '--approve', str(out), '--i-have-read-it') == 0
-    printed = capsys.readouterr().out
-    assert f"every agent-written text in {out / 'overview.json'} and every answer in {out / 'archive.json'}." in printed
-    assert run_main(monkeypatch, '--check', str(out)) == 0
-    assert json.loads((out / 'MANIFEST.json').read_text(encoding='utf-8'))['contents'] == 'full'
-
-
-# ---- review findings: exact keys, outside agents' answers, unfinished runs, manifest hygiene ----------
+# ---- review findings: exact keys, older outside answers, unfinished runs, manifest hygiene ----------
 
 def second_run(close=True, text='Twelve.'):
-    """Model run 2, holding one answer an outside agent submitted (source api); left `running` unless closed."""
+    """Model run 2, holding one answer as an outside client once submitted it (source `api`, a row only an older
+    database can hold: the route went with the agent society); left `running` unless closed."""
     with core.connect() as cx:
         cx.execute("INSERT INTO archive_runs(number,kind,question_set,set_sha256,started_at) SELECT 2,'real',question_set,sha256,? FROM archive_sets",
                    (core.utcnow(),))
@@ -477,14 +382,14 @@ def second_run(close=True, text='Twelve.'):
             cx.execute("UPDATE archive_runs SET status='complete',finished_at=? WHERE id=2", (core.utcnow(),))
 
 
-def every_gate_refuses(out, tmp_path, match, good, full=False):
+def every_gate_refuses(out, tmp_path, match, good):
     """check, approve and render all refuse with `match`; then the good files are put back."""
     for call in (lambda: snapshot.check_published(out), lambda: snapshot.approve_published(out, confirmed=True),
-                 lambda: snapshot.build_from_data(tmp_path / 'site', out, archive_only=not full)):
+                 lambda: snapshot.build_from_data(tmp_path / 'site', out)):
         with pytest.raises(RuntimeError, match=match) as err:
             call()
-        assert full or 'overview.json' not in str(err.value)
-        assert SOCIETY_TEXT not in str(err.value)
+        assert 'overview.json' not in str(err.value)
+        assert PLANTED_TEXT not in str(err.value)
     assert not (tmp_path / 'site').exists()
     for entry in list(out.iterdir()):
         entry.unlink()
@@ -493,7 +398,7 @@ def every_gate_refuses(out, tmp_path, match, good, full=False):
     assert snapshot.check_published(out)['reviewed'] is True
 
 
-def test_archive_only_archive_json_must_hold_exactly_the_chat_track_keys(ready, tmp_path, monkeypatch):
+def test_archive_json_must_hold_exactly_the_chat_track_keys(ready, tmp_path, monkeypatch):
     out = approved(monkeypatch, tmp_path)
     good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
     whole = json.loads(json.dumps(archive.public_payload()))
@@ -503,7 +408,7 @@ def test_archive_only_archive_json_must_hold_exactly_the_chat_track_keys(ready, 
         retarget_chat(out, edit)                          # the manifest's hash and counts agree with the edited file
         every_gate_refuses(out, tmp_path, match, good)
 
-    planted = [{'id': 1, 'body': f'Private to the society: {SOCIETY_TEXT}.'}]
+    planted = [{'id': 1, 'body': f'Private to the society: {PLANTED_TEXT}.'}]
     refused(lambda d: d.update(posts=planted), 'archive.json is refused: top level: unexpected key posts')
     # Nothing of the model track may be added to the file: every key of the full payload is refused by name.
     for key in MODEL_KEYS:
@@ -517,13 +422,13 @@ def test_archive_only_archive_json_must_hold_exactly_the_chat_track_keys(ready, 
     refused(lambda d: d.pop('chatbots'), 'top level: key chatbots is missing')
     refused(lambda d: d.update(chatbots=None), 'chatbots: a key is missing or has the wrong type')
     # The name of an unknown key is shown only when it is a plain word; its value never is.
-    refused(lambda d: d.update({f'<b>{SOCIETY_TEXT}</b>': 1}), r'top level: unexpected key \(its name is not a plain word\)')
+    refused(lambda d: d.update({f'<b>{PLANTED_TEXT}</b>': 1}), r'top level: unexpected key \(its name is not a plain word\)')
     # Inside the block: closed keys on every object.
     refused(lambda d: d['chatbots'].update(posts=planted), 'chatbots: unexpected key posts')
     refused(lambda d: d['chatbots'].update(answerers=['model-a']), 'chatbots: unexpected key answerers')
-    refused(lambda d: d['chatbots']['answers'][0].update(note=SOCIETY_TEXT), 'chat-app answer id 1: unexpected key note')
+    refused(lambda d: d['chatbots']['answers'][0].update(note=PLANTED_TEXT), 'chat-app answer id 1: unexpected key note')
     refused(lambda d: d['chatbots']['answers'][0].update(model='some-model-1'), 'chat-app answer id 1: unexpected key model')
-    refused(lambda d: d['chatbots']['runs'][0].update(operator=SOCIETY_TEXT), 'chat-app run 1: unexpected key operator')
+    refused(lambda d: d['chatbots']['runs'][0].update(operator=PLANTED_TEXT), 'chat-app run 1: unexpected key operator')
     refused(lambda d: d['chatbots']['apps'][0].update(extra='x'), 'a chat app: unexpected key extra')
     refused(lambda d: d['chatbots']['human_answers'][0].update(username='someone'), 'unexpected key username')
     # A question reworded in the file is not the question of the checked-in configuration.
@@ -534,14 +439,12 @@ def test_archive_only_archive_json_must_hold_exactly_the_chat_track_keys(ready, 
     every_gate_refuses(out, tmp_path, 'archive.json is refused: top level is not an object', good)
 
 
-def test_full_export_archive_json_is_key_closed_too(ready, tmp_path, monkeypatch):
+def test_the_model_track_payload_is_key_closed(ready, tmp_path, monkeypatch):
     world(monkeypatch, tmp_path)
-    out = tmp_path / 'published'
-    snapshot.export_published(out)
-    snapshot.approve_published(out, confirmed=True)
-    good = {name: (out / name).read_bytes() for name in ('overview.json', 'archive.json', 'MANIFEST.json')}
-    assert archive.closed_problem(archive.public_payload()) is None and archive.set_hash_problem(archive.public_payload()) is None
-    for edit, match in ((lambda d: d.update(posts=[{'id': 1}]), 'archive.json is refused: top level: unexpected key posts'),
+    good = json.loads(json.dumps(archive.public_payload()))
+    assert good['schema'] == 'live-genesis-archive/5' and any(a['text'] == MODEL_TEXT for a in good['answers'])
+    assert publish_refusal(good) == ''
+    for edit, match in ((lambda d: d.update(posts=[{'id': 1}]), 'top level: unexpected key posts'),
                         (lambda d: d['answers'][0].update(note='x'), 'answer id 1: unexpected key note'),
                         (lambda d: d['answers'][0].update(samples=1), 'sample counts that do not belong'),
                         (lambda d: d['runs'][0].update(operator='x'), 'run 1: unexpected key operator'),
@@ -552,34 +455,27 @@ def test_full_export_archive_json_is_key_closed_too(ready, tmp_path, monkeypatch
                         (lambda d: d['questions'][0].update(text='What is the capital of Atlantis?'), 'set_hash does not match'),
                         (lambda d: d['groups'][0].update(why='Another reason.'), 'set_hash does not match the questions'),
                         (lambda d: d['trending'].update(question_set='other'), 'trending: set_hash does not match the questions')):
-        retarget_archive(out, edit)
-        every_gate_refuses(out, tmp_path, match, good, full=True)
-    # A full export's archive.json is the whole payload: the chat-app-only form is not accepted in its place.
-    raw = snapshot._encode(chatbots.site_payload(json.loads(good['archive.json'])))
-    manifest = json.loads(good['MANIFEST.json'])
-    manifest['archive']['sha256'] = hashlib.sha256(raw).hexdigest()
-    (out / 'archive.json').write_bytes(raw)
-    (out / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1))
-    every_gate_refuses(out, tmp_path, 'archive.json is refused: key question_set is missing or has the wrong type', good, full=True)
+        data = copy.deepcopy(good)
+        edit(data)
+        assert re.search(match, publish_refusal(data)), match
+    # The chat-app-only form (what an export holds) is not a model-track payload.
+    assert re.search('key question_set is missing or has the wrong type', publish_refusal(chatbots.site_payload(good)))
 
 
 def test_trending_set_hash_is_recomputed_for_the_first_lock(ready, tmp_path, monkeypatch):
     trending_file(tmp_path, monkeypatch, count=2)
-    core.seed_agents()
     archive.lock()
     archive.lock('trending')
     as_real(monkeypatch, 'Seven.')
     archive.run_archive(max_usd=1)
-    payload = archive.public_payload()
-    assert payload['trending']['version'] == 1 and archive.set_hash_problem(payload) is None
-    out = tmp_path / 'published'
-    snapshot.export_published(out)                            # the model track is part of a full export only
-    snapshot.approve_published(out, confirmed=True)
-    good = {name: (out / name).read_bytes() for name in ('overview.json', 'archive.json', 'MANIFEST.json')}
-    retarget_archive(out, lambda d: d['trending']['questions'][0].update(rationale='Another reason.'))
-    every_gate_refuses(out, tmp_path, 'trending: set_hash does not match the questions', good, full=True)
-    retarget_archive(out, lambda d: d['trending']['questions'][0].update(note='x'))
-    every_gate_refuses(out, tmp_path, 'trending question T001: unexpected key note', good, full=True)
+    payload = json.loads(json.dumps(archive.public_payload()))
+    assert payload['trending']['version'] == 1 and publish_refusal(payload) == ''
+    data = copy.deepcopy(payload)
+    data['trending']['questions'][0].update(rationale='Another reason.')
+    assert publish_refusal(data).startswith('trending: set_hash does not match the questions')
+    data = copy.deepcopy(payload)
+    data['trending']['questions'][0].update(note='x')
+    assert re.search('trending question T001: unexpected key note', publish_refusal(data))
     # A later lock chains over the earlier ones, whose boundaries are not published: it is not recomputed.
     trending_file(tmp_path, monkeypatch, count=3)
     archive.lock('trending')
@@ -589,89 +485,44 @@ def test_trending_set_hash_is_recomputed_for_the_first_lock(ready, tmp_path, mon
     assert archive.set_hash_problem(later) is None
 
 
-def test_an_outside_agents_answer_is_in_the_full_export_only_and_the_summary_says_so(ready, tmp_path, monkeypatch, capsys):
+def test_an_older_outside_answer_still_reads_and_is_never_exported(ready, tmp_path, monkeypatch):
     world(monkeypatch, tmp_path)
-    out = tmp_path / 'published'
-    lines = []
-    assert 'outside agents' not in snapshot._describe(snapshot.export_published(out, notes=lines))
-    assert lines == ['  Answers Over Time run 1: complete, 40 answer(s) recorded']
     second_run()
-    lines = []
-    manifest = snapshot.export_published(out, replace=True, notes=lines)
-    assert lines == ['  Answers Over Time run 1: complete, 40 answer(s) recorded', '  Answers Over Time run 2: complete, 1 answer(s) recorded']
-    assert manifest['archive']['answers_by_source'] == {'engine': 40, 'api': 1, 'demo': 0, 'mock': 0}
-    outside = [a for a in json.loads((out / 'archive.json').read_text(encoding='utf-8'))['answers'] if a['source'] == 'api']
+    payload = archive.public_payload()
+    outside = [a for a in payload['answers'] if a['source'] == 'api']
     assert len(outside) == 1 and outside[0]['answerer'] == 'Astra' and outside[0]['model'] == 'some-model-1' and outside[0]['text'] == 'Twelve.'
     assert all(outside[0][key] is None for key in archive.PUBLIC_CALL_FIELDS)
-    note = ("NOTE: 1 answer(s) in archive.json were submitted by outside agents over the API. Each one carries that agent's "
-            "name and its self-declared model.")
-    assert note in snapshot._describe(manifest)
-    assert run_main(monkeypatch, '--approve', str(out), '--i-have-read-it') == 0
-    assert note in capsys.readouterr().out
-    assert run_main(monkeypatch, '--check', str(out)) == 0
-    assert note in capsys.readouterr().out
-    assert run_main(monkeypatch, '--export', str(out), '--replace') == 0
-    printed = capsys.readouterr().out
-    assert note in printed and 'Answers Over Time run 2: complete, 1 answer(s) recorded' in printed
-    # The archive-only export of the same database carries neither that answer nor a word about it.
-    lines = []
-    only = snapshot.export_published(tmp_path / 'only', archive_only=True, notes=lines)
-    assert lines == [] and 'outside agents' not in snapshot._describe(only)
+    assert payload['answers_by_source'] == {'engine': 40, 'api': 1, 'demo': 0} and publish_refusal(json.loads(json.dumps(payload))) == ''
+    # The export of the same database carries neither that answer nor a word about it.
+    only = snapshot.export_published(tmp_path / 'only', archive_only=True)
+    assert 'outside' not in snapshot._describe(only)
     raw = (tmp_path / 'only' / 'archive.json').read_text(encoding='utf-8')
     assert 'Twelve.' not in raw and 'Astra' not in raw and 'some-model-1' not in raw and MODEL_TEXT not in raw
 
 
-def test_full_export_refuses_a_run_that_is_still_running_and_the_archive_only_export_does_not_carry_it(ready, tmp_path, monkeypatch, capsys):
+def test_an_unfinished_model_run_neither_stops_the_export_nor_is_listed(ready, tmp_path, monkeypatch, capsys):
     world(monkeypatch, tmp_path)
-    out = tmp_path / 'published'
-    snapshot.export_published(out)
-    snapshot.approve_published(out, confirmed=True)
-    before = {path.name: path.read_bytes() for path in out.iterdir()}
     second_run(close=False)
     assert archive.run_states() == [{'number': 1, 'answers': 40, 'status': 'complete'}, {'number': 2, 'answers': 1, 'status': 'running'}]
     digest = hashlib.sha256(ready.read_bytes()).hexdigest()
-    running = r'run 2 is still marked running: an archive-run is in progress, or it was killed.*pass --include-unfinished'
-    with pytest.raises(RuntimeError, match=running):
-        snapshot.export_published(out, replace=True)
-    with pytest.raises(RuntimeError, match=running):
-        snapshot.export_published(tmp_path / 'fresh')
-    # A refused --replace removed nothing: the earlier approved export is there byte for byte.
-    assert {path.name: path.read_bytes() for path in out.iterdir()} == before and not (tmp_path / 'fresh').exists()
-    assert snapshot.check_published(out)['reviewed'] is True
-    assert run_main(monkeypatch, '--export', str(out), '--replace') == 2
-    assert 'pass --include-unfinished to export it as it stands' in capsys.readouterr().err
-    assert {path.name: path.read_bytes() for path in out.iterdir()} == before
-    for step in (('--check', str(out)), ('--approve', str(out)), (str(tmp_path / 'site'), '--from-data', str(out), '--archive-only')):
-        assert run_main(monkeypatch, *step, '--include-unfinished') == 2
-        assert '--include-unfinished is used with --export only' in capsys.readouterr().err
-    # The override exports the run as it stands and says so.
-    assert run_main(monkeypatch, '--export', str(out), '--replace', '--include-unfinished') == 0
-    printed = capsys.readouterr().out
-    assert '  Answers Over Time run 1: complete, 40 answer(s) recorded\n' in printed
-    assert '  Answers Over Time run 2: running, 1 answer(s) recorded (UNFINISHED: exported as it stands)\n' in printed
-    assert len(json.loads((out / 'archive.json').read_text(encoding='utf-8'))['runs']) == 2
-    assert snapshot.check_published(out, require_reviewed=False)['reviewed'] is False
-    # The archive-only export holds no model run, so an unfinished one neither stops it nor is listed.
-    lines = []
-    only = snapshot.export_published(tmp_path / 'only', archive_only=True, notes=lines)
-    assert only['contents'] == 'archive' and lines == [] and only['archive']['chatbots'] == CHAT_COUNTS
+    only = snapshot.export_published(tmp_path / 'only', archive_only=True)
+    assert only['contents'] == 'archive' and only['archive']['chatbots'] == CHAT_COUNTS
     assert run_main(monkeypatch, '--export', str(tmp_path / 'only'), '--archive-only', '--replace') == 0
     assert 'Answers Over Time run' not in capsys.readouterr().out
+    # The option that let a full export carry an unfinished model run went with that export.
+    assert run_main(monkeypatch, '--export', str(tmp_path / 'only'), '--replace', '--include-unfinished') == 2
+    assert 'unrecognized arguments' in capsys.readouterr().err
     assert hashlib.sha256(ready.read_bytes()).hexdigest() == digest             # the database was only read
 
 
-def test_a_run_that_stopped_early_is_exported_in_full_and_its_status_is_shown(ready, tmp_path, monkeypatch):
-    core.seed_agents()
+def test_a_run_that_stopped_early_keeps_its_status(ready, tmp_path, monkeypatch):
     archive.lock()
     as_real(monkeypatch, lambda model, prompt, n: RuntimeError('provider failed') if n == 3 else 'Seven.')
     assert archive.run_archive(max_usd=1)['status'] == 'incomplete'
-    lines = []
-    manifest = snapshot.export_published(tmp_path / 'published', notes=lines)
-    assert lines == ['  Answers Over Time run 1: incomplete, 2 answer(s) recorded']
-    assert manifest['archive']['answers_by_source']['engine'] == 2
+    assert archive.run_states() == [{'number': 1, 'answers': 2, 'status': 'incomplete'}]
 
 
-def test_archive_only_export_reads_no_society_table(ready, tmp_path, monkeypatch):
+def test_export_reads_the_archive_tables_only_and_no_society_table_exists(ready, tmp_path, monkeypatch):
     world(monkeypatch, tmp_path)
     read, modes, real = set(), [], core.connect
 
@@ -694,12 +545,11 @@ def test_archive_only_export_reads_no_society_table(ready, tmp_path, monkeypatch
                'credit_ledger', 'tasks', 'task_responses', 'actions', 'usage', 'audit_log'}
     assert read and all(name in ('sqlite_master', 'sqlite_schema') or name.startswith('archive_') for name in read), sorted(read)
     assert not read & society and 'archive_chatbot_answers' in read and 'archive_chatbot_runs' in read
-    # The same watch on a full export does see the society, so the watch works.
-    read.clear()
-    with monkeypatch.context() as patch:
-        patch.setattr(core, 'connect', watched)
-        snapshot.export_published(tmp_path / 'full')
-    assert {'posts', 'agents'} <= read
+    # A database made by this code has none of the removed society's tables at all.
+    with core.connect(readonly=True) as cx:
+        tables = {row[0] for row in cx.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert not tables & (society | {'rounds', 'round_actions', 'settings', 'memory_notes', 'engine_turns', 'round_plan', 'agent_limits',
+                                    'quota_windows', 'action_provenance', 'reactions', 'study_runs', 'study_calls'}), sorted(tables)
 
 
 def test_archive_kind_refuses_links_in_place_of_its_files(ready, tmp_path, monkeypatch):
@@ -739,22 +589,9 @@ def test_manifest_review_fields_and_timestamps_are_checked(ready, tmp_path, monk
     assert snapshot.check_published(out, require_reviewed=False)['reviewed'] is False
     with pytest.raises(RuntimeError, match='not approved'):
         snapshot.check_published(out)
-    # The full kind gets the same three checks.
-    full = tmp_path / 'full'
-    snapshot.export_published(full)
-    snapshot.approve_published(full, confirmed=True)
-    kept = (full / 'MANIFEST.json').read_bytes()
-    for changes, match in (({'reviewed': 'yes'}, 'reviewed is not true or false'), ({'reviewed': KeyError}, 'reviewed is not true or false'),
-                           ({'reviewed_at': None}, 'reviewed_at is not a timestamp'), ({'reviewed_at': wide}, 'reviewed_at is not a timestamp'),
-                           ({'exported_at': arabic}, 'exported_at is not a timestamp')):
-        edit_manifest(full, **changes)
-        with pytest.raises(RuntimeError, match=match):
-            snapshot.check_published(full)
-        (full / 'MANIFEST.json').write_bytes(kept)
-    assert snapshot.check_published(full)['reviewed'] is True
 
 
-def test_refusals_before_the_kind_is_known_do_not_name_overview_json(ready, tmp_path, monkeypatch):
+def test_refusals_on_an_unreadable_folder_or_manifest(ready, tmp_path, monkeypatch):
     out = approved(monkeypatch, tmp_path)
     good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
     (out / 'MANIFEST.json').write_text('{not json')
@@ -764,7 +601,36 @@ def test_refusals_before_the_kind_is_known_do_not_name_overview_json(ready, tmp_
     (out / 'MANIFEST.json').unlink()
     every_gate_refuses(out, tmp_path, r'MANIFEST\.json is missing or unreadable \(must be a regular file\)', good)
     (out / 'notes.txt').write_text('x')
-    every_gate_refuses(out, tmp_path, r'unexpected entries \(1\); an export folder must hold only its data file\(s\) and MANIFEST\.json', good)
+    every_gate_refuses(out, tmp_path, r'unexpected entries \(1\); an export folder must hold only archive\.json and MANIFEST\.json', good)
     with pytest.raises(RuntimeError, match=r'the export folder is missing or unreadable \(not a plain folder\)') as err:
         snapshot.check_published(tmp_path / 'absent')
     assert 'overview.json' not in str(err.value)
+
+
+# ---- the check parses a published file strictly ---------------------------------------------------------
+
+def rewrite_archive(folder, payload):
+    """Replace archive.json and make the manifest's hash agree with it again."""
+    (folder / 'archive.json').write_bytes(payload)
+    manifest = json.loads((folder / 'MANIFEST.json').read_text(encoding='utf-8'))
+    manifest['archive']['sha256'] = hashlib.sha256(payload).hexdigest()
+    (folder / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1), encoding='utf-8')
+
+
+@pytest.mark.parametrize('insert,reason', [
+    ('"extra": NaN,', 'NaN or Infinity'), ('"extra": Infinity,', 'NaN or Infinity'), ('"extra": -Infinity,', 'NaN or Infinity'),
+    ('"extra": 1e999,', 'number out of range'), ('"schema": "live-genesis-chat-archive/1",', 'duplicate key'),
+])
+def test_check_refuses_non_json_literals_and_duplicate_keys(ready, tmp_path, monkeypatch, insert, reason):
+    out = approved(monkeypatch, tmp_path)
+    good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
+    text = good['archive.json'].decode('ascii')
+    rewrite_archive(out, text.replace('{', '{\n ' + insert, 1).encode('ascii'))
+    every_gate_refuses(out, tmp_path, 'archive.json is not strict JSON.*' + reason, good)
+    # A nested duplicate key: a browser keeps the last one, a reviewer may read the first.
+    assert text.count('"chatbots": {') == 1
+    rewrite_archive(out, text.replace('"chatbots": {', '"chatbots": {\n  "apps": [],', 1).encode('ascii'))
+    every_gate_refuses(out, tmp_path, 'archive.json is not strict JSON.*duplicate key', good)
+    for payload in (b'"text"', b'not json at all'):
+        rewrite_archive(out, payload)
+        every_gate_refuses(out, tmp_path, 'archive.json is (refused: top level is not an object|not an exported answer archive)', good)

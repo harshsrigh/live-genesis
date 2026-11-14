@@ -1,7 +1,7 @@
-"""Provider settings shared by the engine, the study harness, the budget gate and `cli check-provider`.
+"""Provider settings shared by the inference adapters, the archive, the budget gate and `cli check-provider`.
 
 Nothing here imports a provider SDK or makes an HTTP request, so `controls` (and through it
-the web processes) may import it. Three providers exist:
+the web process) may import it. Three providers exist:
 
 * `openai`             OpenAI Responses API, key `OPENAI_API_KEY`.
 * `anthropic`          Anthropic Messages API, key `ANTHROPIC_API_KEY`.
@@ -24,7 +24,7 @@ Answers Over Time only (`cli archive-run`): NAMED endpoints (`LIVE_ARCHIVE_ENDPO
 each one more server speaking Chat Completions with its own base URL (same rule as above), its own
 key variable (`..._KEY_VAR` holds the variable's NAME) and its own rates. There, zero rates are also
 accepted for a hosted endpoint the operator declares free (`..._FREE_TIER=YES`, basis `declared-free`).
-`round` and `study-run` never use a named endpoint. `cli archive-check-endpoints` prints them.
+`cli archive-check-endpoints` prints them.
 """
 from __future__ import annotations
 
@@ -41,11 +41,7 @@ NAMES = ("openai", "anthropic", "openai-compatible")
 COMPATIBLE = "openai-compatible"
 UNKNOWN_PROVIDER = "LIVE_PROVIDER must be openai, anthropic or openai-compatible"
 KEY_NAMES = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", COMPATIBLE: "OPENAI_COMPATIBLE_API_KEY"}
-DEFAULT_MODELS = {"openai": "gpt-5.6-luna", "anthropic": "claude-haiku-5-5"}  # openai-compatible has none: set LIVE_MODEL
 DEFAULT_TIMEOUT_SECONDS, MIN_TIMEOUT_SECONDS, MAX_TIMEOUT_SECONDS = 35.0, 5.0, 600.0
-# Output-token limit of one resident turn (LIVE_MAX_OUTPUT_TOKENS). The engine's hold, its prompt guidance and
-# all three adapters use the same effective value.
-DEFAULT_MAX_OUTPUT_TOKENS, MIN_MAX_OUTPUT_TOKENS, MAX_MAX_OUTPUT_TOKENS = 1200, 200, 4000
 REASONING_EFFORTS = ("low", "medium", "high")
 LOCAL_PLACEHOLDER_KEY = "local-no-key"  # sent to a loopback server when no key is configured; not a credential
 _IPV4_LOOPBACK = ipaddress.ip_network("127.0.0.0/8")
@@ -76,18 +72,6 @@ def timeout_seconds() -> float:
     if not math.isfinite(value):
         raise ProviderConfigError("LIVE_INFER_TIMEOUT_SECONDS must be a number of seconds (5-600)")
     return min(max(value, MIN_TIMEOUT_SECONDS), MAX_TIMEOUT_SECONDS)
-
-
-def max_output_tokens() -> int:
-    """LIVE_MAX_OUTPUT_TOKENS for a resident turn, every adapter: default 1200, clamped to 200-4000."""
-    raw = os.getenv("LIVE_MAX_OUTPUT_TOKENS", "").strip()
-    if not raw:
-        return DEFAULT_MAX_OUTPUT_TOKENS
-    try:
-        value = int(raw)
-    except ValueError:
-        raise ProviderConfigError("LIVE_MAX_OUTPUT_TOKENS must be a whole number of tokens (200-4000)") from None
-    return min(max(value, MIN_MAX_OUTPUT_TOKENS), MAX_MAX_OUTPUT_TOKENS)
 
 
 def is_loopback_host(host: str | None) -> bool:
@@ -163,8 +147,8 @@ def compat_settings() -> CompatSettings:
 
 # ---- Named endpoints for Answers Over Time (LIVE_ARCHIVE_ENDPOINTS) -------------------------
 # Each is one server speaking the OpenAI Chat Completions API, with its own base URL, key variable and
-# price rates, so one archive run can ask models on several services. `cli round` and `cli study-run`
-# never use them. The record holds the NAME of the key variable, never the key.
+# price rates, so one archive run can ask models on several services. The record holds the NAME of the
+# key variable, never the key.
 BASIS_RATES, BASIS_LOCAL, BASIS_FREE = "rates", "local", "declared-free"
 PRICING_BASES = (BASIS_RATES, BASIS_LOCAL, BASIS_FREE)
 ENDPOINT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
@@ -359,13 +343,12 @@ def compat_api_key(settings: CompatSettings) -> str:
 
 
 def check_ready(provider: str | None = None) -> str:
-    """Local gate shared by `engine.run_round` and `study.run_study`: known provider, usable settings,
-    key present where one is needed. Returns the provider name. Sends nothing."""
+    """Local gate before a paid run: known provider, usable settings, key present where one is
+    needed. Returns the provider name. Sends nothing."""
     provider = name() if provider is None else provider
     if provider not in NAMES:
         raise ProviderConfigError(UNKNOWN_PROVIDER)
     timeout_seconds()
-    max_output_tokens()
     if provider == COMPATIBLE:
         compat_api_key(compat_settings())
     elif not key_is_set(provider):
@@ -418,10 +401,8 @@ def describe() -> tuple[list[str], bool]:
         provider = None
         problems.append(str(err))
     lines.append(f"Provider: {provider_raw or '(empty)'}" + ("" if provider else "  [not valid]"))
-    model = os.getenv("LIVE_MODEL", "").strip() or (DEFAULT_MODELS.get(provider or "", ""))
-    lines.append(f"Model (LIVE_MODEL; each agent keeps the model saved by init / set-model): {model or '(not set)'}")
-    if provider == COMPATIBLE and not model:
-        problems.append("LIVE_MODEL is required for openai-compatible (the exact model id the server expects)")
+    lines.append("Models asked: the entries of LIVE_ARCHIVE_MODELS, each naming its own provider (see `cli archive-plan`). "
+                 "LIVE_PROVIDER only decides whether the two global rates may be zero.")
     settings: CompatSettings | None = None
     if provider == COMPATIBLE:
         try:
@@ -437,11 +418,6 @@ def describe() -> tuple[list[str], bool]:
             lines.append("Base URL host: (not usable)")
     try:
         lines.append(f"Timeout per call: {timeout_seconds():g} s")
-    except ProviderConfigError as err:
-        problems.append(str(err))
-    try:
-        lines.append(f"Output limit per reply (LIVE_MAX_OUTPUT_TOKENS): {max_output_tokens()} tokens. "
-                     "A reply cut off at it is discarded; `cli turns` shows it as truncated")
     except ProviderConfigError as err:
         problems.append(str(err))
     if provider:
@@ -479,7 +455,7 @@ def describe() -> tuple[list[str], bool]:
 
 
 def add_parser(sub) -> None:
-    sub.add_parser("check-provider", help="Show the provider settings a round would use (free; no model call, no key printed)")
+    sub.add_parser("check-provider", help="Show LIVE_PROVIDER, the single openai-compatible endpoint (LIVE_COMPAT_BASE_URL), whether a key is set and whether the two global rates may be zero (free; no model call, no key printed)")
     sub.add_parser("archive-check-endpoints", help="Answers Over Time: show each named endpoint's host, whether its key variable "
                                                    "is set, rates and pricing basis (free; no model call, no key or URL path printed)")
 
@@ -487,7 +463,7 @@ def add_parser(sub) -> None:
 def handle_command(args, parser) -> bool:
     if args.command not in ("check-provider", "archive-check-endpoints"):
         return False
-    config.load_provider_credentials()  # CLI process only, as `round` does; only yes/no is ever printed
+    config.load_provider_credentials()  # CLI process only, as `archive-run` does; only yes/no is ever printed
     lines, usable = describe() if args.command == "check-provider" else describe_endpoints()
     print("\n".join(lines))
     if not usable:

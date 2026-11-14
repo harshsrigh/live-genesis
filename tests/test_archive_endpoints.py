@@ -15,7 +15,7 @@ import pytest
 
 from live_genesis import archive, archive_pages, cli, config, controls, core, engine, providers, snapshot
 
-from test_archive import REPO, question_file, ready, rows, run_cli, trending_file  # noqa: F401
+from test_archive import REPO, question_file, ready, rows, run_cli, society_state, society_tables, trending_file  # noqa: F401
 
 KEY_CF = 'SENTINEL-KEY-VALUE-CF-7f3a'
 KEY_GOOG = 'SENTINEL-KEY-VALUE-GOOG-91bc'
@@ -113,7 +113,7 @@ def three(ready, monkeypatch):
 
 # ---- B. model ids ------------------------------------------------------------------------------------
 
-def test_archive_model_ids_have_their_own_rule_and_agents_keep_theirs():
+def test_archive_model_ids_have_their_own_rule():
     accepted = ['gemma3:4b', 'llama3.2:3b', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', 'google/gemma-4-31b-it:free',
                 'claude-haiku-5-5', 'claude-3-5-haiku-20241022', 'accounts/acme/models/llama-v3p1-8b-instruct', 'x' * 120]
     for model in accepted:
@@ -121,10 +121,6 @@ def test_archive_model_ids_have_their_own_rule_and_agents_keep_theirs():
     for model in ('', 'x' * 121, 'has space', 'a..b', '../etc', 'tab\there', 'new\nline', 'zero​width', 'café', 'a,b', 'a=b', 'a?b',
                   'evil.example.org', 'host.tld/path', 'see-https://x.io', '<script>', 'a"b', "a'b", None, 7):
         assert not archive.model_id_ok(model), model
-    # What an agent may declare about itself is NOT loosened by any of this.
-    for model in ('gemma3:4b', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', 'google/gemma-4-31b-it:free', 'claude-3-5-haiku-20241022'):
-        assert not core.declared_ok(model), model
-    assert core.DECLARED.pattern == r"(?=.{1,48}\Z)(?:[A-Za-z0-9_-]+/)?[A-Za-z0-9._-]+"
 
 
 def test_entries_name_an_endpoint_and_the_old_form_is_unchanged(ready, monkeypatch):
@@ -230,7 +226,7 @@ def test_endpoint_settings_are_validated(isolated_db, monkeypatch):
     assert providers.endpoints()['my-host'].port == 8080
 
 
-def test_named_key_variables_are_provider_secrets_dropped_by_web_processes(isolated_db, monkeypatch):
+def test_named_key_variables_are_provider_secrets_dropped_by_the_web_process(isolated_db, monkeypatch):
     three_endpoints(monkeypatch)
     assert config.endpoint_key_variables() == ('CF_TEST_API_KEY', 'GOOG_TEST_API_KEY')
     assert set(config.provider_secret_keys()) == set(config.PROVIDER_SECRET_KEYS) | {'CF_TEST_API_KEY', 'GOOG_TEST_API_KEY'}
@@ -244,8 +240,8 @@ def test_named_key_variables_are_provider_secrets_dropped_by_web_processes(isola
     path = os.environ['PATH']
     assert set(config.drop_provider_secrets()) == {'CF_TEST_API_KEY', 'GOOG_TEST_API_KEY'}
     assert 'CF_TEST_API_KEY' not in os.environ and 'GOOG_TEST_API_KEY' not in os.environ and os.environ['PATH'] == path
-    # Both web apps call it at import and at start-up, so a key exported in their shell is gone before a request.
-    for module in ('app.py', 'observatory.py'):
+    # The web app calls it at import and at start-up, so a key exported in its shell is gone before a request.
+    for module in ('app.py',):
         assert (REPO / 'live_genesis' / module).read_text(encoding='utf-8').count('drop_provider_secrets()') >= 2
 
 
@@ -378,17 +374,14 @@ def test_three_endpoints_one_rate_limited_the_others_complete_and_nothing_leaks(
     assert 'We asked it ourselves · version @cf/meta/llama-3.3-70b-instruct-fp8-fast · via cf' in page
     assert 'No answer this time: the service limited the number of requests' in page
     assert "not the same as its maker's own chat app" in page and 'open model' not in page and ' says' not in page.replace(' says where', '')
-    out = tmp_path / 'published'
-    snapshot.export_published(out)
-    snapshot.approve_published(out, confirmed=True)
-    assert snapshot.check_published(out)['reviewed'] is True
-    exported = (out / 'archive.json').read_text(encoding='utf-8')
+    exported = snapshot._encode(payload).decode('ascii')               # the public payload as a file would hold it
+    assert archive.publish_problem(json.loads(exported)) is None
     assert '"endpoint": "cf"' in exported and '"pricing_basis": "declared-free"' in exported and 'system_fingerprint' not in exported
     assert 'latency' not in exported and 'fp_abc123' not in exported
     # No key, no URL, no host and no provider error text anywhere: not in a table, not in a printed line, not in a file.
     site = '\n'.join(archive_pages.render_site(payload).values())
     everything = {'database': every_cell(), 'plan': plan_out, 'run': run_out, 'status': status_out, 'again': again, 'export': exported,
-                  'pages': site, 'manifest': (out / 'MANIFEST.json').read_text(encoding='utf-8')}
+                  'pages': site}
     for where, text in everything.items():
         for secret in SECRETS + ('response body',):
             assert secret not in text, (where, secret)
@@ -432,7 +425,7 @@ def test_the_real_sdk_client_follows_no_redirect_and_a_key_reaches_its_own_host_
     assert not any(host == 'elsewhere.example.invalid' for host, _, _ in requests)
     # A named endpoint is never mixed with a native provider's request shape.
     with pytest.raises(engine.ProviderNotReady):
-        engine.infer('openai', 'model-x', 'the prompt', endpoint=found['cf'])
+        engine.infer('openai', 'model-x', 'the prompt', system='s', max_output_tokens=50, endpoint=found['cf'])
 
 
 # ---- D. what is recorded, and what counts as a new model ------------------------------------------------
@@ -530,9 +523,9 @@ def test_sampling_is_switchable_and_native_apis_get_only_what_they_take(three, m
     archive.run_archive(max_usd=0.05, only='gpt')
     assert all(c['request']['temperature'] == 0 and 'seed' not in c['request'] for c in seen) and len(seen) == 20
     assert rows('SELECT sampling FROM archive_answers ORDER BY id DESC LIMIT 1')[0]['sampling'] == 'temperature=0'
-    # A resident turn and a study call still send no sampling at all.
+    # A call that names no sampling sends none at all.
     seen.clear()
-    engine.infer('openai', 'gpt-test-1', 'a prompt')
+    engine.infer('openai', 'gpt-test-1', 'a prompt', system='s', max_output_tokens=50)
     assert 'temperature' not in seen[0]['request'] and 'seed' not in seen[0]['request']
 
 
@@ -693,12 +686,12 @@ def test_check_endpoints_prints_hosts_and_yes_no_and_contacts_no_hosted_service(
 
 def test_a_database_from_before_named_endpoints_migrates_in_place(ready, tmp_path, monkeypatch):
     trending_file(tmp_path, monkeypatch, 2)
-    core.seed_agents()
     data, trending = archive.load_questions(), archive.load_questions(track='trending')
     with core.connect() as cx:
         for table in ('archive_run_answerers', 'archive_run_sets', 'archive_answers', 'archive_runs', 'archive_questions',
                       'archive_set_versions', 'archive_sets'):
             cx.execute(f'DROP TABLE {table}')
+        society_tables(cx)                         # an older database also holds the removed society's tables
         cx.executescript(OLD_SCHEMA.read_text(encoding='utf-8'))
         assert 'endpoint' not in {r[1] for r in cx.execute('PRAGMA table_info(archive_answers)')}
     archive.lock()
@@ -717,12 +710,14 @@ def test_a_database_from_before_named_endpoints_migrates_in_place(ready, tmp_pat
                    "'Canberra.','canberra',?,NULL,'2026-10-02T09:00:00+00:00')", (data['question_set'], archive.answer_hash('Canberra.')))
         before_rows = [tuple(r) for r in cx.execute('SELECT * FROM archive_answers')]
         before_runs = [tuple(r) for r in cx.execute('SELECT * FROM archive_runs')]
-    # Read-only before any migration (the observatory right after the upgrade): the old record is shown, the new fields are null.
+    # Read-only before any migration (the web app right after the upgrade): the old record is shown, the new fields are null.
+    society = society_state()
     before = archive.public_payload(readonly=True)
     assert archive.payload_problem(before) is None and before['runs'][0]['skipped'] == {}
     assert {key: before['answers'][0][key] for key in archive.PUBLIC_CALL_FIELDS} == dict.fromkeys(archive.PUBLIC_CALL_FIELDS)
-    core.init_db()                                  # what every CLI command and the app do on start
+    core.init_db()                                  # what every CLI command does on start
     core.init_db()                                  # idempotent
+    assert society_state() == society               # the society's table is neither altered nor dropped, and its rows are as they were
     with core.connect() as cx:
         columns = [r[1] for r in cx.execute('PRAGMA table_info(archive_answers)')]
         # The endpoint columns, then (since repeat samples) the sample index: 1 on every row from before it.

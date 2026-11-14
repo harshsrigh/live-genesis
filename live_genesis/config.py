@@ -7,11 +7,11 @@ Two kinds of values live in the local `.env` file:
   `live_genesis.core` is imported.
 * **Provider credentials** (everything else, notably `OPENAI_API_KEY`,
   `ANTHROPIC_API_KEY`, `OPENAI_COMPATIBLE_API_KEY` and the key variables that
-  `LIVE_ARCHIVE_ENDPOINT_<NAME>_KEY_VAR` names): needed only by the process that makes a model call. Only the operator CLI's `round`, `study-run`, `archive-run` and
+  `LIVE_ARCHIVE_ENDPOINT_<NAME>_KEY_VAR` names): needed only by the process that makes a model call. Only the operator CLI's `archive-run` and
   `check-provider` (which prints only whether a key is set) commands call `load_provider_credentials()`.
 
-The web processes never call a model. They call `drop_provider_secrets()` so that a key
-exported in the shell that started them is removed from their environment as well.
+The web process never calls a model. It calls `drop_provider_secrets()` so that a key
+exported in the shell that started it is removed from its environment as well.
 Values already present in the environment always win over `.env` (never overridden).
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ from dotenv import dotenv_values
 ROOT = Path(__file__).resolve().parent.parent
 ENV_FILE = ROOT / ".env"
 SETTINGS_PREFIX = "LIVE_"
-# Removed from the environment of every web process. Extend when a provider is added.
+# Removed from the environment of the web process. Extend when a provider is added.
 PROVIDER_SECRET_KEYS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_COMPATIBLE_API_KEY")
 # Named archive endpoints (providers.endpoints): LIVE_ARCHIVE_ENDPOINTS lists the names, and
 # LIVE_ARCHIVE_ENDPOINT_<NAME>_KEY_VAR holds the NAME of the environment variable with that endpoint's key.
@@ -77,7 +77,7 @@ def _apply(want_settings: bool) -> list[str]:
 
 
 def load_settings() -> list[str]:
-    """Load only non-secret `LIVE_*` settings from `.env`. Safe for web processes."""
+    """Load only non-secret `LIVE_*` settings from `.env`. Safe for the web process."""
     return _apply(True)
 
 

@@ -1,14 +1,10 @@
 """Budget reservations and operator reconciliation. Offline: no provider is contacted."""
-import json
 import threading
 
 import pytest
 
-from live_genesis import engine
-from live_genesis.core import (BudgetExceeded, budget_status, close_reservation, connect, overview, record_reconciliation,
-                               record_usage, reserve_budget, seed_agents, settle_reservation)
-
-GOOD='{"action":"post","topic":"research","title":"Mocked","body":"Offline mocked provider response.","memory":"m"}'
+from live_genesis.core import (BudgetExceeded, budget_status, close_reservation, record_reconciliation,
+                               record_usage, reserve_budget, settle_reservation, spent_usd)
 
 
 def test_reservation_counts_until_settled_or_released(isolated_db):
@@ -50,55 +46,6 @@ def test_concurrent_reservations_cannot_overshoot(isolated_db):
     assert budget_status()['committed_usd']==1.0
 
 
-def test_round_respects_holds_from_another_runner(isolated_db,monkeypatch):
-    seed_agents()
-    monkeypatch.setenv('OPENAI_API_KEY','fake')
-    monkeypatch.setenv('LIVE_SPEND_LIMIT_USD','0.005')  # one call's hold here is about $0.002 (sized from the prompt bytes)
-    reserve_budget(None,'other-runner',0.004,0.005)
-    monkeypatch.setattr(engine,'infer',lambda *a: (_ for _ in ()).throw(AssertionError('must not call')))
-    result=engine.run_round(limit=1)
-    assert 'ceiling' in result[0]['error']
-    assert overview()['metrics']['tokens']==0
-
-
-def test_failed_inference_stays_counted_as_unconfirmed(isolated_db,monkeypatch):
-    seed_agents()
-    monkeypatch.setenv('OPENAI_API_KEY','fake')
-    def flaky(provider,model,prompt):
-        if json.loads(prompt)['identity']['name']=='Astra':
-            raise TimeoutError('secret provider detail')
-        return engine.Completion(GOOD,100,50)
-    monkeypatch.setattr(engine,'infer',flaky)
-    out=engine.run_round(limit=2)
-    assert out[0]['error']=='inference failed' and 'unconfirmed' in out[0]['budget']
-    assert 'secret' not in json.dumps(out)
-    # Rule ported from codex/local-0.2: an unconfirmed charge STOPS the round. (This test used
-    # to expect the second agent to be called.) Nothing more is called until `reconcile`.
-    assert len(out)==1 and out[0]['reservation']==1
-    assert 'reconcile' in engine.run_round(limit=2)[0]['error']
-    status=budget_status()
-    assert status['open_reservations']==1
-    with connect() as cx:
-        hold=cx.execute('SELECT reserved_usd FROM budget_reservations WHERE id=1').fetchone()[0]
-    assert 0.001<hold<=engine.call_hold('x'*engine.PROMPT_BYTE_LIMIT,0.20,1.20)  # sized from the prompt actually sent
-    assert status['reserved_usd']==pytest.approx(hold, abs=1e-6)  # status rounds to 6 decimals
-    assert status['committed_usd']==pytest.approx(hold+status['estimated_usd'], abs=1e-6)
-    metrics=overview()['metrics']
-    assert metrics['reserved_usd']==status['reserved_usd'] and metrics['provider_reported_usd'] is None
-    with connect() as cx:
-        assert [r[0] for r in cx.execute('SELECT status FROM budget_reservations ORDER BY id')]==['unconfirmed']
-
-
-def test_setup_error_releases_the_hold(isolated_db,monkeypatch):
-    seed_agents()
-    monkeypatch.setenv('OPENAI_API_KEY','fake')
-    def not_ready(*args):
-        raise engine.ProviderNotReady('sdk missing')
-    monkeypatch.setattr(engine,'infer',not_ready)
-    assert engine.run_round(limit=1)[0]['error']=='ProviderNotReady'
-    assert budget_status()['committed_usd']==0
-
-
 def test_reconciliation_raises_but_never_lowers_the_gate(isolated_db):
     record_usage(None,'m',1_000_000,0)  # $0.20 estimated
     held=reserve_budget(None,'m',0.05,10)
@@ -109,8 +56,8 @@ def test_reconciliation_raises_but_never_lowers_the_gate(isolated_db):
     assert report['committed_usd']==pytest.approx(0.55)
     record_usage(None,'m',500_000,0)  # +$0.10 after the entry
     assert budget_status()['committed_usd']==pytest.approx(0.65)
-    assert overview()['metrics']['provider_reported_usd']==0.50
-    assert overview()['metrics']['cost_usd']==pytest.approx(0.30)  # estimate is reported unchanged
+    assert budget_status()['last_reconciliation']['provider_reported_usd']==0.50
+    assert spent_usd()==pytest.approx(0.30)  # estimate is reported unchanged
     with pytest.raises(BudgetExceeded):
         reserve_budget(None,'m',0.40,1.0)
     # A lower operator figure cannot push the gate under the local estimate.

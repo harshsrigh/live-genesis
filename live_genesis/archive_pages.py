@@ -5,7 +5,7 @@ Pure functions from the public payload (archive.public_payload, or a reviewed
 published/archive.json) to text. No database, no model, no JavaScript, no inline style or script:
 the pages work under the site's Content-Security-Policy and with scripts off. Every piece of text
 that reaches a page goes through `esc`; model output is untrusted. All links are relative, so the
-same pages work in a static snapshot under any sub-path and in both web apps.
+same pages work in a static snapshot under any sub-path and in the local web app.
 
 Pages (under `archive/`):
 * `index.html`: the front page. With a chat-app run in the payload it is the chat-app comparison (the
@@ -41,8 +41,8 @@ App names are plain text, never a logo, and never the largest thing on a page or
 Standalone: `render_site(payload, standalone=True)` is the archive published on its own (snapshot.py
 `--archive-only`), and it is the chat-app track ONLY (owner decision): `index.html`, `chatbots.html`,
 `c/`, the chat-app cards and the chat-app data files. No `models.html`, `trending.html`, `q/`, `t/`,
-model card or model data file is made, and no page links to one. The local apps and a full snapshot
-keep every page. `sibling` (standalone only) is the relative address of the other published
+model card or model data file is made, and no page links to one. The local web app
+keeps every page. `sibling` (standalone only) is the relative address of the other published
 snapshot as seen from the site root (`demo/` or `../`); the bar links its archive.
 """
 from __future__ import annotations
@@ -663,12 +663,10 @@ def _meta(view: _View, base: str, *, board: dict | None = None, track: str = "mo
 def _bar(view: _View, up: str, base: str, versions: dict[str, str], current: str = "", *, here: str, standalone: bool = False,
          sibling: str | None = None) -> str:
     """The top bar: one line. `base` leads to the archive folder ("" on its own pages, "../" one folder
-    down). The last link goes to the observatory; a standalone archive has none, so it is left out there
-    (or, when the build names the other published snapshot, replaced by a link to that snapshot's archive)."""
+    down). When a standalone build names the other published snapshot, the last link goes to that
+    snapshot's archive."""
     chat = bool(view.chat.dates)
-    if not standalone:
-        last = f'    <a href="{up}">Observatory</a>\n'
-    elif sibling:
+    if standalone and sibling:
         # A sample page never calls the other snapshot (or itself) "recorded".
         last = (f'    <a href="{esc(up + sibling)}archive/{FIRST_PAGE}">'
                 f'{"Main archive" if view.demo else "Sample site"}</a>\n')
@@ -1529,7 +1527,7 @@ def render_data_file(payload: dict, name: str) -> str:
 
 def static_files() -> list[str]:
     """Every file under static/ that the archive pages need: the stylesheet, the mark, the icon, the
-    fonts the stylesheet names and each font's licence text. Nothing of the observatory page."""
+    fonts the stylesheet names and each font's licence text."""
     names = list(ASSETS)
     for font in sorted(set(re.findall(r'url\("(fonts/[A-Za-z0-9._-]+)"\)', (STATIC / "archive.css").read_text(encoding="utf-8")))):
         names.append(font)

@@ -1,5 +1,6 @@
 """Answers Over Time (live_genesis/archive.py, archive_pages.py). Offline: every model call is a
 replaced `engine.infer`; nothing here contacts a provider."""
+import copy
 import hashlib
 import json
 import re
@@ -87,6 +88,51 @@ def ready(isolated_db, tmp_path, monkeypatch):
 def rows(sql, *args):
     with core.connect() as cx:
         return [dict(r) for r in cx.execute(sql, args)]
+
+
+def tables():
+    return sorted(r['name'] for r in rows("SELECT name FROM sqlite_master WHERE type='table'"))
+
+
+def publish_refusal(payload):
+    """Why a whole payload (model track included) could not be published, in the order the removed full export
+    asked: the payload and publication rules, the content guards, then the question hashes. '' when nothing does."""
+    return archive.publish_problem(payload) or '; '.join(snapshot._scan(payload)) or archive.set_hash_problem(payload) or ''
+
+
+# What a database made before 14 November 2026 also holds: the agents table of the removed society. The older
+# archive schemas (tests/fixtures/archive_schema_v*.sql) refer to it, as the real ones do.
+AGENTS_TABLE = '''CREATE TABLE agents (
+    id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, role TEXT NOT NULL, persona TEXT NOT NULL, key_hash TEXT UNIQUE NOT NULL,
+    model TEXT NOT NULL, memory TEXT NOT NULL DEFAULT '', credits INTEGER NOT NULL DEFAULT 100, created_at TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1, key_expires REAL NOT NULL DEFAULT 0, external INTEGER NOT NULL DEFAULT 0)'''
+
+
+def society_tables(cx):
+    """Give an old-schema test database its agents table, with the one agent older `api` answers name."""
+    cx.execute(AGENTS_TABLE)
+    cx.execute("INSERT INTO agents(name,role,persona,key_hash,model,memory,created_at) VALUES ('Astra','Scientist','p','hash','m',"
+               "'a private note','2026-01-01T00:00:00+00:00')")
+
+
+def society_state():
+    """The agents table as it stands: its definition and every row. The reduced code must leave both alone."""
+    return rows("SELECT sql FROM sqlite_master WHERE name='agents'") + rows('SELECT * FROM agents')
+
+
+def rendered_site(out):
+    """The default rendering (what the local web app serves: every page, the model track included) written as
+    files, with the static files beside it as in a snapshot. Returns the payload it was made from."""
+    payload = archive.public_payload(readonly=True)
+    for name, text in archive_pages.render_site(payload).items():
+        target = out / 'archive' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding='utf-8')
+    for name in archive_pages.static_files():
+        target = out / 'static' / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((STATIC / name).read_bytes())
+    return payload
 
 
 # ---- normalisation and the changed flag ----------------------------------------------------
@@ -326,12 +372,11 @@ def test_refused_without_key_optin_or_valid_cap_before_any_call(ready, monkeypat
     assert calls == [] and rows('SELECT * FROM archive_runs') == [] and rows('SELECT * FROM budget_reservations') == []
 
 
-def test_prompt_is_exactly_the_question_and_calls_are_not_resident_actions(ready, monkeypatch):
+def test_prompt_is_exactly_the_question_and_a_run_makes_no_other_table(ready, monkeypatch):
     calls = []
     as_real(monkeypatch, 'Seven.', calls)
     archive.lock()
-    before = {t: rows(f'SELECT COUNT(*) n FROM {t}')[0]['n'] for t in ('events', 'posts', 'rounds', 'round_actions', 'memory_notes',
-                                                                         'action_provenance', 'engine_turns')}
+    before = tables()
     done = archive.run_archive(max_usd=1)
     questions = archive.load_questions()['questions']
     assert len(calls) == 40 and done['answers']['answered'] == 40
@@ -343,7 +388,10 @@ def test_prompt_is_exactly_the_question_and_calls_are_not_resident_actions(ready
     as_real(monkeypatch, 'Eight.', calls)
     archive.run_archive(max_usd=1)
     assert all('Seven' not in c['prompt'] + c['system'] for c in calls[40:])
-    assert before == {t: rows(f'SELECT COUNT(*) n FROM {t}')[0]['n'] for t in before}
+    # A run writes to the archive's tables and the spend accounting; no table of the removed society exists or appears.
+    assert tables() == before and not {'agents', 'events', 'posts', 'rounds', 'round_actions', 'memory_notes', 'action_provenance',
+                                       'engine_turns'} & set(before)
+    assert {t for t in before if not t.startswith('archive_')} == {'api_usage', 'budget_reservations', 'cost_reconciliations', 'operator_audit'}
     reservations = rows('SELECT agent_id,status,provider FROM budget_reservations')
     assert len(reservations) == 80 and {(r['agent_id'], r['status'], r['provider']) for r in reservations} == {(None, 'settled', 'openai')}
     assert done['estimated_usd'] == pytest.approx(40 * (40 * 0.20 + 12 * 1.20) / 1e6)
@@ -437,9 +485,7 @@ def test_replaced_infer_and_dry_run_are_mock_and_never_public(ready, monkeypatch
     archive.lock()
     as_real(monkeypatch, 'Seven.')
     assert archive.run_archive(max_usd=1)['run'] == 1
-    out = tmp_path / 'published'
-    snapshot.export_published(out)
-    exported = (out / 'archive.json').read_text(encoding='utf-8')
+    exported = json.dumps(archive.public_payload())
     assert 'MOCKED-REPLY' not in exported and 'DRY-RUN' not in exported and '"mock"' not in exported
     # Even a payload that smuggles a mock row in is not rendered.
     payload = archive.public_payload()
@@ -498,12 +544,10 @@ def test_demo_archive_is_refused_next_to_real_data(ready, monkeypatch):
     assert rows("SELECT COUNT(*) n FROM archive_runs WHERE kind='demo'")[0]['n'] == 0
 
 
-def test_demo_archive_is_refused_after_real_world_activity(isolated_db):
-    agent = core.seed_agents()[0]
-    core.submit_action(1, {'action': 'post', 'topic': 'research', 'title': 'A real post', 'body': 'Recorded by an outside client.'})
+def test_demo_archive_is_refused_after_recorded_model_usage(isolated_db):
+    core.record_usage(None, 'some-model', 10, 5)
     with pytest.raises(archive.ArchiveRefused, match='use a fresh DB'):
         archive.demo_archive()
-    assert agent['name']
 
 
 # ---- pages -----------------------------------------------------------------------------------------
@@ -700,37 +744,31 @@ def test_archive_stylesheet_uses_tokens_local_fonts_and_no_gradient():
     assert not re.findall(r'[a-z-]+: [0-9.]+cqw', flowing)                     # no cqw size outside the fitted card
 
 
-def test_snapshot_holds_the_archive_pages_and_links_them(ready, tmp_path, monkeypatch):
-    core.seed_agents()
-    cli.demo()
+def test_the_default_rendering_holds_the_archive_pages_and_links_them(ready, tmp_path, monkeypatch):
     archive.demo_archive()
     out = tmp_path / 'site'
-    info = snapshot.build(out)
-    assert info['demo_only'] is True
+    payload = rendered_site(out)
+    assert payload['demo_only'] is True
     assert (out / 'archive' / 'index.html').is_file() and len(list((out / 'archive' / 'q').glob('Q*.html'))) == 20
-    assert json.loads((out / 'archive.json').read_text(encoding='utf-8'))['answers_by_source'] == {'engine': 0, 'api': 0, 'demo': 514}
-    home = (out / 'index.html').read_text(encoding='utf-8')
-    assert home.count('href="archive/index.html"') == 1 and 'Answers over time</a>' in home
+    assert payload['answers_by_source'] == {'engine': 0, 'api': 0, 'demo': 514}
     for name in ('archive.css', 'archive-mark.svg', 'fonts/inter.woff2', 'fonts/bricolage-grotesque.woff2', 'fonts/jetbrains-mono.woff2'):
         assert (out / 'static' / name).is_file(), name
     page = (out / 'archive' / 'q' / 'Q11.html').read_text(encoding='utf-8')
     assert_page_is_safe(page)
     version = hashlib.sha256((STATIC / 'archive.css').read_bytes()).hexdigest()[:12]
     assert f'../../static/archive.css?v={version}"' in page
-    # Every relative address in the archive pages resolves to a file inside the snapshot.
+    # Every relative address in the archive pages resolves to a file: no page links out of the archive any more
+    # (the link to the observatory page went with that page).
     for html in (out / 'archive').rglob('*.html'):
         for url in page_urls(html.read_text(encoding='utf-8')):
             target = (html.parent / url.split('#')[0].split('?')[0]).resolve()
-            assert out.resolve() in target.parents or target == out.resolve(), url
-            assert target.is_file() or (target.is_dir() and (target / 'index.html').is_file()), url
+            assert out.resolve() in target.parents, url
+            assert target.is_file(), url
+        assert 'Observatory' not in html.read_text(encoding='utf-8'), html.name
 
 
 def test_snapshot_refuses_recorded_archive_answers_without_review(ready, tmp_path, monkeypatch):
-    core.seed_agents()
-    cli.demo()                                                # the world itself is scripted demo data
     archive.lock()
-    key = core.seed_agents()                                   # no new agents: keys are not needed here
-    assert key == []
     with core.connect() as cx:
         cx.execute("INSERT INTO archive_runs(number,kind,question_set,set_sha256,started_at) SELECT 1,'real',question_set,sha256,? FROM archive_sets",
                    (core.utcnow(),))
@@ -741,255 +779,145 @@ def test_snapshot_refuses_recorded_archive_answers_without_review(ready, tmp_pat
     assert not (tmp_path / 'site').exists()
 
 
-def test_both_web_apps_serve_the_same_pages(ready):
-    from live_genesis.app import app as combined
-    from live_genesis.observatory import app as readonly
+def test_the_web_app_serves_the_same_pages(ready):
+    from live_genesis.app import app
     archive.demo_archive()
     payload = archive.public_payload()
-    for application in (combined, readonly):
-        with TestClient(application) as client:
-            index = client.get('/archive/index.html')
-            assert index.status_code == 200 and index.text == archive_pages.render_index(payload)
-            assert 'text/html' in index.headers['content-type'] and "default-src 'none'" in index.headers['content-security-policy']
-            assert client.get('/archive/q/Q11.html').text == archive_pages.render_question(payload, 'Q11')
-            assert client.get('/archive', follow_redirects=False).headers['location'] == '/archive/index.html'
-            assert client.get('/archive/models.html').text == archive_pages.render_models(payload)
-            assert client.get('/archive/c/C001.html').text == archive_pages.render_question(payload, 'C001')
-            for missing in ('/archive/q/Q99.html', '/archive/q/Q11', '/archive/q/..%2Fx.html', '/archive/q/Q1.html'):
-                assert client.get(missing).status_code == 404, missing
-            assert client.get('/static/archive.css').status_code == 200
-            assert client.get('/static/fonts/inter.woff2').status_code == 200
-    with TestClient(readonly) as client:
+    with TestClient(app) as client:
+        index = client.get('/archive/index.html')
+        assert index.status_code == 200 and index.text == archive_pages.render_index(payload)
+        assert 'text/html' in index.headers['content-type'] and "default-src 'none'" in index.headers['content-security-policy']
+        assert client.get('/archive/q/Q11.html').text == archive_pages.render_question(payload, 'Q11')
+        assert client.get('/archive', follow_redirects=False).headers['location'] == '/archive/index.html'
+        assert client.get('/', follow_redirects=False).headers['location'] == '/archive/index.html'
+        assert client.get('/archive/models.html').text == archive_pages.render_models(payload)
+        assert client.get('/archive/c/C001.html').text == archive_pages.render_question(payload, 'C001')
+        for missing in ('/archive/q/Q99.html', '/archive/q/Q11', '/archive/q/..%2Fx.html', '/archive/q/Q1.html'):
+            assert client.get(missing).status_code == 404, missing
+        assert client.get('/static/archive.css').status_code == 200
+        assert client.get('/static/fonts/inter.woff2').status_code == 200
         assert client.post('/archive/index.html').status_code == 405
 
 
 def test_archive_pages_answer_503_without_a_database(tmp_path, monkeypatch):
-    from live_genesis.observatory import app as readonly
+    from live_genesis.app import app
     monkeypatch.setenv('LIVE_DB', str(tmp_path / 'missing.sqlite'))
-    with TestClient(readonly) as client:
+    with TestClient(app) as client:
         response = client.get('/archive/index.html')
         assert response.status_code == 503 and response.json() == {'detail': web.UNAVAILABLE}
     assert not (tmp_path / 'missing.sqlite').exists()
 
 
-# ---- reviewed data: published/archive.json -------------------------------------------------------
+# ---- a recorded model run: shown locally, never published -----------------------------------------
 
 def recorded_archive(monkeypatch, reply='Seven.'):
-    core.seed_agents()
     archive.lock()
     as_real(monkeypatch, reply)
     return archive.run_archive(max_usd=1)
 
 
-def retarget_archive(folder, edit):
-    """Hand-edit archive.json and make the manifest agree with it again (hash and counts)."""
-    data = json.loads((folder / 'archive.json').read_text(encoding='utf-8'))
-    edit(data)
-    payload = json.dumps(data, ensure_ascii=True, indent=1).encode('ascii')
-    (folder / 'archive.json').write_bytes(payload)
-    manifest = json.loads((folder / 'MANIFEST.json').read_text(encoding='utf-8'))
-    manifest['archive'] = {**snapshot._archive_counts(data), 'sha256': hashlib.sha256(payload).hexdigest()}
-    (folder / 'MANIFEST.json').write_text(json.dumps(manifest, indent=1))
-
-
-def test_export_round_trip_with_archive_json(ready, tmp_path, monkeypatch):
+def test_a_recorded_model_run_reads_as_asked_by_us_and_is_not_built_into_a_site_unreviewed(ready, tmp_path, monkeypatch):
     recorded_archive(monkeypatch, 'Café answers: seven.')
-    out = tmp_path / 'published'
-    manifest = snapshot.export_published(out)
-    assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json', 'overview.json']
-    raw = (out / 'archive.json').read_bytes()
+    payload = archive.public_payload()
+    assert payload['answers_by_source'] == {'engine': 40, 'api': 0, 'demo': 0} and payload['demo_only'] is False
+    assert not any(key in json.dumps(payload) for key in ('reservation', 'estimated_usd', 'input_tokens', 'normalised'))
+    # Written as a file would hold it (ASCII, every other character escaped), it renders the same pages.
+    raw = snapshot._encode(payload)
     assert raw.isascii() and b'Caf\\u00e9' in raw
-    assert manifest['schema'] == 'live-genesis-published/5'
-    assert manifest['archive'] == {'file': 'archive.json', 'sha256': hashlib.sha256(raw).hexdigest(), 'runs': 1, 'questions': 20,
-                                   'answers_by_source': {'engine': 40, 'api': 0, 'demo': 0, 'mock': 0},
-                                   'question_set': 'basic-1', 'set_hash': archive.load_questions()['sha256'],
-                                   'trending': {'questions': 0, 'question_set': 'trending', 'version': 0,
-                                                'set_hash': archive.load_questions(track='trending')['sha256']}}
-    exported = json.loads(raw)
-    assert exported == json.loads(json.dumps(archive.public_payload()))          # exactly the public payload
-    assert not any(key in json.dumps(exported) for key in ('reservation', 'estimated_usd', 'input_tokens', 'normalised'))
-    with pytest.raises(RuntimeError, match='not approved'):
-        snapshot.check_published(out)
-    with pytest.raises(RuntimeError, match='Not approved'):
-        snapshot.approve_published(out)
-    snapshot.approve_published(out, confirmed=True)
-    assert snapshot.check_published(out)['reviewed'] is True
-    assert any(line.startswith('archive answers id 1, field text') for line in snapshot.published_non_ascii(out))
-    # Rendering from the reviewed files opens no database and gives the pages a database build gives.
-    from_db = tmp_path / 'from-db'
-    snapshot.build(from_db, allow_non_demo=True)
-    monkeypatch.setenv('LIVE_DB', str(tmp_path / 'no-such.sqlite'))
-    site = tmp_path / 'site'
-    snapshot.build_from_data(site, out)
-    assert (site / 'archive.json').read_bytes() == raw
-    for page in ['index.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)]:
-        assert (site / 'archive' / page).read_bytes() == (from_db / 'archive' / page).read_bytes(), page
-    page = (site / 'archive' / 'q' / 'Q01.html').read_text(encoding='utf-8')
+    assert archive_pages.render_site(json.loads(raw)) == archive_pages.render_site(payload)
+    page = archive_pages.render_question(payload, 'Q01')
     assert 'Café answers: seven.' in page and 'We asked it ourselves · version gpt-test-1' in page
     assert 'AI-generated · we asked it ourselves · may be wrong' in page and 'data-method="asked-by-server" data-provenance="ai-generated"' in page
     assert 'scripted' not in page.lower() and 'sample' not in page.lower()
+    # The site build is for scripted demo data unless the operator says otherwise; and even then the model run is not written.
+    with pytest.raises(RuntimeError, match='not scripted-demo-only'):
+        snapshot.build(tmp_path / 'site')
+    assert not (tmp_path / 'site').exists()
+    snapshot.build(tmp_path / 'site', allow_non_demo=True)
+    assert 'seven' not in ''.join(path.read_text(encoding='utf-8') for path in (tmp_path / 'site').rglob('*')
+                                  if path.suffix in ('.html', '.json', '.jsonl', '.txt'))
+    # And there is nothing to export for review: the export is the chat-app track, and none was entered.
+    with pytest.raises(RuntimeError, match='holds no chat-app reply entered by hand'):
+        snapshot.export_published(tmp_path / 'published')
+    assert not (tmp_path / 'published').exists()
 
 
-def test_published_archive_tamper_guard_and_mock_are_refused(ready, tmp_path, monkeypatch):
+def test_a_hand_edited_model_payload_meets_the_payload_rules_and_the_guards(ready, tmp_path, monkeypatch):
     recorded_archive(monkeypatch)
-    out = tmp_path / 'published'
-    snapshot.export_published(out)
-    snapshot.approve_published(out, confirmed=True)
-    good = {name: (out / name).read_bytes() for name in ('archive.json', 'MANIFEST.json')}
+    good = json.loads(json.dumps(archive.public_payload()))
 
-    def restore():
-        for name, content in good.items():
-            if (out / name).is_symlink():
-                (out / name).unlink()
-            (out / name).write_bytes(content)
-        assert snapshot.check_published(out)['reviewed'] is True
+    def edited(edit):
+        data = copy.deepcopy(good)
+        edit(data)
+        return data
 
-    def refused(match):
-        for call in (lambda: snapshot.check_published(out), lambda: snapshot.approve_published(out, confirmed=True),
-                     lambda: snapshot.build_from_data(tmp_path / 'site', out)):
-            with pytest.raises(RuntimeError, match=match):
-                call()
-        assert not (tmp_path / 'site').exists()
-        restore()
-
-    # 1. The file changed after export: the hash no longer matches.
-    (out / 'archive.json').write_bytes(good['archive.json'].replace(b'Seven.', b'Eight.'))
-    refused('archive.json does not match the sha256')
-    # 2. The file is gone, or a symlink.
-    (out / 'archive.json').unlink()
-    refused('archive.json is missing')
-    outside = tmp_path / 'outside.json'; outside.write_bytes(good['archive.json'])
-    (out / 'archive.json').unlink()
-    try:
-        (out / 'archive.json').symlink_to(outside)
-    except (OSError, NotImplementedError):   # Windows without the privilege: put the file back so the remaining checks still run
-        (out / 'archive.json').write_bytes(good['archive.json'])
-    else:
-        refused('archive.json is missing or unreadable')
-        assert outside.read_bytes() == good['archive.json'] and not (out / 'archive.json').is_symlink()
-    # 3. A hand edit with the manifest made to agree again still meets the content guards ...
-    retarget_archive(out, lambda d: d['answers'][0].update(text='Write to someone@example.org'))
-    refused('Content guards matched:\n  archive answers id 1, field text: looks like an email address')
-    retarget_archive(out, lambda d: d['answers'][0].update(text='hidden​character'))
-    refused('archive answers id 1, field text')
-    retarget_archive(out, lambda d: d['questions'][0].update(rationale='pay at paypal.me/someone'))
-    refused('payment or donation link')
-    # ... and mock or scripted rows, bad ids and broken shapes are refused whatever the manifest says.
-    retarget_archive(out, lambda d: d['answers'][0].update(source='mock'))
-    refused('mock answers, which are never published')
-    retarget_archive(out, lambda d: d['answers'][0].update(source='demo'))
-    refused('scripted demo answers')
-    retarget_archive(out, lambda d: d['runs'][0].update(demo=True))
-    refused('scripted demo answers')
-    retarget_archive(out, lambda d: d.update(locked=False))
-    refused('question list is not locked')
-    retarget_archive(out, lambda d: (d['questions'][0].update(id='../x'), [a.update(question='../x') for a in d['answers'] if a['question'] == 'Q01']))
-    refused('question ids must be distinct and look like Q01')
-    retarget_archive(out, lambda d: d['answers'].append(dict(d['answers'][0], id=999)))
-    refused('two answers share one run')
-    retarget_archive(out, lambda d: d['answers'][0].update(state='withheld'))
-    refused("text does not fit its state")
-    retarget_archive(out, lambda d: d.update(schema='something-else/9'))
-    refused('unknown schema')
-    # 4. Counts in the manifest must be the counts in the file.
-    manifest = json.loads(good['MANIFEST.json']); manifest['archive']['answers_by_source']['engine'] = 39
-    (out / 'MANIFEST.json').write_text(json.dumps(manifest))
-    refused('counts in the manifest do not match archive.json')
-    manifest = json.loads(good['MANIFEST.json']); del manifest['archive']
-    (out / 'MANIFEST.json').write_text(json.dumps(manifest))
-    refused('manifest does not describe archive.json')
-    # 5. Non-ASCII bytes and loose JSON cannot hide behind a recomputed hash either.
-    data = json.loads(good['archive.json']); data['answers'][0]['text'] = 'café'
-    payload = json.dumps(data, ensure_ascii=False).encode('utf-8')
-    manifest = json.loads(good['MANIFEST.json']); manifest['archive']['sha256'] = hashlib.sha256(payload).hexdigest()
-    (out / 'archive.json').write_bytes(payload); (out / 'MANIFEST.json').write_text(json.dumps(manifest))
-    refused('archive.json holds a non-ASCII byte')
-    payload = good['archive.json'].replace(b'"locked": true', b'"locked": true, "locked": true', 1)
-    manifest = json.loads(good['MANIFEST.json']); manifest['archive']['sha256'] = hashlib.sha256(payload).hexdigest()
-    (out / 'archive.json').write_bytes(payload); (out / 'MANIFEST.json').write_text(json.dumps(manifest))
-    refused('archive.json is not strict JSON')
+    assert publish_refusal(good) == ''
+    # The content guards name the record and the category, never the text.
+    assert snapshot._scan(edited(lambda d: d['answers'][0].update(text='Write to someone@example.org'))) == \
+        ['answers id 1, field text: looks like an email address']
+    assert any(hit.startswith('answers id 1, field text') for hit in snapshot._scan(edited(lambda d: d['answers'][0].update(text='hidden\u200bcharacter'))))
+    assert any('payment or donation link' in hit for hit in snapshot._scan(edited(lambda d: d['questions'][0].update(rationale='pay at paypal.me/someone'))))
+    # Mock and scripted rows are never published, and neither are answers to a list that is not locked.
+    for edit, match in ((lambda d: d['answers'][0].update(source='mock'), 'mock answers, which are never published'),
+                        (lambda d: d['answers'][0].update(source='demo'), 'scripted demo answers'),
+                        (lambda d: d['runs'][0].update(demo=True), 'scripted demo answers'),
+                        (lambda d: d.update(locked=False), 'question list is not locked')):
+        assert re.search(match, publish_refusal(edited(edit))), match
+    # Bad ids and broken shapes are refused before anything is rendered.
+    for edit, match in ((lambda d: (d['questions'][0].update(id='../x'), [a.update(question='../x') for a in d['answers'] if a['question'] == 'Q01']),
+                         'question ids must be distinct and look like Q01'),
+                        (lambda d: d['answers'].append(dict(d['answers'][0], id=999)), 'two answers share one run'),
+                        (lambda d: d['answers'][0].update(state='withheld'), 'text does not fit its state'),
+                        (lambda d: d.update(schema='something-else/9'), 'unknown schema')):
+        broken = edited(edit)
+        assert re.search(match, archive.payload_problem(broken)), match
+        with pytest.raises(ValueError):
+            archive_pages.render_site(broken)
 
 
-def test_export_refuses_a_guard_hit_in_a_stored_answer(ready, tmp_path, monkeypatch):
+def test_the_guard_scan_names_a_hit_in_a_stored_answer(ready, tmp_path, monkeypatch):
     recorded_archive(monkeypatch)
     with core.connect() as cx:      # a row written before a guard existed, simulated by going around classify()
         cx.execute("INSERT INTO archive_runs(number,kind,question_set,set_sha256,started_at) SELECT 2,'real',question_set,sha256,? FROM archive_sets",
                    (core.utcnow(),))
         archive._store(cx, 2, 'basic-1', 'Q01', 'Astra', model='some-model-1', source='api', state='answered',
                        text='Send it to someone@example.org', agent_id=1)
-    with pytest.raises(RuntimeError, match='archive answers id 41, field text: looks like an email address'):
-        snapshot.export_published(tmp_path / 'published')
-    assert not (tmp_path / 'published').exists()
+    assert snapshot._scan(json.loads(json.dumps(archive.public_payload()))) == ['answers id 41, field text: looks like an email address']
 
 
-# ---- outside clients -------------------------------------------------------------------------------
+# ---- outside clients: the route is gone, older rows still read ---------------------------------------
 
-def test_outside_client_answers_are_self_declared_guarded_and_limited(ready, monkeypatch):
+def test_an_older_outside_answer_reads_as_self_declared_and_the_route_is_gone(ready, monkeypatch):
     from live_genesis.app import app
-    keys = {item['name']: item['key'] for item in core.seed_agents()}
-    auth = {'Authorization': f"Bearer {keys['Astra']}", 'X-Agent-Model': 'vendor/outside-model-2'}
-    body = {'run': 1, 'question_id': 'Q03', 'answer': ' Canberra. '}
-    with TestClient(app) as client:
-        assert client.post('/api/agent/archive-answer', json=body).status_code == 401
-        refused = client.post('/api/agent/archive-answer', json=body, headers=auth)
-        assert refused.status_code == 409 and 'not accepting answers' in refused.json()['detail']       # not locked yet
-        archive.lock()
-        assert client.post('/api/agent/archive-answer', json=body, headers=auth).status_code == 409       # no run yet
-        monkeypatch.setenv('OPENAI_API_KEY', 'fake-key-never-used')        # the web app dropped it from this process on import
-        as_real(monkeypatch, 'Seven.')
-        archive.run_archive(max_usd=1)
-        done = client.post('/api/agent/archive-answer', json=body, headers=auth)
-        assert done.status_code == 200 and done.json() == {
-            'recorded': True, 'run': 1, 'question_id': 'Q03', 'answerer': 'Astra', 'source': 'api',
-            'model': 'vendor/outside-model-2', 'model_verified': False, 'changed': None}
-        stored = rows("SELECT source,agent_id,model,provider,reservation_id,answer_text,estimated_usd FROM archive_answers WHERE source='api'")
-        assert stored == [{'source': 'api', 'agent_id': 1, 'model': 'vendor/outside-model-2', 'provider': None,
-                           'reservation_id': None, 'answer_text': 'Canberra.', 'estimated_usd': None}]
-        again = client.post('/api/agent/archive-answer', json=body, headers=auth)
-        assert again.status_code == 409 and 'never replaced' in again.json()['detail']
-        for change, status in (({'run': 2}, 409), ({'run': 0}, 422), ({'run': '1'}, 422), ({'question_id': 'Q99'}, 404),
-                               ({'question_id': '../Q1'}, 422), ({'answer': ''}, 422), ({'answer': 'x' * 1001}, 422),
-                               ({'answer': 'mail someone@example.org', 'question_id': 'Q04'}, 422),
-                               ({'answer': 'zero​width', 'question_id': 'Q04'}, 422), ({'answer': '...', 'question_id': 'Q04'}, 422),
-                               ({'extra': 1, 'question_id': 'Q04'}, 422)):
-            response = client.post('/api/agent/archive-answer', json={**body, **change}, headers=auth)
-            assert response.status_code == status, change
-            assert 'someone@' not in response.text
-        for headers in ({'Authorization': auth['Authorization']}, {**auth, 'X-Agent-Model': 'evil.example.org'},
-                        {**auth, 'X-Agent-Model': 'two words'}):
-            response = client.post('/api/agent/archive-answer', json={**body, 'question_id': 'Q04'}, headers=headers)
-            assert response.status_code == 422 and 'X-Agent-Model' in response.json()['detail']
-        # Not a resident action: no event, no round quota used, no provenance row.
-        assert rows('SELECT COUNT(*) n FROM events')[0]['n'] == 0 and rows('SELECT COUNT(*) n FROM round_actions')[0]['n'] == 0
-        assert rows("SELECT COUNT(*) n FROM archive_answers WHERE source='api'")[0]['n'] == 1
-        # Its own small per-minute window.
-        monkeypatch.setenv('LIVE_ARCHIVE_ANSWERS_PER_MINUTE', '2')
-        limited = [client.post('/api/agent/archive-answer', json={**body, 'question_id': f'Q{n:02d}'}, headers=auth) for n in (5, 6, 7)]
-        assert [r.status_code for r in limited][-1] == 429 and 'Retry-After' in limited[-1].headers
-        assert 'archive-minute' in limited[-1].json()['detail']
-        # A later run compares the client's answer with its own earlier one.
-        monkeypatch.delenv('LIVE_ARCHIVE_ANSWERS_PER_MINUTE')
-        controls.api_limiter.reset()
-        archive.run_archive(max_usd=1)
-        with core.connect() as cx:
-            cx.execute('DELETE FROM quota_windows')
-        old = client.post('/api/agent/archive-answer', json=body, headers=auth)
-        assert old.status_code == 409 and 'latest run, which is run 2' in old.json()['detail']
-        new = client.post('/api/agent/archive-answer', json={**body, 'run': 2, 'answer': 'Sydney'}, headers=auth)
-        assert new.status_code == 200 and new.json()['changed'] is True
+    recorded_archive(monkeypatch)
+    with core.connect() as cx:      # as the removed POST /api/agent/archive-answer stored one: source api, the sender's name, its id
+        archive._store(cx, 1, 'basic-1', 'Q03', 'Astra', model='vendor/outside-model-2', source='api', state='answered',
+                       text='Canberra.', agent_id=1)
+    stored = rows("SELECT source,agent_id,model,provider,reservation_id,answer_text,estimated_usd FROM archive_answers WHERE source='api'")
+    assert stored == [{'source': 'api', 'agent_id': 1, 'model': 'vendor/outside-model-2', 'provider': None,
+                       'reservation_id': None, 'answer_text': 'Canberra.', 'estimated_usd': None}]
     page = archive_pages.render_question(archive.public_payload(), 'Q03')
     assert 'Sent in by someone else, not checked · version vendor/outside-model-2' in page and 'We asked it ourselves · version gpt-test-1' in page
-    assert 'data-method="sent-in-unverified"' in page and 'AI-generated · may be wrong' in page and 'we asked it ourselves · may' not in page
-    assert '>Astra<' in page and archive.public_payload()['answers_by_source'] == {'engine': 80, 'api': 3, 'demo': 0}
+    assert 'data-method="sent-in-unverified"' in page and 'AI-generated · may be wrong' in page
+    assert '>Astra<' in page and archive.public_payload()['answers_by_source'] == {'engine': 40, 'api': 1, 'demo': 0}
+    # Nothing takes such an answer any more: no function, no route, no agent key.
+    assert not hasattr(archive, 'submit_api_answer')
+    body = {'run': 1, 'question_id': 'Q04', 'answer': 'Canberra.'}
+    with TestClient(app) as client:
+        assert client.post('/api/agent/archive-answer', json=body, headers={'X-Agent-Model': 'm-1'}).status_code == 405
+        assert client.get('/api/agent/archive-answer').status_code == 404
+    assert rows("SELECT COUNT(*) n FROM archive_answers WHERE source='api'")[0]['n'] == 1
 
 
-def test_engine_label_may_not_equal_an_agent_name(ready, monkeypatch):
-    core.seed_agents()
-    archive.lock()
-    as_real(monkeypatch, 'Seven.')
+def test_a_model_label_may_not_equal_an_older_outside_answerer(ready, monkeypatch):
+    recorded_archive(monkeypatch)
+    with core.connect() as cx:
+        archive._store(cx, 1, 'basic-1', 'Q03', 'Astra', model='some-model-1', source='api', state='answered', text='Canberra.', agent_id=1)
     monkeypatch.setenv('LIVE_ARCHIVE_MODELS', 'astra=openai:gpt-test-1')
-    with pytest.raises(archive.ArchiveRefused, match='equals an agent name'):
+    with pytest.raises(archive.ArchiveRefused, match='equals the name of an outside answerer'):
         archive.run_archive(max_usd=1)
+    monkeypatch.setenv('LIVE_ARCHIVE_MODELS', 'model-c=openai:gpt-test-1')
+    assert archive.run_archive(max_usd=1)['status'] == 'complete'
 
 
 # ---- command line -------------------------------------------------------------------------------------
@@ -1049,7 +977,7 @@ def test_cli_archive_run_requires_max_usd_and_passes_the_gates(ready, monkeypatc
     monkeypatch.setenv('LIVE_COMPAT_JSON_MODE', 'on')
     code, out = run_cli(monkeypatch, capsys, 'archive-run', '--max-usd', '0.05', '--models', 'model-a')
     assert code == 0 and len(calls) == 20 and 'PAID RUN' in out and '"status": "complete"' in out and archive.MOCK_BANNER not in out
-    assert 'snapshot --export' in out
+    assert 'Model answers are not published' in out and 'snapshot --export' not in out
     import os
     assert os.environ['LIVE_COMPAT_JSON_MODE'] == 'off'       # answers are sentences, never forced into JSON
 
@@ -1070,5 +998,6 @@ def test_archive_keeps_the_engine_and_keys_out_of_web_processes():
 def test_workflow_builds_the_scripted_archive_for_the_demo_site():
     text = (REPO / '.github' / 'workflows' / 'snapshot.yml').read_text(encoding='utf-8')
     assert text.count('python -m live_genesis.cli demo-archive\n') == 1
-    assert text.index('cli demo\n') < text.index('cli demo-archive') < text.index('Export static snapshot')
+    assert text.index('cli demo-archive') < text.index('Export static snapshot')
+    assert 'cli demo\n' not in text and 'seed_agents' not in text
     assert 'archive-run' not in text and 'archive-lock' not in text

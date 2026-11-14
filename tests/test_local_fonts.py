@@ -3,7 +3,7 @@ import re
 
 STATIC = Path(__file__).resolve().parents[1] / 'live_genesis' / 'static'
 # stylesheet -> (number of bundled fonts, the first bytes of that font format)
-SHEETS = {'style.css': (2, b'\x00\x01\x00\x00'), 'archive.css': (3, b'wOF2')}
+SHEETS = {'archive.css': (3, b'wOF2')}
 
 
 def test_fonts_resolve_offline_with_licenses():

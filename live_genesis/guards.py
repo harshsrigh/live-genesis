@@ -1,27 +1,19 @@
-"""Content guards for agent-written text (posts and proposals).
+"""Content guards for text that may be published: recorded answers, hand-entered replies, question files.
 
 Heuristic, offline, regex-based checks. They are a first safety net, not a moderation
 service: they do not understand meaning, are English/Latin-script centric, and can be
 evaded by a determined writer. See docs/SECURITY.md. Look-alike Cyrillic and Greek letters
-are folded to Latin before matching (_CONFUSABLES) and a word mixing those scripts is refused
-in one-line text (has_mixed_script_word): small explicit rules, not a confusables database.
+are folded to Latin before matching (_CONFUSABLES): a small explicit rule, not a confusables database.
 
-The text checks are pure: they take text and return a short *category* string (or None).
+The checks are pure: they take text and return a short *category* string (or None).
 A reason never contains the matched text, because the match may be a secret.
-Only `duplicate_reason` / `enforce` need the open SQLite connection.
 """
 from __future__ import annotations
 
 import hashlib
-import os
 import re
-import sqlite3
 import unicodedata
 from collections import Counter
-
-from fastapi import HTTPException
-
-RECENT_WINDOW = 50  # other agents' most recent posts / proposals compared for duplicates
 
 # Code points with no visible glyph of their own. Written with escapes only, so this file holds
 # no invisible character itself.
@@ -75,7 +67,7 @@ def _fold(text: str) -> str:
 
 # ---------------------------------------------------------------- characters
 
-# Characters that are refused in every agent-writable text because they change how text is
+# Characters that are refused in every text that may be published because they change how text is
 # DISPLAYED or parsed, or carry content a human reader cannot see:
 #   * control characters (category Cc): C0 U+0000-U+001F, DEL U+007F, C1 U+0080-U+009F.
 #     In multi-line text only, newline (U+000A), tab (U+0009) and a carriage return that is
@@ -128,7 +120,7 @@ def strip_forbidden_characters(text: str, *, multiline: bool = False) -> str:
     """`text` without the characters the rule above refuses; a control character becomes a space
     so words do not run together. For untrusted text that is only displayed to the operator
     (a fetched feed) and for rows stored before the rule existed (clean_for_reading); NEW
-    agent-written text is refused instead, never repaired. Text the rule accepts comes back
+    text is refused or withheld instead, never repaired. Text the rule accepts comes back
     unchanged (with `multiline`, the newline, tab and CR+LF it allows are kept)."""
     while not (text.isascii() and text.isprintable()):
         cleaned = "".join((" " if text[index] < " " or text[index] == "\x7f" else "") if _refused(text, index, multiline)
@@ -142,9 +134,8 @@ def strip_forbidden_characters(text: str, *, multiline: bool = False) -> str:
 def clean_for_reading(node):
     """A copy of a JSON-like value (dicts, lists, strings, numbers) in which every string VALUE has
     passed strip_forbidden_characters(multiline=True). The read-side counterpart of the write rule:
-    core.overview, core.agent_context and the search results go through it, so a row stored before
-    the rule (never rewritten when it is append-only or hashed) reaches a page, the export or a
-    prompt without hidden characters. Identity for everything the write rule accepts. Dict keys
+    a row stored before the rule (never rewritten: the tables are append-only) reaches a page or
+    the export without hidden characters. Identity for everything the write rule accepts. Dict keys
     are server-written names and are left alone."""
     if isinstance(node, str):
         return strip_forbidden_characters(node, multiline=True)
@@ -153,46 +144,6 @@ def clean_for_reading(node):
     if isinstance(node, (list, tuple)):
         return [clean_for_reading(value) for value in node]
     return node
-
-
-# ---------------------------------------------------------------- look-alike letters (mixed scripts)
-
-_LETTER_RUN = re.compile(r"[^\W\d_]+")
-_SCRIPTS = ("LATIN", "CYRILLIC", "GREEK")
-MIXED_SCRIPT_RULE = ("has a word that mixes Latin letters with Cyrillic or Greek letters (look-alike letters "
-                     "inside one word)")
-
-
-def _script(ch: str) -> str | None:
-    """LATIN, CYRILLIC or GREEK for a letter of those scripts (by its Unicode name), else None."""
-    if ch.isascii():
-        return "LATIN" if ch.isalpha() else None
-    name = unicodedata.name(ch, "")
-    return next((script for script in _SCRIPTS if name.startswith(script)), None)
-
-
-def has_mixed_script_word(text: str) -> bool:
-    """True when one WORD (an unbroken run of letters) of `text` holds letters of more than one of the
-    scripts Latin, Cyrillic and Greek. Whole words in any script, accented Latin, CJK, digits and
-    emoji never match; a space, hyphen, digit or any other non-letter ends a word. Known false
-    positives: a Greek symbol written directly against Latin letters (a real GREEK SMALL LETTER MU
-    in a unit, a delta before a variable name); the MICRO SIGN U+00B5 is not a Greek letter here."""
-    if text.isascii():
-        return False
-    for run in _LETTER_RUN.findall(unicodedata.normalize("NFC", text)):
-        if not run.isascii() and len({script for script in map(_script, run) if script}) > 1:
-            return True
-    return False
-
-
-def check_characters(text: str, label: str, *, multiline: bool = False) -> None:
-    """422 for a forbidden character and, in ONE-LINE text (titles, summaries, names), for a word
-    that mixes scripts (has_mixed_script_word). Never echoes the text or the character."""
-    if has_forbidden_character(text, multiline=multiline):
-        allowed = "Plain text, newlines and tabs only" if multiline else "Plain text on one line only"
-        raise HTTPException(422, f"{label} {CHARACTER_RULE}. Remove it and resend. {allowed}.")
-    if not multiline and has_mixed_script_word(text):
-        raise HTTPException(422, f"{label} {MIXED_SCRIPT_RULE}. Write each word in one script and resend.")
 
 
 def non_ascii_categories(text: str) -> Counter:
@@ -217,7 +168,7 @@ _PHONES = (
 _KNOWN_KEYS = re.compile(
     r"(?<![A-Za-z0-9])(?:"
     r"sk-[A-Za-z0-9_-]{16,}"                      # OpenAI / Anthropic style API keys
-    r"|live_[A-Za-z0-9_-]{16,}"                   # this project's agent bearer keys
+    r"|live_[A-Za-z0-9_-]{16,}"                   # the bearer keys this project issued to its agents (before the society was removed)
     r"|AKIA[0-9A-Z]{16}"                          # AWS access key id
     r"|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}"
     r"|xox[abprs]-[A-Za-z0-9-]{10,}"              # Slack
@@ -353,73 +304,6 @@ def solicitation_reason(text: str) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------- spam
-
-def normalize(text: str) -> str:
-    """Case-, whitespace- and punctuation-insensitive form used to compare content."""
-    return " ".join(re.sub(r"[\W_]+", " ", _fold(text).casefold()).split())
-
-
-def degenerate_reason(text: str) -> str | None:
-    """Detect filler: one character or one word making up most of the text."""
-    compact = re.sub(r"\s+", "", _fold(text).casefold())
-    if len(compact) >= 12 and Counter(compact).most_common(1)[0][1] / len(compact) > 0.6:
-        return "is mostly one repeated character"
-    words = normalize(text).split()
-    if len(words) >= 6 and Counter(words).most_common(1)[0][1] / len(words) > 0.6:
-        return "is mostly one repeated word"
-    return None
-
-
 def content_reason(text: str) -> str | None:
     """All pure text checks, most specific first."""
     return solicitation_reason(text) or pii_reason(text)
-
-
-def duplicate_reason(cx: sqlite3.Connection, agent_id: int, title: str, body: str) -> str | None:
-    """Exact normalized duplicate of this agent's own content, or of other agents' recent content."""
-    key = normalize(title + " " + body)
-    for table in ("posts", "proposals"):
-        for row in cx.execute(f"SELECT title,body FROM {table} WHERE agent_id=?", (agent_id,)):
-            if normalize(row[0] + " " + row[1]) == key:
-                return "duplicate of content you already published"
-    for table in ("posts", "proposals"):
-        for row in cx.execute(f"SELECT title,body FROM {table} WHERE agent_id<>? ORDER BY id DESC LIMIT ?",
-                              (agent_id, RECENT_WINDOW)):
-            if normalize(row[0] + " " + row[1]) == key:
-                return "duplicate of another agent's recent content"
-    return None
-
-
-def duplicate_guard_enabled() -> bool:
-    """Operator switch (default on). LIVE_DUPLICATE_GUARD=0 disables only the duplicate check."""
-    return os.getenv("LIVE_DUPLICATE_GUARD", "1").strip().lower() not in ("0", "false", "off", "no")
-
-
-def refusal(reason: str, status: int = 422) -> HTTPException:
-    """The refusal for one guard category plus the next step. Never echoes the text: `reason`
-    is always one of the fixed category strings above, never anything taken from the content."""
-    if status == 409:
-        step = "Do not resend it; write something new or send idle."
-    elif reason.startswith("is mostly"):
-        step = "Write varied text and resend."
-    else:
-        step = "Remove that part and resend; the matched text is not shown here."
-    error = HTTPException(status, f"Content rejected: {reason}. {step}")
-    error.guard_category = reason  # the fixed category alone, for operator diagnostics (engine.refusal_category)
-    return error
-
-
-def enforce(cx: sqlite3.Connection, agent_id: int, title: str, body: str) -> None:
-    """Raise HTTPException for text that must not be recorded. Never echoes the text."""
-    for text in (title, body):
-        reason = content_reason(text)
-        if reason:
-            raise refusal(reason)
-    reason = degenerate_reason(body)
-    if reason:
-        raise refusal(reason)
-    if duplicate_guard_enabled():
-        reason = duplicate_reason(cx, agent_id, title, body)
-        if reason:
-            raise refusal(reason, 409)

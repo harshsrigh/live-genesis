@@ -1,28 +1,25 @@
 """openai-compatible provider, shared provider settings and `cli check-provider`. Offline: the SDK client
 class is replaced, so no test opens an HTTP connection or holds a real key."""
-import json
 import socket
 import sys
 from types import SimpleNamespace
 
 import openai
 import pytest
-from fastapi.testclient import TestClient
 
-from live_genesis import cli, config, controls, engine, providers, study
-from live_genesis.core import connect, overview, reserve_budget, seed_agents
-from live_genesis.observatory import app as observatory_app
+from live_genesis import cli, config, controls, engine, providers
+from live_genesis.core import connect, reserve_budget
 
 LOCAL = 'http://localhost:18999/private-path/v1'
 HOSTED = 'https://models.example.invalid/v1'
-POST = ('{"action":"post","topic":"research","title":"Local model sample","body":"Mocked chat completion in an '
-        'offline test.","memory":"Tested the compatible adapter."}')
+POST = 'Mocked chat completion in an offline test.'
+SYSTEM = 'the system line'
+CALL = {'system': SYSTEM, 'max_output_tokens': 120}   # every caller names both: the adapters have no default
 
 
-def compat_env(monkeypatch, base_url=LOCAL, model='qwen3:8b', rates=('0', '0')):
+def compat_env(monkeypatch, base_url=LOCAL, rates=('0', '0')):
     monkeypatch.setenv('LIVE_PROVIDER', 'openai-compatible')
     monkeypatch.setenv('LIVE_COMPAT_BASE_URL', base_url)
-    monkeypatch.setenv('LIVE_MODEL', model)
     monkeypatch.setenv('LIVE_INPUT_USD_PER_M', rates[0])
     monkeypatch.setenv('LIVE_OUTPUT_USD_PER_M', rates[1])
 
@@ -71,12 +68,12 @@ def test_adapter_request_shape_defaults(monkeypatch):
     monkeypatch.delenv('LIVE_COMPAT_REASONING_EFFORT', raising=False)
     monkeypatch.delenv('LIVE_INFER_TIMEOUT_SECONDS', raising=False)
     seen = fake_sdk(monkeypatch)
-    done = engine.infer('openai-compatible', 'qwen3:8b', 'the prompt')
+    done = engine.infer('openai-compatible', 'qwen3:8b', 'the prompt', **CALL)
     assert (done.text, done.input_tokens, done.output_tokens) == (POST, 210, 64)
     assert seen[0]['init'] == {'base_url': LOCAL, 'api_key': providers.LOCAL_PLACEHOLDER_KEY, 'timeout': 35.0, 'max_retries': 0}
     assert seen[0]['create'] == {
-        'model': 'qwen3:8b', 'max_tokens': engine.MAX_OUTPUT_TOKENS, 'response_format': {'type': 'json_object'},
-        'messages': [{'role': 'system', 'content': engine.CONSTITUTION}, {'role': 'user', 'content': 'the prompt'}]}
+        'model': 'qwen3:8b', 'max_tokens': 120, 'response_format': {'type': 'json_object'},
+        'messages': [{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': 'the prompt'}]}
 
 
 def test_adapter_json_mode_off_reasoning_effort_timeout_and_key(monkeypatch):
@@ -87,11 +84,11 @@ def test_adapter_json_mode_off_reasoning_effort_timeout_and_key(monkeypatch):
     monkeypatch.setenv('LIVE_COMPAT_REASONING_EFFORT', 'LOW')
     monkeypatch.setenv('LIVE_INFER_TIMEOUT_SECONDS', '240')
     seen = fake_sdk(monkeypatch)
-    engine.infer('openai-compatible', 'vendor/model-1', 'p', system='study system', max_output_tokens=300)
+    engine.infer('openai-compatible', 'vendor/model-1', 'p', system='another system line', max_output_tokens=300)
     assert seen[0]['init'] == {'base_url': HOSTED, 'api_key': 'fake-compatible-key', 'timeout': 240.0, 'max_retries': 0}
     sent = seen[0]['create']
     assert 'response_format' not in sent and sent['reasoning_effort'] == 'low' and sent['max_tokens'] == 300
-    assert sent['messages'][0] == {'role': 'system', 'content': 'study system'}
+    assert sent['messages'][0] == {'role': 'system', 'content': 'another system line'}
 
 
 def test_timeout_applies_to_the_openai_adapter_and_is_clamped(monkeypatch):
@@ -99,12 +96,12 @@ def test_timeout_applies_to_the_openai_adapter_and_is_clamped(monkeypatch):
     seen = fake_sdk(monkeypatch)
     for raw, expected in (('', 35.0), ('1', 5.0), ('9999', 600.0), ('120', 120.0)):
         monkeypatch.setenv('LIVE_INFER_TIMEOUT_SECONDS', raw)
-        engine.infer('openai', 'm', 'p')
+        engine.infer('openai', 'm', 'p', **CALL)
         assert seen[-1]['init'] == {'timeout': expected, 'max_retries': 0}
     for bad in ('soon', 'nan', 'inf'):
         monkeypatch.setenv('LIVE_INFER_TIMEOUT_SECONDS', bad)
         with pytest.raises(engine.ProviderNotReady, match='LIVE_INFER_TIMEOUT_SECONDS'):
-            engine.infer('openai', 'm', 'p')
+            engine.infer('openai', 'm', 'p', **CALL)
     assert len(seen) == 4
 
 
@@ -113,13 +110,13 @@ def test_missing_or_invalid_usage_is_never_invented(monkeypatch):
     monkeypatch.delenv('LIVE_INFER_TIMEOUT_SECONDS', raising=False)
     fake_sdk(monkeypatch, usage=None)
     with pytest.raises(RuntimeError, match='usage missing') as err:
-        engine.infer('openai-compatible', 'm', 'p')
+        engine.infer('openai-compatible', 'm', 'p', **CALL)
     assert not isinstance(err.value, engine.ProviderNotReady)  # the request was sent: callers keep the hold
     fake_sdk(monkeypatch, usage=(None, 5))
     with pytest.raises(RuntimeError, match='usage missing'):
-        engine.infer('openai-compatible', 'm', 'p')
+        engine.infer('openai-compatible', 'm', 'p', **CALL)
     fake_sdk(monkeypatch, text=None)  # e.g. a reasoning model that spent the whole budget thinking
-    assert engine.infer('openai-compatible', 'm', 'p').text == ''
+    assert engine.infer('openai-compatible', 'm', 'p', **CALL).text == ''
 
 
 def test_setup_problems_are_not_ready_and_build_no_client(monkeypatch):
@@ -127,13 +124,13 @@ def test_setup_problems_are_not_ready_and_build_no_client(monkeypatch):
     monkeypatch.delenv('LIVE_INFER_TIMEOUT_SECONDS', raising=False)
     compat_env(monkeypatch, base_url='')
     with pytest.raises(engine.ProviderNotReady, match='LIVE_COMPAT_BASE_URL is required'):
-        engine.infer('openai-compatible', 'm', 'p')
+        engine.infer('openai-compatible', 'm', 'p', **CALL)
     compat_env(monkeypatch, base_url=HOSTED)
     monkeypatch.delenv('OPENAI_COMPATIBLE_API_KEY', raising=False)
     with pytest.raises(engine.ProviderNotReady, match='OPENAI_COMPATIBLE_API_KEY missing'):
-        engine.infer('openai-compatible', 'm', 'p')
+        engine.infer('openai-compatible', 'm', 'p', **CALL)
     with pytest.raises(engine.ProviderNotReady, match='openai, anthropic or openai-compatible'):
-        engine.infer('other', 'm', 'p')
+        engine.infer('other', 'm', 'p', **CALL)
 
 
 # ---- Base URL rules -----------------------------------------------------------------------
@@ -218,131 +215,13 @@ def test_zero_rates_only_for_openai_compatible_on_loopback(isolated_db, monkeypa
 
 
 def test_zero_hold_needs_zero_stored_rates(isolated_db):
-    seed_agents()
     with pytest.raises(ValueError, match='positive'):
-        reserve_budget(1, 'm', 0, 10, provider='openai', input_rate=0.2, output_rate=1.2)
+        reserve_budget(None, 'm', 0, 10, provider='openai', input_rate=0.2, output_rate=1.2)
     with pytest.raises(ValueError, match='positive'):
-        reserve_budget(1, 'm', 0, 10, provider='openai')  # rates from settings (0.20 / 1.20)
+        reserve_budget(None, 'm', 0, 10, provider='openai')  # rates from settings (0.20 / 1.20)
     with pytest.raises(ValueError, match='positive'):
-        reserve_budget(1, 'm', -0.01, 10, provider='openai-compatible', input_rate=0, output_rate=0)
-    assert reserve_budget(1, 'm', 0, 10, provider='openai-compatible', input_rate=0, output_rate=0) > 0
-
-
-# ---- Rounds -------------------------------------------------------------------------------
-
-def test_round_gates_for_the_compatible_provider(isolated_db, monkeypatch):
-    seed_agents()
-    sdk_must_not_be_built(monkeypatch)
-    monkeypatch.setenv('LIVE_PROVIDER', 'other')
-    with pytest.raises(RuntimeError, match='LIVE_PROVIDER must be openai, anthropic or openai-compatible'):
-        engine.run_round(limit=1)
-    compat_env(monkeypatch, base_url='')
-    with pytest.raises(RuntimeError, match='LIVE_COMPAT_BASE_URL is required'):
-        engine.run_round(limit=1)
-    compat_env(monkeypatch, base_url='http://models.example.invalid/v1')
-    with pytest.raises(RuntimeError, match='must use https'):
-        engine.run_round(limit=1)
-    compat_env(monkeypatch, base_url=HOSTED, rates=('0.05', '0.05'))
-    with pytest.raises(RuntimeError, match='OPENAI_COMPATIBLE_API_KEY missing'):
-        engine.run_round(limit=1)
-    monkeypatch.setenv('OPENAI_COMPATIBLE_API_KEY', 'fake-compatible-key')
-    monkeypatch.setenv('LIVE_INPUT_USD_PER_M', '0')
-    with pytest.raises(controls.ConfigError):  # hosted + zero rate
-        engine.run_round(limit=1)
-    compat_env(monkeypatch)  # local, zero rates: still needs the opt-in
-    monkeypatch.setenv('LIVE_ALLOW_PAID_CALLS', 'NO')
-    with pytest.raises(RuntimeError, match='opt-in'):
-        engine.run_round(limit=1)
-    assert reservations() == []
-
-
-def test_local_round_is_engine_provenance_at_zero_cost_and_hides_the_base_url(isolated_db, monkeypatch):
-    compat_env(monkeypatch)
-    seed_agents()  # agents are created with LIVE_MODEL
-    seen = fake_sdk(monkeypatch)
-    outcomes = engine.run_round(limit=2)
-    assert [o.get('error') for o in outcomes] == [None, None] and len(seen) == 2
-    assert all(o['estimated_usd'] == 0 for o in outcomes)
-    held = reservations()
-    assert [(r['provider'], r['model'], r['status'], r['reserved_usd'], r['used']) for r in held] == [('openai-compatible', 'qwen3:8b', 'settled', 0, 1)] * 2
-    with connect() as cx:
-        rows = [tuple(r) for r in cx.execute("SELECT source,provider,model,verified FROM action_provenance")]
-    assert rows == [('engine', 'openai-compatible', 'qwen3:8b', 1)] * 2
-    state = overview()
-    assert state['metrics']['tokens'] == 2 * (210 + 64) and state['metrics']['cost_usd'] == 0
-    assert state['metrics']['actions_by_source']['engine'] == 2
-    with TestClient(observatory_app) as client:
-        public = client.get('/api/overview').text
-    for text in (public, json.dumps(state), json.dumps(outcomes), isolated_db.read_bytes().decode('latin-1')):
-        assert '18999' not in text and 'private-path' not in text
-    assert '"provider":"openai-compatible"' in public.replace(' ', '') and 'qwen3:8b' in public
-
-
-def test_missing_usage_keeps_the_hold_unconfirmed_and_stops_the_round(isolated_db, monkeypatch):
-    compat_env(monkeypatch, base_url=HOSTED, rates=('0.05', '0.10'))
-    monkeypatch.setenv('OPENAI_COMPATIBLE_API_KEY', 'fake-compatible-key')
-    seed_agents()
-    seen = fake_sdk(monkeypatch, usage=None)
-    outcomes = engine.run_round(limit=3)
-    assert len(seen) == 1 and len(outcomes) == 1  # round stopped after the first call
-    assert outcomes[0]['error'] == 'inference failed' and 'unconfirmed' in outcomes[0]['budget']
-    assert [r['status'] for r in reservations()] == ['unconfirmed']
-    assert overview()['metrics']['posts'] == 0 and overview()['metrics']['tokens'] == 0
-    assert 'reconcile' in engine.run_round(limit=1)[0]['error'] and len(seen) == 1  # blocked until reconciled
-
-
-def test_server_error_text_is_never_echoed(isolated_db, monkeypatch):
-    compat_env(monkeypatch)
-    seed_agents()
-    fake_sdk(monkeypatch, fail=RuntimeError('server said: SECRET-SERVER-TEXT at http://localhost:18999/private-path'))
-    outcomes = engine.run_round(limit=2)
-    assert len(outcomes) == 1 and outcomes[0]['error'] == 'inference failed'
-    assert 'SECRET-SERVER-TEXT' not in json.dumps(outcomes) and 'private-path' not in json.dumps(outcomes)
-    assert [r['status'] for r in reservations()] == ['unconfirmed']
-
-
-def test_invalid_json_from_the_model_is_an_error_outcome_with_usage_recorded(isolated_db, monkeypatch):
-    compat_env(monkeypatch)
-    seed_agents()
-    fake_sdk(monkeypatch, text='Sure! Here is my action: post something')
-    outcomes = engine.run_round(limit=2)
-    assert [o['error'] for o in outcomes] == [engine.NOT_JSON, engine.NOT_JSON]  # each agent only; the round continues
-    assert [r['status'] for r in reservations()] == ['settled', 'settled']
-    assert overview()['metrics']['posts'] == 0 and overview()['metrics']['tokens'] == 2 * (210 + 64)
-
-
-# ---- Study harness ------------------------------------------------------------------------
-
-def test_study_accepts_the_compatible_provider_and_keeps_mock_detection(isolated_db, monkeypatch):
-    compat_env(monkeypatch)
-    seen = fake_sdk(monkeypatch, text='ANSWER: 1', usage=(150, 20))
-    assert study.provider_and_model() == ('openai-compatible', 'qwen3:8b')
-    assert study.suggested_cap(study.plan(2, task_ids=['door-code'])['worst_case_usd']) == '0.01'
-    done = study.run_study(max_usd=0.01, n=2, seed=7, task_ids=['door-code'])
-    # The real engine.infer ran (against the fake SDK class), so the run is NOT flagged as a patched-infer mock.
-    assert done['status'] == 'complete' and done['mock'] is False and done['provider'] == 'openai-compatible'
-    assert len(seen) == 4 and all(s['create']['messages'][0]['content'] == study.SYSTEM_PROMPT for s in seen)
-    monkeypatch.setattr(engine, 'infer', lambda *a, **k: engine.Completion('ANSWER: 1', 150, 20))
-    assert study.run_study(max_usd=0.01, n=2, seed=7, task_ids=['door-code'])['mock'] is True
-
-
-def test_study_gates_for_the_compatible_provider(isolated_db, monkeypatch):
-    sdk_must_not_be_built(monkeypatch)
-    monkeypatch.setenv('LIVE_PROVIDER', 'other')
-    with pytest.raises(study.StudyRefused, match='openai, anthropic or openai-compatible'):
-        study.run_study(max_usd=1.0)
-    compat_env(monkeypatch, model='')
-    with pytest.raises(study.StudyRefused, match='Invalid model name'):
-        study.run_study(max_usd=1.0)
-    compat_env(monkeypatch, base_url=HOSTED, rates=('0.05', '0.05'))
-    with pytest.raises(study.StudyRefused, match='OPENAI_COMPATIBLE_API_KEY missing'):
-        study.run_study(max_usd=1.0)
-    compat_env(monkeypatch, base_url='http://models.example.invalid/v1')
-    with pytest.raises(study.StudyRefused, match='must use https'):
-        study.run_study(max_usd=1.0)
-    with connect() as cx:
-        assert cx.execute('SELECT COUNT(*) FROM study_runs').fetchone()[0] == 0
-    assert reservations() == []
+        reserve_budget(None, 'm', -0.01, 10, provider='openai-compatible', input_rate=0, output_rate=0)
+    assert reserve_budget(None, 'm', 0, 10, provider='openai-compatible', input_rate=0, output_rate=0) > 0
 
 
 # ---- Secrets ------------------------------------------------------------------------------
@@ -378,7 +257,7 @@ def test_check_provider_local_reports_and_probes_only_loopback(isolated_db, monk
     finally:
         listener.close()
     assert code == 0
-    assert 'Provider: openai-compatible' in out and 'qwen3:8b' in out and 'Timeout per call: 300 s' in out
+    assert 'Provider: openai-compatible' in out and 'LIVE_ARCHIVE_MODELS' in out and 'Timeout per call: 300 s' in out
     assert f'Base URL host: 127.0.0.1  port {port}' in out and 'private-path' not in out
     assert 'Key set (OPENAI_COMPATIBLE_API_KEY): no' in out and 'input zero, output zero' in out
     assert 'Zero rates allowed here: yes' in out and f'TCP connection to 127.0.0.1:{port}: opens' in out

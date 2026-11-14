@@ -1,5 +1,5 @@
-# Local use only. The database lives in ./data and agent keys in ./secrets on your machine;
-# neither is copied into the image. No service here gets a provider API key except `paid`.
+# Local use only. The database lives in ./data on your machine; it is not copied into the image.
+# No service here gets a provider API key except `paid`.
 services:
   test:            # docker compose run --rm test
     build: .
@@ -7,28 +7,25 @@ services:
     environment:
       LIVE_DB: /tmp/unused.db   # tests use their own temporary databases
 
-  cli:             # docker compose run --rm cli init | demo | status | study-plan --n 3 ...
+  cli:             # docker compose run --rm cli init | archive-status | archive-plan | demo-archive ...
     build: .
     entrypoint: ["python", "-m", "live_genesis.cli"]
-    command: ["status"]
+    command: ["archive-status"]
     volumes:
       - ./data:/data
-      - ./secrets:/app/secrets
 
-  web:             # docker compose up web  ->  http://127.0.0.1:8000
+  web:             # docker compose up web  ->  http://127.0.0.1:8000  (read-only; run `cli init` once first)
     build: .
     command: ["python", "-m", "uvicorn", "live_genesis.app:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "127.0.0.1:8000:8000"   # reachable from this computer only
     volumes:
       - ./data:/data
-      - ./secrets:/app/secrets
 
-  paid:            # PAID commands only (round, study-run). Needs ./.env; started only on request:
-    profiles: ["paid"]   # docker compose --profile paid run --rm paid round --agents 3
+  paid:            # The PAID command only (archive-run). Needs ./.env; started only on the owner's request:
+    profiles: ["paid"]   # docker compose --profile paid run --rm paid archive-run --max-usd 0.05
     build: .
     entrypoint: ["python", "-m", "live_genesis.cli"]
     volumes:
       - ./data:/data
-      - ./secrets:/app/secrets
       - ./.env:/app/.env:ro
