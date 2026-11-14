@@ -173,7 +173,7 @@ def test_the_headline_and_copy_are_counted_from_the_data(chat, tmp_path, monkeyp
     assert headline(payload) == ['Same question.', 'Five AI apps.', 'One human.']
     front = archive_pages.render_index(payload)
     assert 'Same question. Five AI apps. One human.' in visible(front) and 'Three' not in visible(front)
-    assert '<ol class="steps"><li>4 questions</li><li>Asked by hand</li><li>Every answer kept</li></ol>' in front
+    assert '<ol class="steps"><li>4 questions</li><li>Same words every month</li><li>Every answer kept</li></ol>' in front
     block = payload['chatbots']
     one = json.loads(json.dumps(payload))
     one['chatbots'].update(apps=block['apps'][:1], human=None, human_answers=[],
@@ -215,7 +215,7 @@ def test_two_groups_a_switch_on_the_front_page_and_one_thread_per_group_on_a_que
     front, page, method = pages['index.html'], pages['c/C001.html'], pages['chatbots.html']
     # The headline is neutral and counted; the groups are named in the lede.
     assert 'Same question. Eleven chatbots in two groups. One human.' in visible(front) and 'AI apps.' not in visible(front)
-    assert 'AI chat apps and Help-desk bots. Typed in by hand, every month.' in visible(front)
+    assert 'AI chat apps and Help-desk bots. Asked again every month.' in visible(front)
     # The group switch: one radio per group, the first checked, labels with the name and a count. No script.
     assert front.count('<input class="g-radio" type="radio" name="group"') == 2
     assert '<input class="g-radio" type="radio" name="group" id="grp-1" checked />' in front and front.count(' checked />') == 1
@@ -309,7 +309,7 @@ def test_cards_hold_at_most_four_bubbles_and_paginate_instead_of_shrinking(chat,
         assert_page_is_safe(card)
         assert card.count('<section class="card-panel') <= archive_pages.CARD_APPS == 4 and card.count('<h1') == 1
         assert f'read-only · no payments · card {number} of 3' in card and '<main id="main" class="card card-safe' in card
-        assert '<p class="card-honest mono">AI-generated · typed in by hand · not affiliated · may be wrong</p>' in card
+        assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in card
     assert archive_pages.render_card(payload, 'C001') == first == archive_pages.render_chatbot_card(payload, 'C001')
     # The same bubble classes as a card of three or four: the answers keep their size, whatever the number of answerers.
     assert '<div class="card-panels n-4">' in first and '<div class="card-panels n-4">' in second and '<div class="card-panels n-1">' in third
@@ -322,7 +322,7 @@ def test_cards_hold_at_most_four_bubbles_and_paginate_instead_of_shrinking(chat,
     assert one.count('<section class="card-panel') == 1 and '<div class="card-panels one">' in one and 'card 1 of' not in one
     # The question page links every card.
     page = pages['c/C001.html']
-    assert ('<a href="../card/C001.html">Everyone</a><a href="../card/C001-2.html">Everyone 2</a><a href="../card/C001-3.html">Everyone 3</a>'
+    assert ('<a href="../card/C001.html">All answers</a><a href="../card/C001-2.html">All answers 2</a><a href="../card/C001-3.html">All answers 3</a>'
             '<a href="../card/C001-bot-a.html">Sample bot A</a>') in page
     for missing in ('4', '0', 'bot-z', 'ai-apps', ''):
         with pytest.raises(KeyError):

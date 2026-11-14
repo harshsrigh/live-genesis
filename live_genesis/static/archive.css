@@ -75,6 +75,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .bar nav a { flex: none; padding: 0.4rem 0.8rem; line-height: 1.25; border-radius: 999px; background: var(--pane); border: 1px solid var(--line); text-decoration: none; }
 .bar nav a:hover { border-color: var(--ink); color: var(--ink); }
 .bar nav a[aria-current="page"] { background: var(--ink); border-color: var(--ink); color: var(--on-dark); }
+.bar nav a:focus-visible { border-radius: 999px; }
 
 .wrap { max-width: 1280px; margin: 0 auto; padding: 0 var(--gutter); }
 .wrap-foot { padding-bottom: 3rem; }
@@ -416,7 +417,13 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 
 @media (max-width: 699px) {
   :root { --gutter: 1rem; }
-  .bar-in { gap: 0.75rem; }
+  /* Keep every destination visible, including at enlarged text sizes: the links wrap under the wordmark as pills
+     about 44px tall. The other small controls get the same height. */
+  .bar-in { height: auto; min-height: 52px; flex-wrap: wrap; gap: 0.25rem 0.75rem; padding-top: 0.6rem; padding-bottom: 0.4rem; }
+  .bar nav { flex: 1 1 100%; flex-wrap: wrap; gap: 0.4rem; overflow: visible; white-space: normal; padding: 0; margin-right: 0; }
+  .bar nav a { min-height: 2.75rem; display: inline-flex; align-items: center; padding: 0.4rem 1rem; }
+  .more, .card-links a, .row-more a { min-height: 2.75rem; display: inline-flex; align-items: center; }
+  .hist summary, .more-info summary { min-height: 2.75rem; padding: 0.65rem 0; }
   .wordmark { font-size: 1rem; gap: 0.4rem; }
   .list-head { padding: 1.1rem 0 0.9rem; align-items: center; text-align: center; }
   .list-head .tag { align-self: center; }

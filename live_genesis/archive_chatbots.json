@@ -11,7 +11,7 @@
   {"label": "gemini", "name": "Gemini", "maker": "Google"},
   {"label": "grok", "name": "Grok", "maker": "xAI", "attribution": "Written with Grok"}
  ],
- "human": {"name": "Human", "meta": "written by people · collected by hand"},
+ "human": {"name": "Human", "meta": "written by people"},
  "aside": "Why no Copilot? It is cheaper to ask a human than Copilot.",
  "questions": [
   {"id": "C001", "text": "Is a hot dog a sandwich?", "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nIs a hot dog a sandwich?", "hook": "Hot dog: sandwich or not?", "added": "2026-11-14"},
