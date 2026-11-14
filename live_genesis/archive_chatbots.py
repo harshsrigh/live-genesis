@@ -1092,6 +1092,9 @@ HUMAN_KEYS = ("name", "meta")
 RUN_KEYS = ("number", "collected_on", "imported_at", "demo", "config_hash", "questions", "conditions", "human")
 ANSWER_KEYS_PUBLIC = ("id", "run", "question", "chatbot", "source", "state", "reason", "text", "changed", "screenshot_hash", "refused")
 HUMAN_ANSWER_KEYS_PUBLIC = ("id", "run", "question", "source", "state", "reason", "text", "manner", "changed")
+# The Human column's meta line as imports stored it before 14 November 2026 -> what the public payload carries (owner
+# decision: nothing published says how replies were collected). The database row stays as it was.
+LEGACY_HUMAN_META = {"written by people · collected by hand": "written by people"}
 
 
 def public_block(cx, tables: set[str]) -> dict | None:
@@ -1132,7 +1135,7 @@ def public_block(cx, tables: set[str]) -> dict | None:
     for row in cx.execute("SELECT c.* FROM archive_human_collections c JOIN archive_chatbot_runs r ON r.id=c.run_id "
                           "ORDER BY r.collected_on,r.number"):
         collected[row["run_id"]] = {"source": row["source"], "collected_on": row["collected_on"], "count": row["replies"]}
-        human = {"name": row["display_name"], "meta": row["meta"]}                                   # the newest run's wording
+        human = {"name": row["display_name"], "meta": LEGACY_HUMAN_META.get(row["meta"], row["meta"])}   # the newest run's wording
     answers = [{"id": a["id"], "run": number[a["run_id"]], "question": a["question_id"], "chatbot": a["chatbot"],
                 "source": a["source"], "state": a["state"], "reason": a["reason"], "text": a["answer_text"],
                 "changed": None if a["changed"] is None else bool(a["changed"]), "screenshot_hash": a["screenshot_sha256"],

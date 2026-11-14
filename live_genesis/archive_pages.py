@@ -76,7 +76,7 @@ HIDDEN_WORDS = "Hidden: broke our content rules"
 LEFT_OUT = "Refusals and non-answers are left out."
 DATA_SCHEMA = "answers-over-time-data/1"
 DATA_NOTICE = ("Answers Over Time. AI answers are recorded verbatim and may be wrong; they are not advice. Text marked "
-               "human-written was written by people and collected by hand. Records marked scripted-sample were written "
+               "human-written was written by people. Records marked scripted-sample were written "
                "as samples: no AI and no person was asked, and they must not be treated as real answers. Product names "
                "belong to their owners; this archive is not affiliated with them.")
 ALL_CARD = "all"               # render_chatbot_card: the card with every app and Human
@@ -85,7 +85,7 @@ CARD_APPS = 4
 CARD_NAME = re.compile(r"(C[0-9]{3})-([a-z][a-z0-9-]{1,23})")
 CHAT_ID = re.compile(r"C[0-9]{3}")
 DATA_NAME = re.compile(r"(?:Q[0-9]{2}|T[0-9]{3}|C[0-9]{3})\.json|answers\.jsonl|README\.txt")
-CHAT_CARD_FOOT = "AI-generated · typed in by hand · not affiliated · may be wrong"
+CHAT_CARD_FOOT = "AI-generated · not affiliated · may be wrong"
 CARD_FULL = "full answer on the site"
 CARD_CLAMP_CHARS = {1: 160, 2: 115, 3: 100, 4: 110}   # panels on a card -> characters that surely fit its clamp
 # Server-side thresholds for the "More" control: longer than the first is clamped on a phone, than the second also on
@@ -332,7 +332,7 @@ class _View:
         if self.empty:
             return "No answers recorded yet"
         if track == "chat":
-            return SAMPLE_LABEL if self.chat.demo else "AI-generated · typed in by hand · may be wrong"
+            return SAMPLE_LABEL if self.chat.demo else "AI-generated · may be wrong"
         if self.models_demo or (self.demo and not self.answers):
             return SAMPLE_LABEL
         if not self.answers:
@@ -490,7 +490,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
                     "form": None, "collected": date, "previous": None, "why_not": "left out", "tags": [], "facts": [],
                     "conditions": dict(conditions) if conditions else None, "agreement": "", "others": [], "changed": None}
             if human:
-                facts = [SAMPLE_WORD if sample else "Written by people, collected by hand"]
+                facts = [SAMPLE_WORD if sample else "Written by people"]
                 if conditions:
                     facts.append(f"from: {conditions['source']}")
                     if conditions["collected_on"] != date:
@@ -499,7 +499,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
                         facts.append(f"{_replies(conditions['count'])} read")
             else:
                 moved = chat.conditions_changed(key, date)
-                facts = [SAMPLE_WORD if sample else SOURCE_LABELS["manual"], f"the app showed: {conditions['shown_model']}",
+                facts = [SAMPLE_WORD] * sample + [f"the app showed: {conditions['shown_model']}",
                          conditions_line(conditions)]
                 if chat.shown_change(key, date):
                     facts.append("the app showed a new version name")
@@ -529,7 +529,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
             "why": "No deep reason. We wanted to see who's funny, and whether they're still funny next month.",
             "chips": [("chip", "Chat apps")], "track": "chat", "columns": chat.columns, "periods": periods, "cells": cells,
             "demo": sample, "kicker": "Chat apps",
-            "prompt_note": "Typed into each app by hand, in a new chat. The first line is why the replies are short."}
+            "prompt_note": "Asked in a new chat each time. The first line is why the replies are short."}
 
 
 def _board(view: _View, question_id: str) -> dict:
@@ -587,7 +587,7 @@ def record(board: dict, column: dict, period: dict, cell: dict) -> dict:
     """One answer as a self-contained record: what the data files hold and what the `data-*` attributes
     of its element say. Built from the payload only."""
     previous = _previous(board, column["key"], cell) if cell["shown"] else None
-    return {"schema": DATA_SCHEMA, "id": cell["record"], "question_id": board["id"], "question": board["text"],
+    rec = {"schema": DATA_SCHEMA, "id": cell["record"], "question_id": board["id"], "question": board["text"],
             "prompt": board["prompt"], "answerer": column["key"], "answerer_name": column["name"],
             "answerer_kind": column["kind"], "maker": column["maker"], "version": cell["version"],
             "collected": cell["collected"], "period": period["label"], "method": cell["method"],
@@ -597,6 +597,9 @@ def record(board: dict, column: dict, period: dict, cell: dict) -> dict:
             "previous_collected": previous[1]["collected"] if previous else None,
             "previous_text": previous[1]["text"] if previous and cell["state"] == "changed" else None,
             "conditions": cell["conditions"], "attribution": column["attribution"], "lang": "en", "notice": DATA_NOTICE}
+    if board["track"] == "chat":   # owner decision: nothing published of the chat-app track says how a reply was collected
+        del rec["method"]
+    return rec
 
 
 def _clamp(text: str) -> str:
@@ -612,8 +615,9 @@ def _clamp(text: str) -> str:
 def data_attrs(rec: dict) -> str:
     """The `data-*` attributes of one visible answer element, from its record."""
     pairs = [("question-id", rec["question_id"]), ("answerer", rec["answerer"]), ("answerer-kind", rec["answerer_kind"]),
-             ("maker", rec["maker"]), ("version", rec["version"]), ("collected", rec["collected"]), ("method", rec["method"]),
+             ("maker", rec["maker"]), ("version", rec["version"]), ("collected", rec["collected"]), ("method", rec.get("method")),
              ("provenance", rec["provenance"])]
+    pairs = [pair for pair in pairs if pair[1] is not None]   # a chat-app record has no method
     if rec["human_form"]:
         pairs.append(("human-form", rec["human_form"]))
     pairs.append(("state", rec["state"]))
@@ -692,7 +696,7 @@ def chat_disclaimer(makers: list[str]) -> str:
     for maker in makers:
         if maker not in names:
             names.append(maker)
-    return ("AI-generated answers, typed into each app by hand and copied unedited. They may be wrong and are not advice. "
+    return ("AI-generated answers, shown unedited. They may be wrong and are not advice. "
             f"Not affiliated with, sponsored by or endorsed by {_listed(names, 'or')}; product names belong to their owners.")
 
 
@@ -704,7 +708,7 @@ def _foot(view: _View, track: str, shown_ids: list[str], back: str = "") -> str:
         honesty = "Everything here is a sample we wrote. No AI and no person was asked."
     elif track == "chat":
         honesty = chat_disclaimer([view.chat.maker[label] for label in view.chat.labels]) if view.chat.labels else \
-            "Answers written by people, collected by hand."
+            "Answers written by people."
     else:
         honesty = "Answers are AI output and may be wrong."
     lines = [LEFT_OUT] if track == "chat" else []
@@ -899,7 +903,7 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
         people = "one human" if chat.human else ""
         apps = f"{count_word(len(chat.labels)).capitalize()} AI app{'' if len(chat.labels) == 1 else 's'}"
         title = f"Same question. {apps}.{' One human.' if people else ''}"
-        lede = "Typed in by hand, every month. Tap a question to see who changed their answer."
+        lede = "Asked again every month. Tap a question to see who changed their answer."
         body = [_list_head(view.tag("chat"), title, esc(lede)),
                 '<section class="group">\n  <div class="group-head"><h2>Newest answers</h2>'
                 f'{_key(view, True)}</div>\n']
@@ -974,7 +978,7 @@ def _more(ids: _Ids, text: str, classes: str, clamp: str, what: str, prop: str =
         return body
     box = ids.next()
     return (f'<input class="more-box {clamp[6:]}" type="checkbox" id="{box}" aria-label="{esc(what)}" />{body}'
-            f'<label class="more {clamp[6:]}" for="{box}"><span class="more-open">More</span><span class="more-close">Less</span></label>')
+            f'<label class="more {clamp[6:]}" for="{box}"><span class="more-open">Show more</span><span class="more-close">Show less</span></label>')
 
 
 def _author(column: dict, sample: bool) -> str:
@@ -1147,7 +1151,7 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
                             for column in board["columns"] if _latest(board, column["key"]))
             body.append(f'<p class="under muted">{esc(line)}</p>\n'
                         f'<p class="card-links small"><span class="muted">Share cards:</span>'
-                        f'<a href="../card/{esc(question_id)}.html">Everyone</a>{cards}</p>\n')
+                        f'<a href="../card/{esc(question_id)}.html">All answers</a>{cards}</p>\n')
         else:
             body.append(f'<p class="card-links card-links-one small"><a href="../card/{esc(question_id)}.html">Share card</a></p>\n')
         body.append(_table(board))
@@ -1156,12 +1160,9 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
     kinds = {cell["method"] for cell in board["cells"].values()}
     explain = []
     if SAMPLE in kinds:
-        explain.append("<strong>Sample</strong>: we wrote the answer and its date by hand to show how the page works. Nothing was asked.")
-    if METHODS["manual"] in kinds:
-        explain.append("<strong>Typed in by hand</strong>: a person typed the question into the app and pasted the reply. "
-                       "There's no receipt, so you're trusting whoever typed it.")
+        explain.append("<strong>Sample</strong>: we wrote the answer and its date ourselves to show how the page works. Nothing was asked.")
     if HUMAN_METHOD in kinds:
-        explain.append("<strong>Written by people</strong>: collected by hand. <em>quoted</em> is one person's words; "
+        explain.append("<strong>Written by people</strong>: <em>quoted</em> is one person's words; "
                        "<em>summarised</em> is our short summary of several replies. No names.")
     if METHODS["engine"] in kinds:
         explain.append("<strong>We asked it ourselves</strong>: this server called the model and kept the receipt. "
@@ -1199,7 +1200,7 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
     return _question_page(view, _board(view, question_id), versions or asset_versions(), standalone=standalone, sibling=sibling)
 
 
-CHATBOTS_DESCRIPTION = "How the chat apps are asked: by hand, the same words every month, every reply kept."
+CHATBOTS_DESCRIPTION = "The same questions for every chat app: the same words every month, every reply kept."
 
 
 def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
@@ -1209,7 +1210,7 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
     view = _View(payload)
     chat = view.chat
     versions = versions or asset_versions()
-    lede = ("A person types each question into each app, in a new chat, and pastes the reply here. No software collects anything."
+    lede = ("Each app gets the same questions in the same words every month, each in a new chat, and every reply is kept."
             + (" On this sample site the apps are made up and the replies are ours." if chat.demo else ""))
     body = [_list_head(view.tag("chat") if chat.dates else "No chat app asked yet", "How we ask the chat apps.", esc(lede))]
     if chat.dates and chat.columns:
@@ -1234,8 +1235,8 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
                         f'<span class="muted small">{esc(column["maker"])}</span></div>'
                         f'<div class="app-how"><span>{esc(conditions_line(conditions))}</span>'
                         f'<span class="muted small">The app showed: {esc(conditions["shown_model"])} · '
-                        f'asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all · '
-                        f'{esc(SAMPLE_WORD if chat.demo else SOURCE_LABELS["manual"])}</span>'
+                        f'asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all'
+                        f'{esc(" · " + SAMPLE_WORD if chat.demo else "")}</span>'
                         + (f'<span class="muted small">{esc(conditions["note"])}</span>' if conditions["note"] else '')
                         + (f'<span class="mono small">{esc(column["attribution"])}</span>' if column["attribution"] else '')
                         + '</div></div>\n')
@@ -1248,19 +1249,15 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
     else:
         body.append('<section class="group">\n  <p class="muted trend-none">No chat app has been asked yet.</p>\n</section>\n')
     body.append('<section id="method" class="method">\n  <h2 class="display">The rules we keep</h2>\n  <div class="method-grid">\n'
-                '    <div><strong>By hand</strong><span>A person types every question, in a new chat each time. Nothing here '
-                'talks to these apps.</span></div>\n'
                 '    <div><strong>Same words</strong><span>Exactly what we asked is on each question\'s page. It asks for one short '
                 'sentence, so the replies are short.</span></div>\n'
-                '    <div><strong>Copied, not edited</strong><span>The whole reply is pasted as it came. The page may shorten what it '
+                '    <div><strong>Copied, not edited</strong><span>The whole reply is kept as it came. The page may shorten what it '
                 'shows; the words are never changed.</span></div>\n'
                 '    <div><strong>Only real answers shown</strong><span>If an app refuses or dodges, we keep that on file and leave it '
                 'off the page.</span></div>\n'
-                '    <div><strong>You\'re trusting us</strong><span>There\'s no receipt for a reply typed in by hand. We keep '
-                'screenshots; you can\'t check them.</span></div>\n'
                 '    <div><strong>It depends on the day</strong><span>Account, country, search on or off: all of it can move a reply. '
                 'We write it down, and say so when it differs.</span></div>\n'
-                '    <div><strong>Humans too</strong><span>The Human answers were written by people and picked by hand: one person\'s '
+                '    <div><strong>Humans too</strong><span>The Human answers were written by people: one person\'s '
                 'words (quoted) or our summary of several (summarised). No names.</span></div>\n'
                 '    <div><strong>Not affiliated</strong><span>We\'re not connected to the companies named. Their names say which app '
                 'was asked, nothing more.</span></div>\n'
@@ -1402,7 +1399,7 @@ What an answer is
 An answer with provenance "ai-generated" is the output of an AI system, recorded verbatim.
 It was not edited, shortened or corrected. It may be wrong. It is not advice.
 
-An answer with provenance "human-written" was written by people and collected by hand.
+An answer with provenance "human-written" was written by people.
 human_form says how: "quoted" is one person's words, copied exactly; "summarised" is the
 archive owner's short summary of several replies. There are no names in it.
 
@@ -1423,10 +1420,9 @@ answerer_kind       chat-app | model | human
 maker               The company behind a chat app ("" when not recorded).
 version             The version name the app showed, or the model version asked ("" when none).
 collected           The date of the check, YYYY-MM-DD. period is the label the pages use.
-method              typed-by-hand       a person typed the question into a chat app and pasted the reply
+method              Model answers only; a chat-app or human record has no such field.
                     asked-by-server     the archive's own program called the model
                     sent-in-unverified  an outside program sent the answer; nothing about it was checked
-                    collected-by-hand   answers written by people, collected by a person
                     scripted-sample     a sample; nothing was asked
 provenance          ai-generated | human-written | scripted-sample
 human_form          quoted | summarised (human answers only; otherwise null)
@@ -1463,8 +1459,10 @@ _README_CHAT_ONLY = (
     ("Q.. (core list), T... (trending list) or C... (chat-app list).", "C... (the chat-app list)."),
     ("chat-app | model | human", "chat-app | human"),
     ("The version name the app showed, or the model version asked (", "The version name the app showed ("),
-    ("                    asked-by-server     the archive's own program called the model\n"
-     "                    sent-in-unverified  an outside program sent the answer; nothing about it was checked\n", ""),
+    ("method              Model answers only; a chat-app or human record has no such field.\n"
+     "                    asked-by-server     the archive's own program called the model\n"
+     "                    sent-in-unverified  an outside program sent the answer; nothing about it was checked\n"
+     "                    scripted-sample     a sample; nothing was asked\n", ""),
     ("                    mixed      asked several times in one check; the tries did not all agree\n", ""),
     ("chat app; source and date for human answers; endpoint name and sample counts\n"
      "                    for a model). Never a web address, a key, a file path or a username.",
