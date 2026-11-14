@@ -750,3 +750,28 @@ def test_cli_understands_both_sets(ready, tmp_path, monkeypatch, capsys):
     code, out = run_cli(monkeypatch, capsys, 'archive-run', '--max-usd', '0.05')
     assert code == 0 and len(calls) == 2 + 44
     assert controls is not None and MODELS and question_file and Path
+
+
+def test_a_hidden_question_has_no_page_no_card_and_is_in_no_list(ready, monkeypatch):
+    # The owner keeps politics off the site: the locked question stays in the data, the pages leave it out.
+    assert 'T004' in archive_pages.HIDDEN
+    checked_in = json.loads((REPO / 'live_genesis' / 'archive_trending.json').read_text(encoding='utf-8'))
+    assert [q['text'] for q in checked_in['questions'] if q['id'] == 'T004'] == ['Who is the president of the United States?']
+    archive.demo_archive()
+    payload = archive.public_payload()
+    shown = archive_pages.render_site(payload)
+    hidden_text = next(q['text'] for q in payload['trending']['questions'] if q['id'] == 'T002')
+    hidden_text = archive_pages.esc(hidden_text)
+    assert 't/T002.html' in shown and hidden_text in shown['trending.html']
+    monkeypatch.setattr(archive_pages, 'HIDDEN', {'T002': 'test', 'Q03': 'test'})
+    pages = archive_pages.render_site(payload)
+    assert set(shown) - set(pages) == {'t/T002.html', 'card/T002.html', 'q/Q03.html', 'card/Q03.html'}
+    for name, page in pages.items():
+        assert_page_is_safe(page)
+        assert 'T002' not in page and 'Q03.html' not in page and hidden_text not in page, name
+    # The later questions keep their pages and their answers: a run's "first N" still counts the hidden one.
+    assert 't/T003.html' in pages and 'q/Q04.html' in pages
+    for render in (archive_pages.render_question, archive_pages.render_card):
+        with pytest.raises(KeyError):
+            render(payload, 'T002')
+    assert len(payload['trending']['questions']) == 3 and any(a['question'] == 'T002' for a in payload['answers'])   # the data is untouched

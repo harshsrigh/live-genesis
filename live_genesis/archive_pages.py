@@ -85,6 +85,13 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
+# Questions no page shows (owner's decision; the reason is for maintainers and is never rendered). A locked
+# question can never leave its list or the data file, so hiding is all the pages can do: a hidden question has
+# no page and no card, is in no list and no count, and its answers are not rendered. `archive.json` still
+# holds it, and so does the repository's history.
+HIDDEN = {"T004": "political (who holds an office); the owner keeps politics off the site, 14 November 2026"}
+
+
 class _View:
     """Lookups over one payload, shared by both page kinds."""
 
@@ -93,16 +100,17 @@ class _View:
         if problem:
             raise ValueError(f"archive payload is malformed: {problem}")
         self.payload = payload
-        self.questions = payload["questions"]
         self.trend = payload["trending"]
-        self.trending = self.trend["questions"]
+        # A question's place counts hidden ones too: a run asked "the first N", and N includes them.
+        self.place = ({q["id"]: ("core", n) for n, q in enumerate(payload["questions"], 1)}
+                      | {q["id"]: ("trending", n) for n, q in enumerate(self.trend["questions"], 1)})
+        self.questions = [q for q in payload["questions"] if q["id"] not in HIDDEN]
+        self.trending = [q for q in self.trend["questions"] if q["id"] not in HIDDEN]
         self.by_id = {q["id"]: q for q in self.questions + self.trending}
-        self.place = ({q["id"]: ("core", n) for n, q in enumerate(self.questions, 1)}
-                      | {q["id"]: ("trending", n) for n, q in enumerate(self.trending, 1)})
         self.runs = sorted(payload["runs"], key=lambda r: r["number"])
         self.labels = list(payload["answerers"])
-        # Mock rows are never rendered, whatever the caller passed in.
-        self.answers = [a for a in payload["answers"] if a["source"] in archive.PUBLIC_SOURCES]
+        # Mock rows are never rendered, whatever the caller passed in; nor is an answer to a hidden question.
+        self.answers = [a for a in payload["answers"] if a["source"] in archive.PUBLIC_SOURCES and a["question"] not in HIDDEN]
         self.cell = {(a["question"], a["answerer"], a["run"]): a for a in self.answers}
         self.by_series: dict[tuple[str, str], list[dict]] = {}
         for answer in sorted(self.answers, key=lambda a: a["run"]):
@@ -649,6 +657,8 @@ def render_site(payload: dict, *, standalone: bool = False, sibling: str | None 
     pages = {"index.html": render_index(payload, versions, **options), "trending.html": render_trending(payload, versions, **options)}
     for folder, questions in (("q", payload["questions"]), ("t", payload["trending"]["questions"])):
         for question in questions:
+            if question["id"] in HIDDEN:
+                continue
             pages[f"{folder}/{question['id']}.html"] = render_question(payload, question["id"], versions, **options)
             pages[f"card/{question['id']}.html"] = render_card(payload, question["id"], versions)
     return pages
