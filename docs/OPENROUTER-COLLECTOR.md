@@ -75,3 +75,30 @@ https://openrouter.ai/docs/quickstart
 https://openrouter.ai/docs/guides/routing/provider-selection
 
 Offline verification: `python -m pytest -q tests/test_openrouter_setup.py tests/test_archive_endpoints.py`.
+
+## Guided launcher (Windows)
+
+Double-click `Collect-Free.cmd`, or from the repository in PowerShell:
+
+```powershell
+.venv\Scripts\python.exe -m live_genesis.operator_launcher --preview-only   # plan only: no key, no call, nothing recorded
+.venv\Scripts\python.exe -m live_genesis.operator_launcher                  # the guided collection
+```
+
+Requirements: Windows, the repository's `.venv` (README), internet for the public model catalog only. It reuses
+`openrouter_setup`, `archive.plan` and `archive.run_archive`; there is no new database, collector or route.
+
+Steps: choose the database file (default `%USERPROFILE%\live-genesis-openrouter.sqlite`, always outside git; a path
+inside the repository is refused) -> pick one to three listed `:free` models by number -> choose samples (typed on
+purpose: the proposed 1 versus an older recorded preference of 3) and the question set (default `core`, the locked
+model-track list, not the ten manual chat-app prompts) -> key via a hidden prompt (held in the process only; if
+`OPENROUTER_API_KEY` is already set it is used and not shown) -> lock the list if it is not locked yet (typed `yes`)
+-> the plan with `questions x models x samples = calls`, zero estimated cost, a warning above 50 calls -> you type
+the exact phrase it prints (`RUN <calls> CALLS`); anything else calls nothing -> results.
+
+Failure recovery: a rate-limited or failing model is skipped for the rest of the run and shows as a gap; run the
+launcher again later to ask again (a missing answer is a gap, never a change). A reported charge is a gap too:
+check the OpenRouter dashboard. Close the window to stop; recorded answers stay. Nothing is retried. If the key
+was typed wrongly, run again; a rejected call is a gap. Local data: the database file named at the start; back it up
+with `python -m live_genesis.cli backup NEW-FILE` (set `LIVE_DB` first). Read the saved answers locally with the
+`uvicorn` line the launcher prints; the public site never carries them.
