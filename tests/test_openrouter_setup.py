@@ -158,3 +158,90 @@ def test_malformed_rows_are_skipped_not_fatal():
             with_arch('a/e:free', {'output_modalities': ['image']}), row()]
     # A non-dict architecture is treated as unstated (text); a malformed or non-text modality list is skipped.
     assert setup.free_models({'data': rows}) == ['a/c:free', 'example/model:free']
+
+
+# ---- Free-only rules that hold on every path, not only for the exact host with a free declaration ----
+import json
+import sys
+
+FREE_A, FREE_B = 'example/model-a:free', 'example/model-b:free'
+CATALOG = {'data': [row(FREE_A), row(FREE_B), row('example/paid'), row('openrouter/free')]}
+
+
+def configure(monkeypatch, models=(FREE_A,)):
+    for key, value in setup.settings(list(models), setup.free_models(CATALOG)).items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'SENTINEL-OPENROUTER-KEY-51ce')
+
+
+@pytest.mark.parametrize('host,expected', [('openrouter.ai', True), ('OpenRouter.AI', True), ('openrouter.ai.', True),
+                                           ('api.openrouter.ai', True), ('notopenrouter.ai', False),
+                                           ('openrouter.ai.example.invalid', False), (None, False)])
+def test_openrouter_host_rule_has_no_spelling_that_gets_around_it(host, expected):
+    assert providers.is_openrouter_host(host) is expected
+
+
+@pytest.mark.parametrize('model', ['openrouter/free', 'openrouter/auto', 'openrouter/auto:free', 'vendor/paid',
+                                   'vendor/model:free:online', 'vendor/model:FREE', 'vendor/model:free ', 'model:free', None])
+def test_only_an_explicit_vendor_model_free_id_is_accepted(model):
+    assert not providers.openrouter_free_model_ok(model)
+    assert providers.openrouter_free_model_ok('vendor/model-1.5:free')
+
+
+@pytest.mark.parametrize('url', ['https://openrouter.ai/api/v1', 'https://OPENROUTER.ai./api/v1', 'https://eu.openrouter.ai/api/v1'])
+def test_a_priced_or_undeclared_openrouter_endpoint_is_refused(monkeypatch, url):
+    configure(monkeypatch)
+    monkeypatch.setenv('LIVE_ARCHIVE_ENDPOINT_OPENROUTER_FREE_BASE_URL', url)
+    assert providers.endpoints()['openrouter-free'].basis == providers.BASIS_FREE
+    monkeypatch.setenv('LIVE_ARCHIVE_ENDPOINT_OPENROUTER_FREE_INPUT_USD_PER_M', '0.5')
+    monkeypatch.setenv('LIVE_ARCHIVE_ENDPOINT_OPENROUTER_FREE_OUTPUT_USD_PER_M', '1.5')
+    with pytest.raises(providers.ProviderConfigError, match='free models only') as err:
+        providers.endpoints()
+    assert 'openrouter.ai/api' not in str(err.value).lower()
+    monkeypatch.setenv('LIVE_ARCHIVE_ENDPOINT_OPENROUTER_FREE_INPUT_USD_PER_M', '0')
+    monkeypatch.setenv('LIVE_ARCHIVE_ENDPOINT_OPENROUTER_FREE_OUTPUT_USD_PER_M', '0')
+    monkeypatch.setenv('LIVE_ARCHIVE_ENDPOINT_OPENROUTER_FREE_FREE_TIER', 'NO')
+    with pytest.raises(providers.ProviderConfigError, match='free models only'):
+        providers.endpoints()
+
+
+def test_the_single_compatible_provider_cannot_point_at_openrouter(monkeypatch):
+    monkeypatch.setenv('LIVE_COMPAT_BASE_URL', 'https://openrouter.ai/api/v1')
+    with pytest.raises(providers.ProviderConfigError, match='free'):
+        providers.compat_settings()
+
+
+@pytest.mark.parametrize('model', ['openrouter/free', 'openrouter/auto', 'example/paid', 'example/model-a'])
+def test_the_plan_refuses_a_paid_or_router_model_before_a_run_exists(monkeypatch, model):
+    from live_genesis import archive
+    configure(monkeypatch)
+    answerers = [{'label': 'm', 'provider': providers.COMPATIBLE, 'model': model, 'endpoint': 'openrouter-free'}]
+    with pytest.raises(archive.ArchiveRefused, match='vendor/model:free'):
+        archive.resolve(answerers, 120)
+    assert archive.resolve([{**answerers[0], 'model': FREE_A}], 120)[0][0]['basis'] == providers.BASIS_FREE
+
+
+def test_a_charge_is_its_own_error_so_the_archive_can_stop_on_it():
+    def create(**kwargs):
+        return SimpleNamespace(usage=SimpleNamespace(prompt_tokens=4, completion_tokens=2, cost=0.0004), choices=[])
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    with pytest.raises(engine.UnexpectedCharge):
+        engine._chat(client, FREE_A, '', 'test', 100, json_mode=False, reasoning_effort=None, sampling=None, free_openrouter=True)
+    assert issubclass(engine.UnexpectedCharge, engine.UsageMissing)
+
+
+def test_check_says_when_a_configured_model_is_no_longer_free(tmp_path, monkeypatch, capsys):
+    configure(monkeypatch, (FREE_A, FREE_B))
+    assert setup.configured_models() == [FREE_A, FREE_B]
+    saved = tmp_path / 'catalog.json'
+    saved.write_text(json.dumps(CATALOG), encoding='utf-8')
+    monkeypatch.setattr(setup, 'catalog', lambda: (_ for _ in ()).throw(AssertionError('no network in tests')))
+    monkeypatch.setattr(sys, 'argv', ['openrouter_setup', '--check', '--catalog', str(saved)])
+    setup.main()
+    assert 'All configured OpenRouter models are listed free' in capsys.readouterr().out
+    saved.write_text(json.dumps({'data': [row(FREE_A), row(FREE_B, completion='0.0000002')]}), encoding='utf-8')
+    with pytest.raises(SystemExit) as stop:
+        setup.main()
+    printed = capsys.readouterr()
+    assert stop.value.code == 1 and f'{FREE_B}: NOT listed free now' in printed.out and f'{FREE_A}: still listed free' in printed.out
+    assert 'SENTINEL' not in printed.out + printed.err
