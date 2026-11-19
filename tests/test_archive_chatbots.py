@@ -1318,26 +1318,95 @@ def test_a_payload_without_the_track_is_exactly_what_it_was(ready, monkeypatch):
         'the schema marker does not fit the file (/6 exactly when it holds the chat-app track)'
 
 
+def test_the_summary_counts_refused_skipped_and_held_back_replies_and_never_prints_one(chat, tmp_path):
+    secret = 'PLACEHOLDER-NEVER-PRINTED'
+
+    def edit(data):
+        answers = data['chatbots'][0]['answers']
+        answers[0].update(answer=f'{secret} refusal.', refused=True)
+        answers[1].update(answer='', skipped=f'{secret} note')
+        answers[2].update(answer=f'{secret}: write to someone.real@example.org')
+        answers[3].update(answer='x' * 2001)
+        data['human']['answers'][0].update(answer='', kind='', skipped='PLACEHOLDER: nobody answered')
+    done = chatbots.import_collection(filled(tmp_path, edit=edit, reply=lambda app, q: f'{secret} reply.'), dry_run=True)
+    lines = chatbots.summary_lines(done)
+    assert lines[0].startswith('  chatgpt: 0 of 4 answers will show, 1 refused, 1 skipped, 1 held back by the content check (')
+    assert lines[0].endswith('), 1 empty or too long') and lines[1] == '  gemini: 4 of 4 answers will show, 0 refused, 0 skipped'
+    assert lines[3] == '  human: 3 of 4 answers will show, 1 skipped, empty or too long'
+    assert secret not in '\n'.join(lines) and 'example.org' not in '\n'.join(lines)
+    without = chatbots.import_collection(filled(tmp_path, name='apps.json', human=False), dry_run=True)
+    assert chatbots.summary_lines(without)[-1] == '  human: no human block in this file'
+
+
+def test_every_refusal_says_that_nothing_was_stored_and_what_to_do_next(chat, tmp_path):
+    """The owner is not a programmer: a refusal names the place, the rule and the next step, and never a reply."""
+    def message(edit, **options):
+        with pytest.raises(archive.ArchiveRefused) as caught:
+            chatbots.import_collection(filled(tmp_path, name='bad.json', edit=edit, reply=lambda app, q: 'PLACEHOLDER-NEVER-PRINTED'), **options)
+        text = str(caught.value)
+        assert 'PLACEHOLDER-NEVER-PRINTED' not in text and 'othing was stored' in text
+        return text
+    first = lambda d: d['chatbots'][0]                                # noqa: E731
+    one = message(lambda d: first(d)['answers'][0].update(prompt='Is it?'))
+    assert 'bad.json is not ready yet, and nothing was stored. That is what this check is for. Fix this in the file' in one
+    assert 'chatgpt, C001: the prompt in the file is not the prompt of' in one and 'make a new sheet and paste your replies into it' in one
+    two = message(lambda d: (first(d)['conditions'].update(web_search='sometimes', country='usa'), first(d)['answers'][1].update(skipped='x')))
+    assert 'Fix these in the file and run the same command again' in two and 'If the reply showed sources write on' in two
+    assert 'the country you asked from' in two and 'chatgpt, C002: give exactly one of answer, answer_file or skipped (more than one is filled in' in two
+    assert 'still empty' not in two                                                        # a wrong value is not called empty, and is not echoed
+    assert 'sometimes' not in two and 'usa' not in two
+    assert 'take the screenshot line out' in message(lambda d: first(d)['answers'][0].update(screenshot='no-such.png'))
+    assert 'same folder as this sheet' in message(lambda d: first(d)['answers'][0].update(answer='', answer_file='no-such.txt'))
+    assert 'sum the replies up in your own words' in message(lambda d: d['human']['answers'][0].update(answer='As u/some_person said: no.'))
+    assert 'Keep one block for each app' in message(lambda d: d['chatbots'].append(dict(d['chatbots'][0])))
+    assert 'Write the day you actually asked' in message(lambda d: d.update(collected_on='2026-11-20'))
+    broken = tmp_path / 'broken.json'
+    broken.write_text('{"format": ', encoding='utf-8')
+    with pytest.raises(archive.ArchiveRefused, match='could not be read.*usual cause is a reply with line breaks.*answer_file.*Nothing was stored'):
+        chatbots.import_collection(broken)
+    target = chatbots.write_template(tmp_path / 'sheet.json')
+    with pytest.raises(archive.ArchiveRefused, match='already exists, so it was left alone.*--out'):
+        chatbots.write_template(target)
+    # Stored once; a second import of the same sheet says what the owner most likely did.
+    chatbots.import_collection(filled(tmp_path))
+    with pytest.raises(archive.ArchiveRefused, match='if you imported it already, there is nothing more to do'):
+        chatbots.import_collection(filled(tmp_path))
+    archive_notes = ' '.join(chatbots.HOW_TO)
+    assert 'docs/MONTHLY-ROUND.md' in archive_notes and 'you cannot break anything' in archive_notes
+    assert 'is never published' in archive_notes and 'replies may be quoted or summed up on the site' in archive_notes
+
+
 # ---- CLI, capture script, docs --------------------------------------------------------------------------------
 
 def test_cli_template_dry_run_import_and_status(chat, tmp_path, monkeypatch, capsys):
     target = tmp_path / 'cli.json'
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-template', '--out', str(target), '--date', '2026-11-13')
     assert code == 0 and 'Template written to' in out and 'BY HAND' in out and 'Never use a program' in out
+    assert 'docs/MONTHLY-ROUND.md' in out and f'archive-chatbot-import {target} --dry-run' in out and 'this stores nothing' in out
+    # A blank sheet: the refusal says nothing was stored, what is wrong, where, and what to do, and that the value is still empty.
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-import', str(target))
-    assert code == 1 and 'was refused; nothing was stored' in out and 'fresh_chat must be true' in out
+    assert code == 1 and 'is not ready yet, and nothing was stored' in out and 'run the same command again' in out
+    assert 'chatgpt: fresh_chat must be true (it is still empty). Every question needs a new chat of its own.' in out
+    assert 'chatgpt: account must be one of logged_out | free_account | paid_account (it is still empty). Write the one you used' in out
+    assert 'chatgpt, C001: give exactly one of answer, answer_file or skipped (all are empty: paste the reply' in out
     path = filled(tmp_path, '2026-11-13', reply=lambda app, q: 'PLACEHOLDER-NEVER-PRINTED reply.')
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-import', str(path), '--dry-run')
     assert code == 0 and 'DRY RUN' in out and 'Nothing was stored' in out and 'NEVER-PRINTED' not in out and '"characters": 32' in out
+    # ... and the same in plain words: one line per app and one for the human block, counts only.
+    for line in ('  chatgpt: 4 of 4 answers will show, 0 refused, 0 skipped', '  grok: 4 of 4 answers will show, 0 refused, 0 skipped',
+                 '  human: 4 of 4 answers will show', 'run the same command again without --dry-run to store it'):
+        assert line in out, line
     assert rows('SELECT * FROM archive_chatbot_runs') == []
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-import', str(path))
     assert code == 0 and 'Stored as hand-entered run 1, collected 2026-11-13' in out and 'NEVER-PRINTED' not in out
-    assert 'may only be added to' in out and 'a recorded question never changes' in out
-    assert 'cannot be verified' in out and '--export --archive-only' in out
+    assert 'the question list is now fixed' in out and 'a recorded question never changes' in out
+    # Nothing is public after an import, and the message says so; it no longer claims a label the pages do not carry.
+    assert 'Nothing is public yet' in out and 'export, read every answer and approve' in out and 'docs/MONTHLY-ROUND.md' in out
+    assert 'labelled so on every page' not in out and '  gemini: 4 of 4 answers will show' in out
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-import', str(path))
     assert code == 1 and 'already has a hand-entered run dated 2026-11-13' in out
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-import', str(filled(tmp_path, '2026-10-01')))
-    assert code == 1 and '--allow-old' in out
+    assert code == 1 and 'run the same command again with --allow-old at the end' in out and 'Nothing was stored.' in out
     code, out = run_cli(monkeypatch, capsys, 'archive-status')
     status = json.loads(out)['chatbots']
     assert status['config_file']['status'] == 'draft' and status['config_file']['chatbots'] == APPS and status['config_file']['human'] == 'Human'
