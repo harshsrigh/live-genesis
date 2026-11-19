@@ -213,9 +213,12 @@ def test_template_holds_every_app_the_exact_prompts_and_the_optional_human_block
                    'Paste the whole reply even if it is long; never trim or reword it. The page shortens the display, not the text.'):
         assert phrase in how, phrase
     assert 'Copilot' not in how
-    # A blank template is not importable: the owner has to fill in the conditions and every answer.
-    with pytest.raises(archive.ArchiveRefused, match='account must be one of'):
+    # A blank template is not importable: the owner has to fill in the conditions and every answer. One kind line per block.
+    with pytest.raises(archive.ArchiveRefused) as blank:
         chatbots.import_collection(target)
+    assert str(blank.value).count('this block is still blank') == 4 and 'must be' not in str(blank.value)
+    assert 'chatgpt: this block is still blank. Fill in its conditions and paste the replies, or remove the whole block' in str(blank.value)
+    assert 'human: this block is still blank. Fill it in, or remove the whole human block' in str(blank.value)
     with pytest.raises(archive.ArchiveRefused, match='already exists'):
         chatbots.write_template(tmp_path / 't.json')
     assert json.loads(chatbots.write_template(tmp_path / 'today.json').read_text(encoding='utf-8'))['collected_on'] == '2026-11-14'
@@ -1376,6 +1379,53 @@ def test_every_refusal_says_that_nothing_was_stored_and_what_to_do_next(chat, tm
     assert 'is never published' in archive_notes and 'replies may be quoted or summed up on the site' in archive_notes
 
 
+def test_a_refused_or_skipped_replys_words_are_in_no_published_file_and_stay_in_the_database(chat, tmp_path):
+    """Decided by default on 15 November 2026: "we leave it out" holds for the data too. The fact is published, the words are not."""
+    payload = two_dates(tmp_path)
+    words, note = 'PLACEHOLDER refusal words.', 'the app showed an error'
+    stored = rows("SELECT state,reason,answer_text,refused FROM archive_chatbot_answers WHERE chatbot IN ('grok','gemini') "
+                  "AND question_id='C004' AND run_id=2 ORDER BY chatbot")
+    assert stored == [{'state': 'no_answer', 'reason': f'skipped: PLACEHOLDER: {note}', 'answer_text': None, 'refused': 0},
+                      {'state': 'answered', 'reason': '', 'answer_text': words, 'refused': 1}]          # the private record is untouched
+    public = {(a['chatbot'], a['run']): a for a in payload['chatbots']['answers'] if a['question'] == 'C004'}
+    assert {key: public[('grok', 2)][key] for key in ('state', 'reason', 'text', 'refused', 'changed')} == {
+        'state': 'no_answer', 'reason': 'refused', 'text': None, 'refused': True, 'changed': None}
+    assert {key: public[('gemini', 2)][key] for key in ('state', 'reason', 'text', 'refused')} == {
+        'state': 'no_answer', 'reason': 'skipped', 'text': None, 'refused': False}
+    assert set(public[('grok', 2)]) == set(chatbots.ANSWER_KEYS_PUBLIC)                       # the shape did not change, so neither did the markers
+    assert payload['schema'] == 'live-genesis-archive/6' and chatbots.SITE_SCHEMA == 'live-genesis-chat-archive/2'
+    assert archive.payload_problem(payload) is None
+    # The reviewed export, the site built from it, every page, card and data file: the fact, never the words.
+    out, site = tmp_path / 'published', tmp_path / 'site'
+    snapshot.export_published(out, archive_only=True)
+    snapshot.approve_published(out, confirmed=True)
+    snapshot.build_from_data(site, out, archive_only=True)
+    files = [path for folder in (out, site) for path in folder.rglob('*') if path.is_file() and path.suffix in ('.html', '.json', '.jsonl', '.txt')]
+    assert len(files) > 30
+    for path in files:
+        text = path.read_text(encoding='utf-8')
+        assert words not in text and note not in text, path.name
+    exported = json.loads((out / 'archive.json').read_text(encoding='utf-8'))
+    assert [a['text'] for a in exported['chatbots']['answers'] if a['refused']] == [None]
+    record = next(json.loads(line) for line in (site / 'archive' / 'data' / 'answers.jsonl').read_text(encoding='utf-8').splitlines()
+                  if json.loads(line)['id'] == 'C004/grok/2026-11-14')
+    assert (record['state'], record['shown'], record['text'], record['previous_text']) == ('refused', False, None, None)
+    # The pages still know there was no answer that month.
+    four = (site / 'archive' / 'c' / 'C004.html').read_text(encoding='utf-8')
+    assert '2 replies left out' in four and four.count('>no answer, left out</td>') == 2
+    # A file that carries a refusal's words (an export from before this rule, or an edited one) is not well-formed and cannot be checked in.
+    block = json.loads(json.dumps(payload['chatbots']))
+    refusal = next(a for a in block['answers'] if a['refused'])
+    refusal.update(state='answered', reason='', text=words)
+    assert chatbots.block_problem(block) == 'chatbots: a refused reply carries its words; only the fact that it was refused is published'
+    refusal.update(state='no_answer', reason='refused', text=words)
+    assert chatbots.block_problem(block) is not None
+    exported['chatbots'] = block
+    (out / 'archive.json').write_text(json.dumps(exported), encoding='utf-8')
+    with pytest.raises(RuntimeError):
+        snapshot.check_published(out)
+
+
 # ---- CLI, capture script, docs --------------------------------------------------------------------------------
 
 def test_cli_template_dry_run_import_and_status(chat, tmp_path, monkeypatch, capsys):
@@ -1386,6 +1436,13 @@ def test_cli_template_dry_run_import_and_status(chat, tmp_path, monkeypatch, cap
     # A blank sheet: the refusal says nothing was stored, what is wrong, where, and what to do, and that the value is still empty.
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-import', str(target))
     assert code == 1 and 'is not ready yet, and nothing was stored' in out and 'run the same command again' in out
+    assert out.count('this block is still blank') == 4 and 'fresh_chat' not in out          # a sheet nobody started: four lines, not eighty
+    # A sheet that was started: each empty value is named, with what to write.
+    started = json.loads(target.read_text(encoding='utf-8'))
+    started['chatbots'][0]['answers'][1]['answer'] = 'PLACEHOLDER-NEVER-PRINTED reply.'
+    (tmp_path / 'started.json').write_text(json.dumps(started), encoding='utf-8')
+    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-import', str(tmp_path / 'started.json'))
+    assert code == 1 and 'NEVER-PRINTED' not in out and out.count('this block is still blank') == 3
     assert 'chatgpt: fresh_chat must be true (it is still empty). Every question needs a new chat of its own.' in out
     assert 'chatgpt: account must be one of logged_out | free_account | paid_account (it is still empty). Write the one you used' in out
     assert 'chatgpt, C001: give exactly one of answer, answer_file or skipped (all are empty: paste the reply' in out
@@ -1437,10 +1494,13 @@ def test_capture_script_takes_chat_card_names_and_docs_describe_the_track():
     for phrase in ('archive-chatbot-template', 'archive-chatbot-import', '--dry-run', '--allow-old', 'by hand', 'terms',
                    'live-genesis-archive/6', 'Temporary Chat', 'Private Chat', 'not verified', 'Written with Grok',
                    'answer_file', 'chat-app-a', '--export --archive-only', 'Back up first', 'ChatGPT, Gemini and Grok',
-                   'Human', 'quoted', 'summarised', 'never contacts Reddit', 'replies may be quoted', 'no usernames',
-                   '"refused": true', 'Refusals and non-answers are left out.', 'C001', PREFIX, 'aside', 'never on a share card',
-                   'never rewritten, shortened'):
+                   'Human', 'quoted', 'summarised', 'never contacts Reddit', 'replies may be quoted or summed up on the site',
+                   'No usernames, handles or links are ever copied', 'Prefer a summary', "Follow each community's rules",
+                   'Nothing is collected by software', 'Decided by default on 15 November 2026',
+                   '"refused": true', archive_pages.LEFT_OUT, 'are in no published file', 'docs/MONTHLY-ROUND.md',
+                   'C001', PREFIX, 'aside', 'never on a share card', 'never rewritten, shortened'):
         assert phrase in section, phrase
+    assert 'not decided yet' not in section
     assert 'Copilot' not in section.replace('Why no Copilot?', '').replace('cheaper to ask a human than Copilot', '').replace('Copilot is dropped', '').replace('Copilot was dropped', '')
     labels = doc.split('## Machine-readable labels', 1)[1].split('\n## ', 1)[0]
     for phrase in ('data-question-id', 'data-answerer-kind', 'data-method', 'data-provenance', 'data-human-form', 'data-state',
@@ -1450,6 +1510,23 @@ def test_capture_script_takes_chat_card_names_and_docs_describe_the_track():
         assert phrase in labels, phrase
     assert 'typed-by-hand' not in labels and 'collected-by-hand' not in labels
     assert "Owner's decision, 14 November 2026: the published pages, cards and data files do not say how replies were collected." in section
+    # The owner's guide: the same Human rule, the refusal recipe, and every step of the round, with no automated collection.
+    guide = (REPO / 'docs' / 'MONTHLY-ROUND.md').read_text(encoding='utf-8')
+    for phrase in ('archive-chatbot-template --out', 'archive-chatbot-import chatbots-2026-12.json --dry-run', '--allow-old',
+                   'cli backup', '--export published', '--approve published --i-have-read-it', '--check published', '--from-data published',
+                   'capture-cards.mjs', 'Temporary Chat', 'Temporary chat', 'Private Chat', '"refused": true', '"skipped"', 'answer_file',
+                   'new chat', 'You post the question yourself', 'No usernames, handles or links are ever copied', 'Prefer a summary',
+                   "Follow each community's rules", 'Nothing is collected by software', 'If something goes wrong', 'wsl', 'PowerShell',
+                   'this block is still blank', 'is not ready yet', 'Read every answer'):
+        assert phrase in guide, phrase
+    assert 'archive-run' not in guide and 'LIVE_ALLOW_PAID_CALLS' not in guide and 'LIVE_DB_PATH' not in guide
+    assert not re.search(r'selenium|playwright install|puppeteer|headless|scrap(?:e|er|ing)|crawler|webdriver|reddit\.com', guide, re.I)
+    for name in ('README.md', 'docs/PLAN-CHATBOT-COMPARISON.md', 'docs/DEVELOPER.md'):
+        assert 'MONTHLY-ROUND.md' in (REPO / name).read_text(encoding='utf-8'), name
+    plan = (REPO / 'docs' / 'PLAN-CHATBOT-COMPARISON.md').read_text(encoding='utf-8')
+    for phrase in ('Decided by default on 15 November 2026; the owner can change them', 'words are not published', 'accent stays indigo',
+                   'Hooks stay fixed with their question', 'The Copilot line stays where it is'):
+        assert phrase in plan, phrase
     social = (REPO / 'docs' / 'SOCIAL-POSTS.md').read_text(encoding='utf-8')
     part = social.split('## Chat-app cards', 1)[1]
     for phrase in ('typed in by hand on', 'screenshot', 'Sample we wrote', 'logo', 'endorse', 'C001-grok', 'C001-human', '65', '1440',

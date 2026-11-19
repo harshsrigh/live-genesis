@@ -56,5 +56,5 @@ Know someone who argues with chatbots? Send them the link.
 <sub>
 The first chat-app round is on its way. Until it lands, the site shows sample answers we wrote ourselves, marked as samples.<br/>
 This is an independent project. It is not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners. Grok answers: Written with Grok. Why no Copilot? It's cheaper to ask a human.<br/>
-Building on the code, or curious how it runs? Start with the <a href="docs/DEVELOPER.md">developer guide</a>.
+Building on the code, or curious how it runs? Start with the <a href="docs/DEVELOPER.md">developer guide</a>. Doing the monthly round? <a href="docs/MONTHLY-ROUND.md">Your monthly round, start to finish</a>.
 </sub>

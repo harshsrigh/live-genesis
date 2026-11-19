@@ -6,7 +6,7 @@ What this module is, honestly:
   archive-chatbot-import` checks it and stores it. Nothing here contacts a chat app, a model or the
   network, and nothing here may ever be made to: no automated collection of any kind.
 * A hand-entered reply cannot be verified. There is no receipt, no token count and no model id beyond
-  the name the app displayed. Pages and exports label every such reply "entered by hand".
+  the name the app displayed. The published pages and files do not say how a reply was collected (owner decision).
 * The questions are this track's OWN list (`archive_chatbots.json`, ids C001...): text, the exact prompt
   (one fixed prefix, a blank line, the question), an optional short `hook` and the date added. It is not
   linked to the locked core list or the trending list, and an import needs neither of them locked.
@@ -28,7 +28,8 @@ What this module is, honestly:
   people answered, nobody changed their mind.
 * A refusal or a non-answer is STORED (so the record is honest) and never shown as a card: the owner
   marks it `"refused": true` (with or without the refusal's text) or `"skipped": "reason"`. A refused
-  reply never takes part in `changed`.
+  reply never takes part in `changed`. Its words (and the note behind a skipped one) stay in the database and
+  are in no published file: the public payload carries the fact only (`_public_answer`).
 * A chat app's dates only move forward: an import for a date that is not later than that app's latest
   recorded date is refused (the same date twice included), so the stored `changed` flags stay true.
 * The question list is `draft` until the first real import. That import records every question with a
@@ -760,6 +761,15 @@ def _human_answer(raw: Any, prompts: dict[str, dict], problems: list[str]) -> di
             "manner": manner if state == "answered" else None}
 
 
+def _untouched(conditions: Any, entries: Any) -> bool:
+    """Whether a chat-app block is exactly as the template wrote it: no condition filled in and no reply given."""
+    if not isinstance(conditions, dict) or not isinstance(entries, list) or not entries:
+        return False
+    return all(value in (None, "") for value in conditions.values()) and all(
+        isinstance(entry, dict) and not any(entry.get(key) for key in ("answer", "answer_file", "skipped", "refused", "screenshot"))
+        for entry in entries)
+
+
 def read_collection(path: str | Path, config: dict, *, allow_old: bool = False) -> dict:
     """Read and check a filled-in file completely. Returns {collected_on, file_sha256, chatbots: [{label,
     name, maker, conditions, answers: [{question, state, reason, text, chars, screenshot_hash, refused}]}],
@@ -827,8 +837,14 @@ def read_collection(path: str | Path, config: dict, *, allow_old: bool = False) 
         if any(c["label"] == label for c in chatbots):
             problems.append(f"{label}: listed twice. Keep one block for each app")
             continue
-        conditions = _conditions(item.get("conditions"), label, problems)
         entries = item.get("answers")
+        if _untouched(item.get("conditions"), entries):
+            # One kind line for a block nobody has started, instead of one line per empty field.
+            problems.append(f"{label}: this block is still blank. Fill in its conditions and paste the replies, or remove the "
+                            "whole block if you did not ask this app")
+            chatbots.append({**known[label], "conditions": None, "answers": []})
+            continue
+        conditions = _conditions(item.get("conditions"), label, problems)
         if not isinstance(entries, list):
             problems.append(f"{label}: answers must be a list")
             continue
@@ -841,6 +857,11 @@ def read_collection(path: str | Path, config: dict, *, allow_old: bool = False) 
         if not isinstance(person, dict) or set(person) - {"name", "conditions", "answers"} or not isinstance(person.get("answers"), list):
             problems.append("the human block must hold name, conditions and answers only. Something else is written there: "
                             "take it out")
+        elif isinstance(person.get("conditions"), dict) and person["conditions"].get("source") in (None, "") and person["answers"] \
+                and all(isinstance(entry, dict) and not any(entry.get(key) for key in ("answer", "kind", "skipped"))
+                        for entry in person["answers"]):
+            problems.append("human: this block is still blank. Fill it in, or remove the whole human block if you have no "
+                            "answers from people this time")
         else:
             conditions = _human_conditions(person.get("conditions"), day, problems)
             answers = [found for found in (_human_answer(entry, config["prompts"], problems) for entry in person["answers"])
