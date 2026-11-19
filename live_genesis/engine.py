@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 from . import providers
@@ -53,8 +54,33 @@ def _text_or_none(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+class UnexpectedCharge(UsageMissing):
+    """A free-only request came back reporting a cost above zero, or one that cannot be read. The answer is not
+    recorded. live_genesis/archive.py (`_paid_call`) stops the run and keeps the hold unconfirmed, so nothing more
+    is sent until the owner has looked at the provider's billing page and run `cli reconcile`. A UsageMissing, so
+    any other caller still treats it as a failed call."""
+
+
+def _reported_charge(usage: Any) -> bool:
+    """True when usage reports a nonzero or unreadable `cost` (OpenRouter adds it; the SDK keeps it as an extra).
+    An absent cost is NOT proof of zero billing: only token counts and the declared-free rate are known."""
+    for source in (usage, getattr(usage, 'model_extra', None)):
+        if source is None:
+            continue
+        value = source.get('cost') if isinstance(source, dict) else getattr(source, 'cost', None)
+        if value is None:
+            continue
+        try:
+            number = Decimal(str(value))
+            if not number.is_finite() or number != 0:
+                return True
+        except Exception:
+            return True
+    return False
+
+
 def _chat(client: Any, model: str, system: str, prompt: str, max_output_tokens: int, *, json_mode: bool,
-          reasoning_effort: str | None, sampling: dict | None) -> Completion:
+          reasoning_effort: str | None, sampling: dict | None, free_openrouter: bool = False) -> Completion:
     """One Chat Completions request on a client that is already built. Shared by the single
     `openai-compatible` provider and the named archive endpoints."""
     request: dict[str, Any] = {'model': model, 'max_tokens': max_output_tokens,
@@ -65,8 +91,19 @@ def _chat(client: Any, model: str, system: str, prompt: str, max_output_tokens: 
         request['reasoning_effort'] = reasoning_effort
     sent = {key: sampling[key] for key in ('temperature', 'seed') if sampling and key in sampling}
     request.update(sent)
+    if free_openrouter:
+        # Checked here as well as in the settings, so no caller can reach OpenRouter with another id. Nothing is sent.
+        if not providers.openrouter_free_model_ok(model):
+            raise ProviderNotReady('A model ' + providers.OPENROUTER_RULE)
+        request['extra_body'] = {'provider': {
+            'allow_fallbacks': False,
+            'max_price': {'prompt': 0, 'completion': 0, 'request': 0, 'image': 0},
+        }}
     response = client.chat.completions.create(**request)
     usage = getattr(response, 'usage', None)
+    if free_openrouter and _reported_charge(usage):
+        # A "free" call that reports a charge (or one we cannot read) is not recorded as free.
+        raise UnexpectedCharge('Charge reported on a free-only call; not recorded as free')
     tokens = (getattr(usage, 'prompt_tokens', None), getattr(usage, 'completion_tokens', None))
     if any(type(n) is not int or n < 0 for n in tokens):
         # No numbers are invented: the callers keep the hold as unconfirmed and stop.
@@ -118,7 +155,8 @@ def infer(provider: str, model: str, prompt: str, *, system: str, max_output_tok
         with httpx.Client(follow_redirects=False, timeout=timeout, trust_env=_trust_env(endpoint.base_url)) as http:
             client = OpenAI(base_url=endpoint.base_url, api_key=endpoint_key, timeout=timeout, max_retries=0, http_client=http)
             return _chat(client, model, system, prompt, max_output_tokens, json_mode=False,
-                         reasoning_effort=endpoint.reasoning_effort, sampling=sampling)
+                         reasoning_effort=endpoint.reasoning_effort, sampling=sampling,
+                         free_openrouter=providers.is_openrouter_host(endpoint.host))
     if compat:
         # Any server speaking the OpenAI Chat Completions API (local or hosted). The base URL and key are
         # passed explicitly, never taken from OPENAI_* variables. Exceptions from here on are caught by the

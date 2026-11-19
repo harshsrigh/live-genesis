@@ -891,6 +891,8 @@ def resolve(models: list[dict], tokens_out: int) -> tuple[list[dict], dict]:
             name = answerer.get("endpoint")
             if name:
                 record = records[name]
+                if providers.is_openrouter_host(record.host) and not providers.openrouter_free_model_ok(answerer["model"]):
+                    raise ArchiveRefused(f"LIVE_ARCHIVE_MODELS, {answerer['label']}: a model {providers.OPENROUTER_RULE}")
                 limit = tokens_out if record.max_output_tokens is None else min(max(record.max_output_tokens, MIN_OUTPUT_TOKENS), MAX_OUTPUT_TOKENS)
                 out.append({**answerer, "record": record, "input_rate": record.input_rate, "output_rate": record.output_rate,
                             "basis": record.basis, "local": record.loopback, "max_output_tokens": limit,
@@ -1254,6 +1256,18 @@ def _paid_call(answerer: dict, prompt: str, hold: float, cap_ceiling: float, tok
             return {"outcome": "skipped", "category": "not_ready", "reservation": reservation}
         return {"outcome": "stopped", "reason": "provider not ready (local setup); nothing was sent for this call",
                 "category": "not_ready", "reservation": reservation}
+    except engine.UnexpectedCharge:
+        # A free-only call reported a cost. Not a gap to skip past: the answer is not recorded, the hold stays
+        # unconfirmed and the caller makes no further call, to this model or any other, until the owner has
+        # looked at the provider's billing page and reconciled.
+        core.close_reservation(reservation, "unconfirmed")
+        open_hold[0] = None
+        with core.connect() as cx:
+            controls.audit(cx, f"{answerer['label']} reported a charge on a free-only call; no further call made, "
+                               f"hold {reservation} unconfirmed")
+        return {"outcome": "stopped", "category": "other", "reservation": reservation,
+                "reason": (f"a free-only call reported a charge; the answer was not recorded and no further call was made "
+                           f"(reservation {reservation}). " + UNCONFIRMED_HINT.format(reservation))}
     except Exception as exc:
         category = failure_category(exc)
         if zero:
