@@ -44,9 +44,13 @@ existing archive-lock/plan workflow in ANSWERS-OVER-TIME.md before collecting.
 - Named OpenRouter endpoints declared free reject anything except an explicit `:free` model ID.
 - Requests include zero maximum prompt, completion, request and image prices, with provider
   fallback disabled. No web-search plugin is requested. The existing SDK retry count is zero.
-- A free call whose usage reports a nonzero or unreadable `cost` raises `UsageMissing`: the hold stays
-  unconfirmed and the run stops. A missing `cost` field is NOT proof of zero billing; only the
-  provider's dashboard confirms that.
+- A free call whose usage reports a nonzero or unreadable `cost` raises `UsageMissing`, which the archive
+  treats as a failed call (`no_usage`) on a zero-priced endpoint: nothing is stored as an answer, the
+  $0 hold is released, that model is skipped for the rest of the run, and the run ends
+  `complete_with_gaps`. The reported charge itself is not recorded anywhere, so check the provider's
+  dashboard after such a run and stop if anything was billed. A missing `cost` field is NOT proof of
+  zero billing; only the dashboard confirms that. A call interrupted mid-request leaves a $0 hold
+  `held` (it blocks nothing).
 - No price metadata is a billing guarantee. Keep the account unfunded and use only the free IDs.
 - The existing opt-in and explicit `--max-usd` gate still apply, including to free calls. This setup
   does not execute archive-run or enable opt-in. A later run needs the owner's instruction.
