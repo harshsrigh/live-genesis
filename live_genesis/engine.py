@@ -1,7 +1,7 @@
 """The inference adapters: one request to OpenAI, Anthropic or an OpenAI-compatible (Chat Completions) server.
 
 `infer` is the only thing here that contacts a provider, and only live_genesis/archive.py calls it
-(`cli archive-run`), after its own gates: provider settings, key, `LIVE_ALLOW_PAID_CALLS=YES`, budget
+(`cli archive-run` and `cli archive-chatbot-ask`, both through `archive._paid_call`), after its own gates: provider settings, key, `LIVE_ALLOW_PAID_CALLS=YES`, budget
 config, a held reservation. No payment, email, browser or posting tool exists here.
 
 Provider API keys are read from the process environment only. This module never loads `.env`; the

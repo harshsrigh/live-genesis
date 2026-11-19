@@ -231,8 +231,9 @@ def published_non_ascii(target: str | Path | None = None) -> list[str]:
 
 
 def _chat_block_counts(chat: dict) -> dict:
+    models = [app["label"] for app in chat["apps"] if "kind" in app]   # model answerers (asked by software); the key exists only then
     return {"runs": len(chat["runs"]), "answers": len(chat["answers"]), "apps": [app["label"] for app in chat["apps"]],
-            "human_answers": len(chat["human_answers"]), "questions": len(chat["questions"])}
+            "human_answers": len(chat["human_answers"]), "questions": len(chat["questions"]), **({"models": models} if models else {})}
 
 
 def _chat_counts(answers: dict) -> dict:
@@ -244,7 +245,8 @@ def _chat_problem(answers: object) -> str | None:
     """Why an exported archive.json may not be published, or None. It is
     the chat-app track alone: the schema marker and the `chatbots` block, hand-entered replies only,
     the apps and questions of the checked-in configuration, closed keys."""
-    if isinstance(answers, dict) and answers.get("schema") in (archive.PAYLOAD_SCHEMA, archive.PAYLOAD_SCHEMA_CHATBOTS):
+    if isinstance(answers, dict) and answers.get("schema") in (archive.PAYLOAD_SCHEMA, archive.PAYLOAD_SCHEMA_CHATBOTS,
+                                                               archive.PAYLOAD_SCHEMA_ASKED):
         return ("it holds the model track; an export of Answers Over Time only holds the chat-app track alone "
                 "(an export made by an earlier version must be exported and reviewed again)")
     return archive_chatbots.site_problem(answers) or archive_chatbots.export_problem(answers["chatbots"])
@@ -414,7 +416,10 @@ def _describe(manifest: dict) -> str:
             f"\n  NOTE: {answered['chatbots']['answers']} row(s) in {ARCHIVE_FILE} are chat-app replies ENTERED BY HAND "
             f"({', '.join(answered['chatbots']['apps'])}; {answered['chatbots']['runs']} run(s)). They cannot be verified. Read "
             "each service's current terms about publishing its output before you push."
-            f"\n  {ARCHIVE_FILE} sha256 {answered['sha256']}")
+            + (f"\n  NOTE: of those, {', '.join(answered['chatbots']['models'])} are MODELS this software asked (cli "
+               "archive-chatbot-ask), not chat apps: their rows are replies a model gave over its API or on this machine, and "
+               "were not entered by hand. Read each model's and service's terms too." if answered["chatbots"].get("models") else "")
+            + f"\n  {ARCHIVE_FILE} sha256 {answered['sha256']}")
 
 
 def main() -> None:

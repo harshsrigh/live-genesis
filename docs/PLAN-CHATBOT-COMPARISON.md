@@ -15,6 +15,8 @@ These override anything below that disagrees. Written down by the PC session fro
 7. **Tone: short, punchy, made for people who scroll fast.** Headlines may be cheeky.
 8. **Ask logged in.**
 
+14 November 2026: the owner asked for the chat-app questions to be put to models by software as a second group; app columns stay reserved for replies from the apps themselves. Built as `cli archive-chatbot-ask` (PAID class, the gates of `archive-run`) and the group "AI models" in `archive_chatbots.json`, which holds no model until the owner adds one; see `docs/ANSWERS-OVER-TIME.md`, "Models asked by software".
+
 ### Built state (14 November 2026, after the redesign merge)
 
 The decisions above are built and merged: three apps (ChatGPT, Gemini, Grok) and a Human column; a chat-app question list of its own (ten draft questions `C001` to `C010` in `live_genesis/archive_chatbots.json`, editable until the first import, fixed after it); refusals and non-answers stored and left off the pages; the chat-app comparison as the front page; the redesigned reading pages; share cards inside the safe area; machine-readable labels and data files. The political trending question was removed and the published local-model answers were withdrawn by the owner, so the public site shows scripted samples only, under made-up app names. The public site now publishes the chat-app comparison only and nothing of the model track (owner: "Remove anything from previous models"); the model track stays in the code and the local web app. Where the older sections below say four apps, Copilot, or "being built", this section is the current state.

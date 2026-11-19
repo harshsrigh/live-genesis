@@ -230,7 +230,8 @@ class _Chat:
         self.apps = sorted(block["apps"], key=lambda app: order[app["group"]])       # group by group; the recorded order within
         self.human = block["human"]
         self.labels = [app["label"] for app in self.apps]
-        self.columns = [{"key": app["label"], "name": app["name"], "kind": "chat-app", "maker": app["maker"],
+        # An app entry with `kind` is a model answerer (asked by software): a column of the kind "model", never "chat-app".
+        self.columns = [{"key": app["label"], "name": app["name"], "kind": app.get("kind", "chat-app"), "maker": app["maker"],
                          "attribution": app.get("attribution", ""), "group": app["group"]} for app in self.apps]
         if self.human:
             self.columns.append({"key": HUMAN, "name": self.human["name"], "kind": "human", "maker": "", "attribution": "",
@@ -259,14 +260,18 @@ class _Chat:
         self.conditions: dict[tuple[str, str], dict] = {}
         self.collection: dict[str, dict] = {}
         self.asked: dict[tuple[str, str], list] = {}
+        self.models: dict[tuple[str, str], dict] = {}        # a model answerer's record on a date, in place of conditions
         for run in runs:
+            for label, facts in run.get("models", {}).items():
+                self.models[(label, run["collected_on"])] = facts
+                self.asked[(label, run["collected_on"])] = run["questions"]
             for label, conditions in run["conditions"].items():
                 self.conditions[(label, run["collected_on"])] = conditions
                 self.asked[(label, run["collected_on"])] = run["questions"]
             if run.get("human"):
                 self.collection[run["collected_on"]] = run["human"]
                 self.asked[(HUMAN, run["collected_on"])] = run["questions"]
-        self.answers = [a for a in block["answers"] if a["source"] in ("manual", "demo")]
+        self.answers = [a for a in block["answers"] if a["source"] in ("manual", "demo", "asked")]
         self.cell = {(a["question"], a["chatbot"], self.day[a["run"]]): a for a in self.answers}
         for answer in block["human_answers"]:
             if answer["source"] in ("manual", "demo"):
@@ -334,7 +339,7 @@ class _View:
 
     def __init__(self, payload: dict):
         from . import archive_chatbots   # lazy, as in render_chatbots
-        if isinstance(payload, dict) and payload.get("schema") == archive_chatbots.SITE_SCHEMA:
+        if isinstance(payload, dict) and payload.get("schema") in archive_chatbots.SITE_SCHEMAS:
             # The chat-app track on its own (the public site): it holds no model list, run or answer.
             problem = archive_chatbots.site_problem(payload)
             payload = {**_NO_MODELS, **payload}
@@ -540,6 +545,14 @@ def _model_board(view: _View, question_id: str) -> dict:
             "prompt_note": "Sent on its own. The model gets no date, no other answers and no earlier replies."}
 
 
+ASKED_METHOD = "asked-by-software"     # internal only: a chat-track record carries no method, and no page shows this
+
+
+def _asked_model(facts: dict) -> str:
+    """The name shown for a model answerer on one date: what the service reported, else the id that was requested."""
+    return facts.get("reported_model") or facts["model"]
+
+
 def _chat_board(view: _View, question_id: str) -> dict:
     chat = view.chat
     question = chat.by_id[question_id]
@@ -555,10 +568,12 @@ def _chat_board(view: _View, question_id: str) -> dict:
             if question_id not in chat.asked.get((key, date), ()):
                 continue
             answer = chat.cell.get((question_id, key, date))
-            conditions = chat.collection.get(date) if human else chat.conditions.get((key, date))
+            asked = chat.models.get((key, date))      # a model answerer: its record takes the place of an app's conditions
+            conditions = chat.collection.get(date) if human else asked or chat.conditions.get((key, date))
             cell = {"record": f"{question_id}/{key}/{date}", "answer_id": answer["id"] if answer else None, "shown": False,
-                    "text": None, "state": "no-answer", "version": "" if human else (conditions or {}).get("shown_model", ""),
-                    "method": SAMPLE if sample else HUMAN_METHOD if human else METHODS["manual"],
+                    "text": None, "state": "no-answer",
+                    "version": "" if human else _asked_model(asked) if asked else (conditions or {}).get("shown_model", ""),
+                    "method": SAMPLE if sample else HUMAN_METHOD if human else ASKED_METHOD if asked else METHODS["manual"],
                     "provenance": SAMPLE if sample else "human-written" if human else "ai-generated",
                     "form": None, "collected": date, "previous": None, "why_not": "left out", "tags": [], "facts": [],
                     "conditions": dict(conditions) if conditions else None, "agreement": "", "others": [], "changed": None}
@@ -570,6 +585,11 @@ def _chat_board(view: _View, question_id: str) -> dict:
                         facts.append(f"collected {full_date(conditions['collected_on'])}")
                     if conditions["count"]:
                         facts.append(f"{_replies(conditions['count'])} read")
+            elif asked:
+                facts = [f"model: {cell['version']}"] + ["run locally"] * bool(asked.get("local"))
+                earlier = [d for d in chat.dates if d < date and (key, d) in chat.models]
+                if earlier and _asked_model(chat.models[(key, earlier[-1])]) != cell["version"]:
+                    facts.append("a different model name than before")
             else:
                 moved = chat.conditions_changed(key, date)
                 facts = [SAMPLE_WORD] * sample + [f"the app showed: {conditions['shown_model']}",
@@ -768,6 +788,9 @@ def chat_disclaimer(makers: list[str]) -> str:
     for maker in makers:
         if maker not in names:
             names.append(maker)
+    if not names:      # only model answerers without a recorded maker
+        return ("AI-generated answers, shown unedited. They may be wrong and are not advice. "
+                "Not affiliated with, sponsored by or endorsed by the makers of the products named; product names belong to their owners.")
     return ("AI-generated answers, shown unedited. They may be wrong and are not advice. "
             f"Not affiliated with, sponsored by or endorsed by {_listed(names, 'or')}; product names belong to their owners.")
 
@@ -779,7 +802,7 @@ def _foot(view: _View, track: str, shown_ids: list[str], back: str = "") -> str:
     if sample:
         honesty = "Everything here is a sample we wrote. No AI and no person was asked."
     elif track == "chat":
-        honesty = chat_disclaimer([view.chat.maker[label] for label in view.chat.labels]) if view.chat.labels else \
+        honesty = chat_disclaimer([view.chat.maker[label] for label in view.chat.labels if view.chat.maker[label]]) if view.chat.labels else \
             "Answers written by people."
     else:
         honesty = "Answers are AI output and may be wrong."
@@ -915,8 +938,11 @@ def chat_headline(chat: _Chat) -> list[str]:
     with several groups a neutral count of all of them and of the groups. Says nothing the data does not show."""
     count = len(chat.labels)
     number = count_word(count).capitalize()
+    models = any(column["kind"] == "model" for column in chat.columns)   # a model is not a chatbot: the count then says "AIs"
     if len(chat.groups) > 1:
-        apps = f"{number} chatbots in {count_word(len(chat.groups))} groups."
+        apps = f"{number} {'AIs' if models else 'chatbots'} in {count_word(len(chat.groups))} groups."
+    elif models:
+        apps = f"{number} AI model{'' if count == 1 else 's'}."
     else:
         from . import archive_chatbots   # lazy, as in render_chatbots
         ai = bool(chat.groups) and chat.groups[0]["id"] == archive_chatbots.DEFAULT_GROUP["id"]
@@ -1392,6 +1418,14 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
                     rows.append(f'  <div class="app-row kind-human">{_av(column)}<div class="app-name"><strong>{esc(column["name"])}</strong></div>'
                                 f'<div class="app-how">{how}</div></div>\n')
                     continue
+                if column["kind"] == "model":
+                    dates = [d for d in chat.dates if (key, d) in chat.models]
+                    rows.append(f'  <div class="app-row{column["who"]}">{_av(column)}<div class="app-name"><strong>' + esc(column["name"]) + '</strong>'
+                                + (f'<span class="muted small">{esc(column["maker"])}</span>' if column["maker"] else '') + '</div>'
+                                f'<div class="app-how"><span>model: {esc(_asked_model(chat.models[(key, dates[-1])]))}</span>'
+                                f'<span class="muted small">asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all'
+                                '</span></div></div>\n')
+                    continue
                 dates = [d for d in chat.dates if (key, d) in chat.conditions]
                 conditions = chat.conditions[(key, dates[-1])]
                 rows.append(f'  <div class="app-row{column["who"]}">{_av(column)}<div class="app-name"><strong>' + esc(column["name"]) + '</strong>'
@@ -1725,6 +1759,20 @@ def _readme_chat() -> str:
 
 
 README_CHAT = _readme_chat()
+# And for a standalone archive that holds a model answerer: the three lines that then also speak of a model.
+_README_CHAT_MODELS = (
+    ("chat-app | human", "chat-app | model | human"),
+    ("The version name the app showed (", "The version name the app showed, or the model's name ("),
+    ("chat app; source and date for human answers). Never a web address, a key, a file path\n"
+     "                    or a username.",
+     "chat app; the model's name and where it ran for a model; source and date for human\n"
+     "                    answers). Never a web address, a key, a file path or a username."),
+)
+README_CHAT_MODELS = README_CHAT
+for _full, _short in _README_CHAT_MODELS:
+    if README_CHAT_MODELS.count(_full) != 1:
+        raise ValueError("the chat-app data README no longer holds a line its form with models replaces")
+    README_CHAT_MODELS = README_CHAT_MODELS.replace(_full, _short)
 
 
 def _dump(node: object) -> str:
@@ -1756,7 +1804,8 @@ def render_data(payload: dict, *, chat_only: bool = False) -> dict[str, str]:
         out[f"data/{question['id']}.json"] = json.dumps(data, ensure_ascii=True, indent=1) + "\n"
         lines += [_dump(answer) for answer in data["answers"]]
     out["data/answers.jsonl"] = "".join(line + "\n" for line in lines)
-    out["data/README.txt"] = README_CHAT if chat_only else README
+    models = any(column["kind"] == "model" for column in view.chat.columns)
+    out["data/README.txt"] = (README_CHAT_MODELS if models else README_CHAT) if chat_only else README
     return out
 
 

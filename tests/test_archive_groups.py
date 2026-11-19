@@ -75,7 +75,6 @@ def test_groups_in_the_configuration_default_validation_and_limits(tmp_path, mon
     assert all(set(block) == {'chatbot', 'name', 'maker', 'conditions', 'answers'} for block in data['chatbots'])
     for apps, groups, why in [
         (bots(2, 'nowhere'), [AI], 'its group is not one of the groups'),
-        (bots(2), [AI, DESK], 'group help-desk has no chat app'),
         (bots(2), [AI, dict(AI, name='Another name')], 'group ids and group names must differ'),
         (bots(2), [AI, dict(DESK, name='ai CHAT apps')], 'group ids and group names must differ'),
         (bots(2), [{'id': 'Help Desk', 'name': 'x'}], 'a group id must be'),
@@ -96,6 +95,13 @@ def test_groups_in_the_configuration_default_validation_and_limits(tmp_path, mon
             chatbots.load_config()
     set_apps(tmp_path, monkeypatch, bots(24))
     assert len(chatbots.load_config()['chatbots']) == 24
+    # A group may be declared before its first answerer (it is then recorded and shown nowhere); a PUBLISHED block never
+    # holds an empty group.
+    set_apps(tmp_path, monkeypatch, bots(2), [AI, DESK])
+    assert chatbots.load_config()['groups'] == [AI, DESK]
+    apps = [dict(app, group='ai-apps') for app in bots(2)]
+    assert chatbots.groups_problem([AI, DESK], apps) == 'group help-desk has no chat app'
+    assert chatbots.groups_problem([AI, DESK], apps, allow_empty=True) is None
 
 
 # ---- any number of answerers ---------------------------------------------------------------------------------
@@ -189,9 +195,9 @@ def test_the_headline_and_copy_are_counted_from_the_data(chat, tmp_path, monkeyp
         app['group'] = 'help-desk'
     assert archive.payload_problem(other) is None and headline(other) == ['Same question.', 'Five chatbots.', 'One human.']
     from types import SimpleNamespace
-    many = SimpleNamespace(labels=['x'] * 13, groups=[AI], human=None)
+    many = SimpleNamespace(labels=['x'] * 13, groups=[AI], human=None, columns=[])
     assert archive_pages.chat_headline(many) == ['Same question.', '13 AI apps.']            # no word for it: the number
-    assert archive_pages.chat_headline(SimpleNamespace(labels=[], groups=[], human={'name': 'Human'})) == ['Same question.', 'One human.']
+    assert archive_pages.chat_headline(SimpleNamespace(labels=[], groups=[], human={'name': 'Human'}, columns=[])) == ['Same question.', 'One human.']
 
 
 # ---- several groups ------------------------------------------------------------------------------------------
@@ -475,11 +481,13 @@ def test_a_database_made_before_groups_upgrades_in_place_and_keeps_every_row(cha
     core.init_db()                                                   # any number of times
     with core.connect() as cx:
         columns = [r[1] for r in cx.execute('PRAGMA table_info(archive_chatbot_conditions)')]
-        assert columns[-2:] == ['group_id', 'group_name']
+        assert columns[columns.index('note') + 1:][:3] == ['group_id', 'group_name', 'kind']
+        gained = {'archive_chatbot_conditions': ('', '', 'app') + (None,) * 8, 'archive_chatbot_answers': (None,)}
         for table, expected in before.items():
             now = [tuple(r) for r in cx.execute(f'SELECT * FROM {table} ORDER BY rowid')]
-            # Every row is kept, value for value; the conditions gain the two group columns, empty.
-            assert now == ([row + ('', '') for row in expected] if table == 'archive_chatbot_conditions' else expected), table
+            # Every row is kept, value for value; the conditions gain the two group columns, empty, and what came with model
+            # answerers (the kind 'app' and eight NULL columns), the answers a NULL reservation.
+            assert now == [row + gained.get(table, ()) for row in expected], table
         import sqlite3
         fresh = sqlite3.connect(':memory:')
         fresh.executescript('CREATE TABLE archive_runs(kind TEXT);' + chatbots.TABLES)

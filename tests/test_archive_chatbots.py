@@ -96,8 +96,10 @@ def test_checked_in_configuration_three_apps_human_and_ten_draft_questions_of_it
     assert raw['status'] == 'draft' and config['status'] == 'draft' and raw['format'] == 'live-genesis-chatbots/3'
     assert [(c['label'], c['name'], c['maker']) for c in config['chatbots']] == [
         ('chatgpt', 'ChatGPT', 'OpenAI'), ('gemini', 'Gemini', 'Google'), ('grok', 'Grok', 'xAI')]
-    # One answerer group today; every app belongs to it (tests/test_archive_groups.py covers several).
-    assert raw['groups'] == config['groups'] == [{'id': 'ai-apps', 'name': 'AI chat apps'}] == [chatbots.DEFAULT_GROUP]
+    # Two answerer groups: the apps', which every app belongs to, and one for models asked by software, which is seeded
+    # EMPTY (the owner adds them) and so shows nowhere (tests/test_archive_ask.py; tests/test_archive_groups.py covers several).
+    assert raw['groups'] == config['groups'] == [{'id': 'ai-apps', 'name': 'AI chat apps'}, {'id': 'ai-models', 'name': 'AI models'}]
+    assert config['groups'][0] == chatbots.DEFAULT_GROUP and config['models'] == [] and all('kind' not in c for c in raw['chatbots'])
     assert {c['group'] for c in config['chatbots']} == {'ai-apps'} and all('group' not in c for c in raw['chatbots'])
     assert 'opilot' not in json.dumps(raw['chatbots']) and 'Microsoft' not in json.dumps(raw)      # dropped (owner, 14 Nov 2026)
     # A maker's attribution line is configuration, not a special case in the code: only one app has one.
@@ -636,11 +638,12 @@ def test_a_database_with_the_tracks_first_shape_migrates_in_place(chat, tmp_path
         assert 'archive_chatbot_answers_locked_question' not in triggers and 'archive_chatbot_answers_own_question' in triggers
         assert 'refused' in {r[1] for r in cx.execute('PRAGMA table_info(archive_chatbot_answers)')}
         assert [tuple(r) for r in cx.execute('SELECT * FROM archive_chatbot_runs ORDER BY rowid')] == before['archive_chatbot_runs']
-        # The conditions keep every value and gain the two group columns, empty (read as the default group).
+        # The conditions keep every value and gain the two group columns, empty (read as the default group), the kind
+        # 'app' and the eight columns of a model answerer, all NULL.
         assert [tuple(r) for r in cx.execute('SELECT * FROM archive_chatbot_conditions ORDER BY rowid')] == \
-            [row + ('', '') for row in before['archive_chatbot_conditions']]
+            [row + ('', '', 'app') + (None,) * 8 for row in before['archive_chatbot_conditions']]
         kept = [tuple(r) for r in cx.execute('SELECT * FROM archive_chatbot_answers ORDER BY rowid')]
-        assert kept == [row + (0,) for row in before['archive_chatbot_answers']]          # the same row, plus refused = 0
+        assert kept == [row + (0, None) for row in before['archive_chatbot_answers']]     # the same row, plus refused = 0 and no reservation
     # The old-shape run has no question of the track's own list: it is kept and shown nowhere.
     payload = archive.public_payload()
     assert 'chatbots' not in payload and archive.payload_problem(payload) is None
@@ -1376,7 +1379,8 @@ def test_capture_script_takes_chat_card_names_and_docs_describe_the_track():
 
 # ---- owner decision, 14 November 2026: nothing published says how replies were collected -------------------------
 
-COLLECTION_WORDING = re.compile(r'by hand|typed|pasted|no software|entered by|hand-entered|collected by|a person asked|a person types', re.I)
+COLLECTION_WORDING = re.compile(r'by hand|typed|pasted|no software|entered by|hand-entered|collected by|a person asked|a person types'
+                                r'|asked by software|by software|via API|through the API', re.I)
 
 
 def assert_site_does_not_say_how_replies_were_collected(site):

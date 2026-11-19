@@ -91,6 +91,9 @@ PAYLOAD_SCHEMA = "live-genesis-archive/3"
 # the database holds such a run: a payload without that track is still /3, byte for byte what it always was.
 # /6: the track's block holds answerer `groups` and every app its `group` (/5, without them, was never published).
 PAYLOAD_SCHEMA_CHATBOTS = "live-genesis-archive/6"
+# /7: the track's block also holds a model answerer (an app entry with `kind` "model", a run with `models`, answers of
+# source `asked`: archive_chatbots.ask). Written only then: a payload without one is still /6, byte for byte.
+PAYLOAD_SCHEMA_ASKED = "live-genesis-archive/7"
 TRACKS = ("core", "trending")
 GROUP_COUNT = 4
 QUESTION_ID = re.compile(r"Q[0-9]{2}")
@@ -1207,6 +1210,75 @@ def _summary(run_id: int) -> dict:
 
 # ---- Paid run (operator only) ------------------------------------------------------------------
 
+UNCONFIRMED_HINT = "Check provider billing, then run: cli reconcile --receipt {0} --actual-usd <charged amount>"
+
+
+def _paid_call(answerer: dict, prompt: str, hold: float, cap_ceiling: float, tokens: int, extra: dict, open_hold: list) -> dict:
+    """ONE call through the whole safety path: reserve its worst case -> `engine.infer` -> settle. Shared by
+    `run_archive` and `archive_chatbots.ask`, so the two can never differ in it. `answerer` is an entry of
+    `resolve`; `open_hold` is a one-item list the caller reads in its `finally`: while a PRICED call is between
+    its reservation and its settlement it holds (reservation, hold, label), otherwise None.
+
+    Returns a dict with `outcome`:
+    * `refused`: no hold could be made (`reason`); nothing was sent.
+    * `skipped`: the call failed on a zero-priced endpoint; its $0 hold was released (`category`, `reservation`).
+    * `stopped`: a priced call failed, was not ready or came back without usable usage (`reason`, `category`,
+      `reservation`); the hold is unconfirmed (released when nothing was sent). The caller makes no further call.
+    * `ok`: settled. `result`, `text`, `stop`, `input_tokens`, `output_tokens`, `usd`, `latency_ms`, `reservation`.
+    Provider exception text is never stored or echoed: it can contain secrets. Only a category is kept."""
+    from . import engine  # lazy: see module docstring
+    zero = answerer["basis"] in ZERO_PRICED
+    try:
+        reservation = core.reserve_budget(None, answerer["model"], hold, cap_ceiling, provider=answerer["provider"],
+                                          input_rate=answerer["input_rate"], output_rate=answerer["output_rate"])
+    except core.ReconciliationRequired as exc:
+        return {"outcome": "refused", "reason": str(exc)}
+    except core.BudgetExceeded:
+        return {"outcome": "refused", "reason": "local estimated spending ceiling or run cap reached; no further calls made"}
+    # A priced call that is interrupted (Ctrl+C, a kill signal) between here and its settlement may have
+    # been sent: the caller's `finally` then closes its hold as unconfirmed, so the next run stops for `cli reconcile`.
+    open_hold[0] = None if zero else (reservation, hold, answerer["label"])
+    started = time.monotonic()
+    try:
+        result = engine.infer(answerer["provider"], answerer["model"], prompt, system=SYSTEM_LINE,
+                              max_output_tokens=tokens, **extra)
+        latency_ms = int((time.monotonic() - started) * 1000)
+        text, tokens_in, tokens_out = result.text, result.input_tokens, result.output_tokens
+        if not isinstance(text, str):
+            raise TypeError("completion text missing")
+        stop = getattr(result, "stop", "unknown")
+        stop = stop if stop in engine.STOP_VALUES else "unknown"
+    except engine.ProviderNotReady:
+        core.close_reservation(reservation, "released")  # nothing was sent
+        if zero:
+            return {"outcome": "skipped", "category": "not_ready", "reservation": reservation}
+        return {"outcome": "stopped", "reason": "provider not ready (local setup); nothing was sent for this call",
+                "category": "not_ready", "reservation": reservation}
+    except Exception as exc:
+        category = failure_category(exc)
+        if zero:
+            core.close_reservation(reservation, "released")   # nothing could be charged at zero rates: see FAILURE_RULE
+            return {"outcome": "skipped", "category": category, "reservation": reservation}
+        # The request may have been billed: keep the hold as unconfirmed and STOP.
+        core.close_reservation(reservation, "unconfirmed")
+        return {"outcome": "stopped", "category": category, "reservation": reservation,
+                "reason": (f"inference failed; ${hold:.6f} kept as unconfirmed (reservation {reservation}). "
+                           + UNCONFIRMED_HINT.format(reservation))}
+    try:
+        usd = core.settle_reservation(reservation, tokens_in, tokens_out)
+    except Exception:
+        if zero:
+            core.close_reservation(reservation, "released")
+            return {"outcome": "skipped", "category": "no_usage", "reservation": reservation}
+        core.close_reservation(reservation, "unconfirmed")
+        return {"outcome": "stopped", "category": "no_usage", "reservation": reservation,
+                "reason": (f"provider usage was missing or invalid; ${hold:.6f} kept as unconfirmed (reservation "
+                           f"{reservation}). " + UNCONFIRMED_HINT.format(reservation))}
+    open_hold[0] = None   # settled
+    return {"outcome": "ok", "result": result, "text": text, "stop": stop, "input_tokens": tokens_in, "output_tokens": tokens_out,
+            "usd": usd, "latency_ms": latency_ms, "reservation": reservation}
+
+
 def _check_ready(models: list[dict]) -> None:
     """Local gate before a run: every provider and endpoint usable, every key present. Sends nothing."""
     try:
@@ -1297,13 +1369,12 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
                                    mock_kind="" if real else "patched-infer", samples=planned["samples"])
     status, reason = "incomplete", "interrupted before the run finished"
     spent: list[float] = []
-    unconfirmed = ("Check provider billing, then run: cli reconcile --receipt {0} --actual-usd <charged amount>")
+    unconfirmed = UNCONFIRMED_HINT
     progress = {a["label"]: {"outcome": "not_asked", "reason": "", "recorded": 0, "reservation": None, "digest": None} for a in models}
-    open_hold: tuple[int, float, str] | None = None   # a priced call between its reservation and its settlement
+    open_hold: list = [None]   # (reservation, hold, label) of a priced call between its reservation and its settlement
 
     def skip(answerer: dict, reservation: int, category: str) -> None:
-        """A failed call on a zero-priced endpoint: release the $0 hold, drop this model, go on (audited)."""
-        core.close_reservation(reservation, "released")
+        """A failed call on a zero-priced endpoint (`_paid_call` released its $0 hold): drop this model, go on (audited)."""
         progress[answerer["label"]].update(outcome="skipped", reason=category, reservation=reservation)
         with core.connect() as cx:
             controls.audit(cx, f"archive run {number} ({kind}): {answerer['label']} skipped ({category}); $0 hold {reservation} "
@@ -1333,60 +1404,21 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
                 if math.fsum(spent) + hold > max_usd + controls.EPSILON_USD:
                     reason = "run cap reached; no further calls made"
                     break
-                try:
-                    reservation = core.reserve_budget(None, answerer["model"], hold, cap_ceiling, provider=answerer["provider"],
-                                                      input_rate=answerer["input_rate"], output_rate=answerer["output_rate"])
-                except core.ReconciliationRequired as exc:
-                    reason = str(exc)
+                # reserve -> infer -> settle, with the failure rule: `_paid_call` (shared with the chat-app track's ask).
+                done = _paid_call(answerer, question["prompt"], hold, cap_ceiling, tokens, extra, open_hold)
+                if done["outcome"] == "refused":
+                    reason = done["reason"]
                     break
-                except core.BudgetExceeded:
-                    reason = "local estimated spending ceiling or run cap reached; no further calls made"
+                reservation = done["reservation"]
+                if done["outcome"] == "skipped":
+                    skip(answerer, reservation, done["category"])
                     break
-                # A priced call that is interrupted (Ctrl+C, a kill signal) between here and its settlement may have
-                # been sent: the `finally` below then closes its hold as unconfirmed, so the next run stops for `cli reconcile`.
-                open_hold = None if zero else (reservation, hold, answerer["label"])
-                started = time.monotonic()
-                try:
-                    result = engine.infer(answerer["provider"], answerer["model"], question["prompt"], system=SYSTEM_LINE,
-                                          max_output_tokens=tokens, **extra)
-                    latency_ms = int((time.monotonic() - started) * 1000)
-                    text, tokens_in, tokens_out = result.text, result.input_tokens, result.output_tokens
-                    if not isinstance(text, str):
-                        raise TypeError("completion text missing")
-                    stop = getattr(result, "stop", "unknown")
-                    stop = stop if stop in engine.STOP_VALUES else "unknown"
-                except engine.ProviderNotReady:
-                    if zero:
-                        skip(answerer, reservation, "not_ready")
-                        break
-                    core.close_reservation(reservation, "released")  # nothing was sent
-                    reason = "provider not ready (local setup); nothing was sent for this call"
-                    state_of.update(reason="not_ready", reservation=reservation)
+                if done["outcome"] == "stopped":
+                    reason = done["reason"]
+                    state_of.update(reason=done["category"], reservation=reservation)
                     break
-                except Exception as exc:
-                    # Provider exception text is never stored or echoed: it can contain secrets. Only a category is kept.
-                    category = failure_category(exc)
-                    if zero:
-                        skip(answerer, reservation, category)   # nothing could be charged at zero rates: see FAILURE_RULE
-                        break
-                    # The request may have been billed: keep the hold as unconfirmed and STOP.
-                    core.close_reservation(reservation, "unconfirmed")
-                    reason = (f"inference failed; ${hold:.6f} kept as unconfirmed (reservation {reservation}). "
-                              + unconfirmed.format(reservation))
-                    state_of.update(reason=category, reservation=reservation)
-                    break
-                try:
-                    usd = core.settle_reservation(reservation, tokens_in, tokens_out)
-                except Exception:
-                    if zero:
-                        skip(answerer, reservation, "no_usage")
-                        break
-                    core.close_reservation(reservation, "unconfirmed")
-                    reason = (f"provider usage was missing or invalid; ${hold:.6f} kept as unconfirmed (reservation "
-                              f"{reservation}). " + unconfirmed.format(reservation))
-                    state_of.update(reason="no_usage", reservation=reservation)
-                    break
-                open_hold = None   # settled
+                result, latency_ms, text, stop = done["result"], done["latency_ms"], done["text"], done["stop"]
+                tokens_in, tokens_out, usd = done["input_tokens"], done["output_tokens"], done["usd"]
                 spent.append(usd)
                 state, why, kept = classify(text, stop)
                 with core.connect() as cx:
@@ -1415,15 +1447,16 @@ def run_archive(*, max_usd: float, only: str | None = None, pause_seconds: float
     finally:
         # Also on KeyboardInterrupt: each model's outcome is still written. A priced hold that was neither settled
         # nor closed (the call was interrupted, so it may have been sent and billed) becomes unconfirmed.
-        if open_hold is not None:
+        if open_hold[0] is not None:
+            held = open_hold[0]
             try:
-                core.close_reservation(open_hold[0], "unconfirmed")
+                core.close_reservation(held[0], "unconfirmed")
             except ValueError:
                 pass   # already closed by one of the handlers above
             else:
-                reason = (f"interrupted during a call; ${open_hold[1]:.6f} kept as unconfirmed (reservation {open_hold[0]}). "
-                          + unconfirmed.format(open_hold[0]))
-                progress[open_hold[2]].update(reason="other", reservation=open_hold[0])
+                reason = (f"interrupted during a call; ${held[1]:.6f} kept as unconfirmed (reservation {held[0]}). "
+                          + unconfirmed.format(held[0]))
+                progress[held[2]].update(reason="other", reservation=held[0])
         try:
             with core.connect() as cx:
                 cx.execute("BEGIN IMMEDIATE")
@@ -1778,7 +1811,7 @@ def public_payload(readonly: bool = True) -> dict:
     by_source = {source: sum(1 for a in answers if a["source"] == source) for source in PUBLIC_SOURCES}
     legacy = {"core": len(questions)}   # a run recorded before archive_run_sets existed asked the whole core set
     hand_entered = bool(chat) and any(not run["demo"] for run in chat["runs"])
-    return {"schema": PAYLOAD_SCHEMA_CHATBOTS if chat else PAYLOAD_SCHEMA, "question_set": name, "set_hash": digest, "locked": bool(locked),
+    return {"schema": archive_chatbots.payload_schema(chat) if chat else PAYLOAD_SCHEMA, "question_set": name, "set_hash": digest, "locked": bool(locked),
             "locked_at": locked["locked_at"] if locked else None,
             "demo_only": (not by_source["engine"] and not by_source["api"] and not any(r["kind"] == "real" for r in runs)
                           and not hand_entered),
@@ -2011,9 +2044,10 @@ def payload_problem(data: object) -> str | None:
     for key, kind in _SHAPE.items():
         if not isinstance(data.get(key), kind):
             return f"key {key} is missing or has the wrong type"
-    if data["schema"] != (PAYLOAD_SCHEMA_CHATBOTS if "chatbots" in data else PAYLOAD_SCHEMA):
-        return "unknown schema" if data["schema"] not in (PAYLOAD_SCHEMA, PAYLOAD_SCHEMA_CHATBOTS) else \
-            "the schema marker does not fit the file (/6 exactly when it holds the chat-app track)"
+    if data["schema"] not in (PAYLOAD_SCHEMA, PAYLOAD_SCHEMA_CHATBOTS, PAYLOAD_SCHEMA_ASKED):
+        return "unknown schema"
+    if (data["schema"] == PAYLOAD_SCHEMA) != ("chatbots" not in data):
+        return "the schema marker does not fit the file (/6 exactly when it holds the chat-app track)"
     trending = data["trending"]
     for key, kind in _TRENDING_SHAPE.items():
         if not isinstance(trending.get(key), kind) or (kind is int and isinstance(trending[key], bool)):
@@ -2081,7 +2115,10 @@ def payload_problem(data: object) -> str | None:
         seen.add(key)
     if "chatbots" in data:
         from . import archive_chatbots
-        return archive_chatbots.block_problem(data["chatbots"], set(place))
+        problem = archive_chatbots.block_problem(data["chatbots"], set(place))
+        if problem is None and data["schema"] != archive_chatbots.payload_schema(data["chatbots"]):
+            return "the schema marker does not fit the file (/7 exactly when the chat-app track holds a model answerer)"
+        return problem
     return None
 
 
@@ -2200,7 +2237,7 @@ def add_parsers(sub) -> None:
     sub.add_parser("archive-status", help="Answers Over Time: lock state, question file state and runs as JSON (free; read-only)")
     sub.add_parser("demo-archive", help="Offline SCRIPTED answer archive (3 fictional models, 8 dated runs, scripted trending questions, 4 made-up chat apps) on an empty/demo-only database (free; no model call)")
     from . import archive_chatbots
-    archive_chatbots.add_parsers(sub)   # archive-chatbot-template, archive-chatbot-import (free; by hand; no model, no network)
+    archive_chatbots.add_parsers(sub)   # archive-chatbot-template, archive-chatbot-import (free; by hand), archive-chatbot-ask (PAID)
 
 
 def handle_command(args, parser) -> bool:

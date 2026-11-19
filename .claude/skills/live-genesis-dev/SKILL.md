@@ -11,9 +11,9 @@ Read this, then only the files you will touch. `CLAUDE.md` holds the binding rul
 A public static site that puts the same questions to consumer chat apps (ChatGPT, Gemini, Grok) and to people every month and keeps every reply. The owner collects the replies **by hand** and imports a file. A second track, which asks API or local models a locked question list, stays in the code and is **not published**. The package is called `live_genesis` for historical reasons: the agent society it began as was removed on 14 November 2026 (`docs/ROADMAP.md`, "History"). Do not rebuild it.
 
 ## Hard rules (never break)
-1. Never run `python -m live_genesis.cli archive-run`. It is the only command that calls a model and needs the owner's explicit instruction each time, local and free models included.
+1. Never run `python -m live_genesis.cli archive-run` or `python -m live_genesis.cli archive-chatbot-ask` (its `--dry-run` is free). They are the only commands that call a model and need the owner's explicit instruction each time, local and free models included, and `--max-usd`.
 2. No keys, `.env`, real databases, `secrets/` or endpoint base URLs in commits, logs or messages.
-3. Scripted (`demo`), server-asked (`engine`), older self-declared (`api`) and hand-entered (`manual`) answers stay separately labelled. `mock` answers are never shown or exported. A scripted sample is never presented as a real answer.
+3. Scripted (`demo`), server-asked (`engine`; on the chat-app track `asked`), older self-declared (`api`) and hand-entered (`manual`) answers stay separately labelled. A model asked by software is never an app and never carries an app's name. `mock` answers are never shown or exported. A scripted sample is never presented as a real answer.
 4. Only the owner runs `snapshot --export` and `--approve`. Never approve for them.
 5. The public site and the export hold the chat-app track only. Nothing of the model track is published.
 6. Pages carry no script and no inline style; every value goes through `archive_pages.esc`. Keep the honesty labels. The published pages do not say how replies were collected.
@@ -25,12 +25,12 @@ A public static site that puts the same questions to consumer chat apps (ChatGPT
 |---|---|
 | `core.py` | `connect` (read-only mode), `init_db`, usage rows, budget reservations, cumulative reconcile |
 | `controls.py` | Budget gates, per-reservation reconcile, operator audit log, request limiter, backup, hold constants |
-| `config.py` | `.env` split: `LIVE_*` settings everywhere; provider keys only for `archive-run`, `check-provider`, `archive-check-endpoints` |
+| `config.py` | `.env` split: `LIVE_*` settings everywhere; provider keys only for `archive-run`, `archive-chatbot-ask`, `check-provider`, `archive-check-endpoints` |
 | `providers.py` | `openai`, `anthropic`, the single `openai-compatible` endpoint, named endpoints (`LIVE_ARCHIVE_ENDPOINTS`): base URL rules (https unless loopback, never stored or shown), key variable names, rates |
 | `engine.py` | `infer(...)`: the three adapters, no redirect, no retry; `Completion`; `REAL_INFER` |
 | `guards.py` | Regex guards (PII, secrets, payment links), hidden-character rule, look-alike folding |
 | `archive.py` | Model track: question files, locks, plan, dry run, PAID run, answers, samples, `public_payload`, payload and publication rules, scripted demo |
-| `archive_chatbots.py` (+ `archive_chatbots.json`, format /3) | Chat-app track: apps in answerer groups (`groups` / `group`, any number of apps), Human column, own questions, template, import, the published block (`chatbots`; payload schema `/6` only when present; chat-only `live-genesis-chat-archive/2`) |
+| `archive_chatbots.py` (+ `archive_chatbots.json`, format /3) | Chat-app track: apps in answerer groups (`groups` / `group`, any number of apps), Human column, own questions, template, import, the published block (`chatbots`; payload schema `/6` only when present; chat-only `live-genesis-chat-archive/2`). Model answerers (`"kind": "model"`, a label of `LIVE_ARCHIVE_MODELS`, group "AI models") asked by PAID `archive-chatbot-ask` through `archive._paid_call`: runs and answers of kind `asked`, schema `/7` and `/3` only when one is recorded |
 | `archive_pages.py` | Pages, share cards, data files from a payload. "Group chat" look: bubbles, group switch, cards of at most four bubbles that paginate. No script, no inline style, one shadow token (`--shadow`), no gradient or glow |
 | `trends.py` | `archive-trends`: prints candidates, writes nothing |
 | `snapshot.py` | Site build; reviewed export `--export` / `--approve` / `--check` / `--from-data` (`--archive-only` accepted, no effect) |

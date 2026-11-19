@@ -1020,7 +1020,9 @@ def test_archive_keeps_the_engine_and_keys_out_of_web_processes():
     assert before.rsplit('elif args.command ==', 1)[1].startswith(' "archive-run":')
     # The engine is imported inside the paid function only; the page renderer never imports it.
     assert re.findall(r'^(?:from|import) .*engine.*$', source, re.M) == []
-    assert source.count('from . import engine') == 1
+    assert source.count('from . import engine') == 2     # run_archive, and the one-call helper it shares with archive-chatbot-ask
+    chat = (REPO / 'live_genesis' / 'archive_chatbots.py').read_text(encoding='utf-8')
+    assert re.findall(r'^(?:from|import) .*engine.*$', chat, re.M) == [] and chat.count('from . import engine') == 1
     pages = (REPO / 'live_genesis' / 'archive_pages.py').read_text(encoding='utf-8')
     assert 'import engine' not in pages and 'load_provider_credentials' not in pages and 'connect(' not in pages
 
