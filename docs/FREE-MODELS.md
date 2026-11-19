@@ -7,9 +7,9 @@ Two parts:
 
 **Not tested against any real server.** The adapters are covered only by offline tests with a replaced SDK client. Nothing in this repository has contacted Ollama, a hosted free tier or any other endpoint. Expect to adjust settings on the first try.
 
-**A free or local model does not lift the rule:** `archive-run` runs only on the owner's explicit instruction, and `LIVE_ALLOW_PAID_CALLS=YES` is required for every provider (the name is historical: read it as "allow model calls"). `archive-run` always needs `--max-usd`.
+**A free or local model does not lift the rule:** `archive-run` and `archive-chatbot-ask` run only on the owner's explicit instruction, and `LIVE_ALLOW_PAID_CALLS=YES` is required for every provider (the name is historical: read it as "allow model calls"). Both always need `--max-usd`.
 
-Part 1 used to describe `round` and `study-run`, the paid commands of the agent society. They were removed with it on 14 November 2026; `archive-run` is the only command that calls a model.
+Part 1 used to describe `round` and `study-run`, the paid commands of the agent society. They were removed with it on 14 November 2026; `archive-run` and, since 14 November 2026, `archive-chatbot-ask` (the chat-app questions put to models; same settings, same gates) are the only commands that call a model.
 
 ---
 
@@ -77,6 +77,8 @@ python -m live_genesis.cli check-provider            # free: prints the settings
 python -m live_genesis.cli archive-check-endpoints   # free: the same for named endpoints
 python -m live_genesis.cli archive-plan              # free: questions, models, calls, worst-case estimate
 python -m live_genesis.cli archive-run --max-usd 0.01   # calls the model. Owner's word only
+python -m live_genesis.cli archive-chatbot-ask --dry-run          # free: the plan for the model answerers of archive_chatbots.json
+python -m live_genesis.cli archive-chatbot-ask --max-usd 0.01     # calls those models with the chat-app questions. Owner's word only
 ```
 `check-provider` shows `LIVE_PROVIDER`, the base URL host (never the path), the timeout, whether a
 key is set (yes/no), whether the rates are zero or positive and whether zero is allowed, and for a
@@ -148,6 +150,19 @@ LIVE_ALLOW_PAID_CALLS=YES
 - Both names point at one server, so both are labelled "run locally". The endpoint name is stored with each answer.
 - On a CPU, raise `LIVE_INFER_TIMEOUT_SECONDS` (maximum 600). A local model that fails a call is skipped for the rest of that run; the other models go on.
 - The settings above were checked with `archive-check-endpoints` and `archive-plan` (free, no model call). They were not run against an Ollama server.
+
+### The same four models as answerers of the chat-app questions
+
+`archive-chatbot-ask` uses the settings above unchanged. What it needs in addition is one entry per model in the `chatbots` list of `live_genesis/archive_chatbots.json`, each naming a label of `LIVE_ARCHIVE_MODELS` as its `answerer`:
+
+```
+{"label": "phi4-mini", "kind": "model", "name": "Phi-4 mini (local)", "maker": "Microsoft", "answerer": "phi4-mini", "group": "ai-models"},
+{"label": "gemma3-4b", "kind": "model", "name": "Gemma 3 4B (local)", "maker": "Google", "answerer": "gemma3-4b", "group": "ai-models"},
+{"label": "granite-3b", "kind": "model", "name": "Granite 4.2 3B (local)", "maker": "IBM", "answerer": "granite-3b", "group": "ai-models"},
+{"label": "qwen-4b", "kind": "model", "name": "Qwen 3.5 4B (local)", "maker": "Alibaba", "answerer": "qwen-4b", "group": "ai-models"}
+```
+
+Then `python -m live_genesis.cli archive-chatbot-ask --dry-run` (free; calls nothing) and, on the owner's word, `python -m live_genesis.cli archive-chatbot-ask --max-usd 0.01`. The names are the owner's to choose; a name that holds the name of a chat app (ChatGPT, Gemini, Grok) is refused, and "Gemma" is not "Gemini". The tags are as unverified here as above. For a hosted service the entry is the same; only the `LIVE_ARCHIVE_MODELS` label it names points at a hosted endpoint or a native provider, which then needs its key and, unless declared free, its rates. This was checked with the dry run and a stand-in adapter only, never against an Ollama server.
 
 ## Hosted free tiers, as found on 12 November 2026
 

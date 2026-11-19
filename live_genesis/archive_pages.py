@@ -36,12 +36,12 @@ own, and the headline counts what the payload holds.
 * `data/<ID>.json`, `data/answers.jsonl`, `data/README.txt`: the same answers for machines.
 
 What is VISIBLE and what is metadata: the short honesty labels stay visible, once per page or card
-(AI-generated; typed in by hand / we asked it ourselves; may be wrong; not affiliated; an app's own
-attribution line; the sample label on scripted data; Human with quoted / summarised; Changed and the
-Before line; the line that refusals are left out). Everything else about an answer (version shown,
+(AI-generated; may be wrong; not affiliated; an app's own attribution line; the sample label on
+scripted data; Human with quoted / summed up; Changed and the Before line; the one line that refusals
+are left out). Nothing published of the chat-app track says how a reply was collected (owner decision). Everything else about an answer (version shown,
 account, search, country, endpoint, digest, sample counts ...) is in `data-*` attributes and
 schema.org microdata on the answer's element, in the `<meta name="aot:...">` tags of the page head,
-in the data files, and for people inside the closed "Where each answer came from" block. A visible
+in the data files, and for people inside the closed "The details behind each answer" block. A visible
 honesty label is never moved into metadata only.
 
 Hidden questions (`HIDDEN`, owner's decision): a question listed there has no page, no card and no data
@@ -49,7 +49,8 @@ file and is in no list; the record keeps it. Nothing is hidden now.
 
 Chat apps and Human (the optional `chatbots` block; archive_chatbots.py): replies a person collected
 by hand. Never mixed into a model's grid or timeline. A refusal, a non-answer or a reply the content
-check withheld is never shown as a card; the page says "Refusals and non-answers are left out."
+check withheld is never shown as a card, and a refused reply's words are in no published file; the
+page says once, in its footer, "When an app refuses or dodges, we leave it out."
 App names are plain text, never a logo, and never the largest thing on a page or card.
 
 Standalone: `render_site(payload, standalone=True)` is the archive published on its own (snapshot.py
@@ -86,9 +87,15 @@ KINDS = ("chat-app", "model", "human")
 STATES_SHOWN = ("answered", "changed", "same", "mixed")   # data-state of a visible answer; "answered" is a first answer
 SAMPLE = "scripted-sample"
 SAMPLE_LABEL = SOURCE_LABELS["demo"]    # the one visible sample label of a page or card
-SAMPLE_WORD = "sample"                  # per line inside the closed "Where each answer came from" block
+SAMPLE_WORD = "sample"                  # per line inside the closed "The details behind each answer" block
 HIDDEN_WORDS = "Hidden: broke our content rules"
-LEFT_OUT = "Refusals and non-answers are left out."
+LEFT_OUT = "When an app refuses or dodges, we leave it out."   # said once per page, in the footer
+ASKED_DIFFERENTLY = "Asked a bit differently"     # an answer whose recorded settings differ from that app's time before
+DAY_NOTE = "A new answer can come from how we asked that day, not from the app changing its mind."
+READ_ONLY = "Read-only. No payments. Just answers."
+NO_ANSWERS = "No answers yet"
+# How a human answer is worded on a page. The data keeps the recorded values (quoted | summarised).
+FORM_WORDS = {"quoted": "quoted", "summarised": "summed up"}
 DATA_SCHEMA = "answers-over-time-data/1"
 DATA_NOTICE = ("Answers Over Time. AI answers are recorded verbatim and may be wrong; they are not advice. Text marked "
                "human-written was written by people. Records marked scripted-sample were written "
@@ -173,6 +180,11 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}" + ("" if n == 1 else "s")
 
 
+def _times(n: int) -> str:
+    """"asked once", "asked 3 times"."""
+    return "asked once" if n == 1 else f"asked {n} times"
+
+
 def _replies(n: int) -> str:
     return "1 reply" if n == 1 else f"{n} replies"
 
@@ -230,7 +242,8 @@ class _Chat:
         self.apps = sorted(block["apps"], key=lambda app: order[app["group"]])       # group by group; the recorded order within
         self.human = block["human"]
         self.labels = [app["label"] for app in self.apps]
-        self.columns = [{"key": app["label"], "name": app["name"], "kind": "chat-app", "maker": app["maker"],
+        # An app entry with `kind` is a model answerer (asked by software): a column of the kind "model", never "chat-app".
+        self.columns = [{"key": app["label"], "name": app["name"], "kind": app.get("kind", "chat-app"), "maker": app["maker"],
                          "attribution": app.get("attribution", ""), "group": app["group"]} for app in self.apps]
         if self.human:
             self.columns.append({"key": HUMAN, "name": self.human["name"], "kind": "human", "maker": "", "attribution": "",
@@ -259,14 +272,18 @@ class _Chat:
         self.conditions: dict[tuple[str, str], dict] = {}
         self.collection: dict[str, dict] = {}
         self.asked: dict[tuple[str, str], list] = {}
+        self.models: dict[tuple[str, str], dict] = {}        # a model answerer's record on a date, in place of conditions
         for run in runs:
+            for label, facts in run.get("models", {}).items():
+                self.models[(label, run["collected_on"])] = facts
+                self.asked[(label, run["collected_on"])] = run["questions"]
             for label, conditions in run["conditions"].items():
                 self.conditions[(label, run["collected_on"])] = conditions
                 self.asked[(label, run["collected_on"])] = run["questions"]
             if run.get("human"):
                 self.collection[run["collected_on"]] = run["human"]
                 self.asked[(HUMAN, run["collected_on"])] = run["questions"]
-        self.answers = [a for a in block["answers"] if a["source"] in ("manual", "demo")]
+        self.answers = [a for a in block["answers"] if a["source"] in ("manual", "demo", "asked")]
         self.cell = {(a["question"], a["chatbot"], self.day[a["run"]]): a for a in self.answers}
         for answer in block["human_answers"]:
             if answer["source"] in ("manual", "demo"):
@@ -334,7 +351,7 @@ class _View:
 
     def __init__(self, payload: dict):
         from . import archive_chatbots   # lazy, as in render_chatbots
-        if isinstance(payload, dict) and payload.get("schema") == archive_chatbots.SITE_SCHEMA:
+        if isinstance(payload, dict) and payload.get("schema") in archive_chatbots.SITE_SCHEMAS:
             # The chat-app track on its own (the public site): it holds no model list, run or answer.
             problem = archive_chatbots.site_problem(payload)
             payload = {**_NO_MODELS, **payload}
@@ -401,13 +418,13 @@ class _View:
     def tag(self, track: str = "models") -> str:
         """The one short honesty label of a page or card."""
         if self.empty:
-            return "No answers recorded yet"
+            return NO_ANSWERS
         if track == "chat":
             return SAMPLE_LABEL if self.chat.demo else "AI-generated · may be wrong"
         if self.models_demo or (self.demo and not self.answers):
             return SAMPLE_LABEL
         if not self.answers:
-            return "No answers recorded yet"
+            return NO_ANSWERS
         ours = all(a["source"] == "engine" for a in self.answers)
         return "AI-generated · we asked it ourselves · may be wrong" if ours else "AI-generated · may be wrong"
 
@@ -442,7 +459,7 @@ def _period_labels(dates: list[str]) -> list[str]:
     days = [full_date(d) for d in dates]
     if len(set(days)) == len(days):
         return days
-    return [f"{day} · check {n}" for n, day in enumerate(days, 1)]
+    return [f"{day} · time {n}" for n, day in enumerate(days, 1)]
 
 
 def _agreement(view: _View, answer: dict) -> str:
@@ -522,7 +539,7 @@ def _model_board(view: _View, question_id: str) -> dict:
                 cell.update(shown=True, text=answer["text"], state=state, previous=previous,
                             others=list(answer.get("others", ())) if kind == "unsettled" else [])
                 if kind == "unsettled" and not archive.split(answer):
-                    cell["facts"].append("the check before gave mixed answers")
+                    cell["facts"].append("the time before gave mixed answers")
                 previous = period["key"]
             cells[(column["key"], period["key"])] = cell
     if trending:
@@ -540,6 +557,14 @@ def _model_board(view: _View, question_id: str) -> dict:
             "prompt_note": "Sent on its own. The model gets no date, no other answers and no earlier replies."}
 
 
+ASKED_METHOD = "asked-by-software"     # internal only: a chat-track record carries no method, and no page shows this
+
+
+def _asked_model(facts: dict) -> str:
+    """The name shown for a model answerer on one date: what the service reported, else the id that was requested."""
+    return facts.get("reported_model") or facts["model"]
+
+
 def _chat_board(view: _View, question_id: str) -> dict:
     chat = view.chat
     question = chat.by_id[question_id]
@@ -555,10 +580,12 @@ def _chat_board(view: _View, question_id: str) -> dict:
             if question_id not in chat.asked.get((key, date), ()):
                 continue
             answer = chat.cell.get((question_id, key, date))
-            conditions = chat.collection.get(date) if human else chat.conditions.get((key, date))
+            asked = chat.models.get((key, date))      # a model answerer: its record takes the place of an app's conditions
+            conditions = chat.collection.get(date) if human else asked or chat.conditions.get((key, date))
             cell = {"record": f"{question_id}/{key}/{date}", "answer_id": answer["id"] if answer else None, "shown": False,
-                    "text": None, "state": "no-answer", "version": "" if human else (conditions or {}).get("shown_model", ""),
-                    "method": SAMPLE if sample else HUMAN_METHOD if human else METHODS["manual"],
+                    "text": None, "state": "no-answer",
+                    "version": "" if human else _asked_model(asked) if asked else (conditions or {}).get("shown_model", ""),
+                    "method": SAMPLE if sample else HUMAN_METHOD if human else ASKED_METHOD if asked else METHODS["manual"],
                     "provenance": SAMPLE if sample else "human-written" if human else "ai-generated",
                     "form": None, "collected": date, "previous": None, "why_not": "left out", "tags": [], "facts": [],
                     "conditions": dict(conditions) if conditions else None, "agreement": "", "others": [], "changed": None}
@@ -570,6 +597,11 @@ def _chat_board(view: _View, question_id: str) -> dict:
                         facts.append(f"collected {full_date(conditions['collected_on'])}")
                     if conditions["count"]:
                         facts.append(f"{_replies(conditions['count'])} read")
+            elif asked:
+                facts = [f"model: {cell['version']}"] + ["run locally"] * bool(asked.get("local"))
+                earlier = [d for d in chat.dates if d < date and (key, d) in chat.models]
+                if earlier and _asked_model(chat.models[(key, earlier[-1])]) != cell["version"]:
+                    facts.append("a different model name than before")
             else:
                 moved = chat.conditions_changed(key, date)
                 facts = [SAMPLE_WORD] * sample + [f"the app showed: {conditions['shown_model']}",
@@ -577,8 +609,8 @@ def _chat_board(view: _View, question_id: str) -> dict:
                 if chat.shown_change(key, date):
                     facts.append("the app showed a new version name")
                 if moved:
-                    facts.append("conditions changed · " + "; ".join(moved))
-                    cell["tags"].append("Conditions changed")
+                    facts.append("asked a bit differently this time · " + "; ".join(moved))
+                    cell["tags"].append(ASKED_DIFFERENTLY)
                 if conditions["note"]:
                     facts.append(conditions["note"])
                 if answer and answer.get("screenshot_hash"):
@@ -587,7 +619,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
             if answer is None:
                 pass
             elif answer.get("refused"):
-                cell.update(state="refused", text=answer["text"])
+                cell["state"] = "refused"       # the fact only: a refusal's words are on no page and in no data file
             elif answer["state"] == "withheld":
                 cell["state"] = "hidden"
             elif answer["state"] == "answered":
@@ -595,7 +627,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
                 cell.update(shown=True, text=answer["text"], state=state, previous=previous, changed=answer["changed"],
                             form=answer.get("manner") if human else None)
                 if human:
-                    cell["facts"].append(answer["manner"])
+                    cell["facts"].append(FORM_WORDS[answer["manner"]])
                 previous = date
             cells[(key, date)] = cell
     return {"id": question_id, "text": question["text"], "prompt": question["prompt"], "hook": question["hook"],
@@ -603,7 +635,7 @@ def _chat_board(view: _View, question_id: str) -> dict:
             "chips": [("chip", "Chat apps")], "track": "chat", "columns": chat.columns, "periods": periods, "cells": cells,
             "threads": chat.threads,
             "demo": sample, "kicker": "Chat apps",
-            "prompt_note": "Asked in a new chat each time. The first line is why the replies are short."}
+            "prompt_note": "A fresh chat every time. That first line is why the replies are so short."}
 
 
 def _board(view: _View, question_id: str) -> dict:
@@ -761,6 +793,9 @@ def _bar(view: _View, up: str, base: str, versions: dict[str, str], current: str
             '</div></header>\n')
 
 
+SAMPLE_FOOT = "Everything here is a sample we wrote to show how the site works. No AI and no person was asked."
+
+
 def chat_disclaimer(makers: list[str]) -> str:
     """The notice shown wherever real hand-entered replies are: what they are and that the site is
     independent of the companies whose apps were asked (named from the recorded apps, in their order)."""
@@ -768,25 +803,30 @@ def chat_disclaimer(makers: list[str]) -> str:
     for maker in makers:
         if maker not in names:
             names.append(maker)
-    return ("AI-generated answers, shown unedited. They may be wrong and are not advice. "
-            f"Not affiliated with, sponsored by or endorsed by {_listed(names, 'or')}; product names belong to their owners.")
+    if not names:      # only model answerers without a recorded maker
+        return ("These answers are AI-generated and shown exactly as they came. They can be wrong, so please don't take them as "
+                "advice. We're not affiliated with, sponsored by or endorsed by the makers of the products named; product names "
+                "belong to their owners.")
+    return ("These answers are AI-generated and shown exactly as they came. They can be wrong, so please don't take them as "
+            f"advice. We're not affiliated with, sponsored by or endorsed by {_listed(names, 'or')}; product names belong to "
+            "their owners.")
 
 
 def _foot(view: _View, track: str, shown_ids: list[str], back: str = "") -> str:
-    """The honesty footer, once per page: read-only, what the answers are, and, on a chat-app page, that
-    refusals and non-answers are left out."""
+    """The honesty footer, once per page, each thing said once: what the answers are; on a chat-app page that
+    refusals and non-answers are left out (the only place a page says it); read-only and no payments."""
     sample = view.chat.demo if track == "chat" else view.models_demo
     if sample:
-        honesty = "Everything here is a sample we wrote. No AI and no person was asked."
+        honesty = SAMPLE_FOOT
     elif track == "chat":
-        honesty = chat_disclaimer([view.chat.maker[label] for label in view.chat.labels]) if view.chat.labels else \
-            "Answers written by people."
+        honesty = chat_disclaimer([view.chat.maker[label] for label in view.chat.labels if view.chat.maker[label]]) if view.chat.labels else \
+            "These answers were written by people." if view.chat.human else "No answers here yet."
     else:
-        honesty = "Answers are AI output and may be wrong."
+        honesty = "These answers came from AI models. They can be wrong, so please don't take them as advice."
     lines = [LEFT_OUT] if track == "chat" else []
-    return ('<footer class="foot">' + back + f'<span>Read-only archive. Part of LIVE Genesis. {esc(honesty)}</span>'
+    return ('<footer class="foot">' + back + f'<span>{esc(honesty)}</span>'
             + "".join(f'<span>{esc(line)}</span>' for line in lines)
-            + '<span class="mono small">No payments · nothing can be changed from this page</span></footer>\n')
+            + f'<span class="mono small">{READ_ONLY}</span></footer>\n')
 
 
 def _square(cell: dict) -> str:
@@ -796,7 +836,7 @@ def _square(cell: dict) -> str:
 
 def _timeline(board: dict, column: dict) -> str:
     """One square per period this answerer was asked, oldest on the left. The accessible name says WHEN it
-    changed ("Chat app A: changed Oct 2026 and Nov 2026; no answer Sep 2026; 4 months")."""
+    changed ("Chat app A: changed Oct 2026 and Nov 2026; no answer Sep 2026; asked 4 times")."""
     series = _series(board, column["key"])
     if not series:
         return ""
@@ -808,8 +848,8 @@ def _timeline(board: dict, column: dict) -> str:
     parts = [f"{word} {_listed(changed)}" if changed else "no change"]
     parts += [f"mixed answers {_listed(mixed)}"] if mixed else []
     parts += [f"no answer {_listed(missing)}"] if missing else []
-    parts += [f"conditions changed {_listed(moved)}"] if moved else []
-    parts.append(_plural(len(series), "check"))
+    parts += [f"asked a bit differently {_listed(moved)}"] if moved else []
+    parts.append(_times(len(series)))
     summary = f"{column['name']}: " + "; ".join(parts)
     return (f'<span class="timeline" role="img" aria-label="{esc(summary)}">'
             + "".join(_square(cell) for _period, cell in series) + '</span>')
@@ -817,12 +857,12 @@ def _timeline(board: dict, column: dict) -> str:
 
 def _key(view: _View, chat: bool) -> str:
     """The one-line key to the timeline squares."""
-    return ('<p class="key"><span class="key-item"><span class="sq sq-same"></span>same</span>'
+    return ('<p class="key"><span class="key-item"><span class="sq sq-same"></span>same as last time</span>'
             '<span class="key-item"><span class="sq sq-changed"></span>changed</span>'
             + ('<span class="key-item"><span class="sq sq-mixed"></span>mixed answers</span>' if view.multi and not chat else '')
             + '<span class="key-item"><span class="sq sq-none"></span>no answer</span>'
-            + ('<span class="key-item"><span class="sq sq-same sq-cond"></span>asked differently</span>' if chat else '')
-            + '<span class="key-note">one square per check, oldest first</span></p>')
+            + ('<span class="key-item"><span class="sq sq-same sq-cond"></span>asked a bit differently</span>' if chat else '')
+            + '<span class="key-note">one square each time we asked, oldest first</span></p>')
 
 
 def _changed_tag(human: bool) -> str:
@@ -854,7 +894,7 @@ def _mini(board: dict, column: dict) -> str:
             return ""
         return (f'<li class="mini mini-none{column["who"]}">{_av(column)}<div class="stack"><div class="bubble">'
                 f'<div class="mini-top"><span class="mini-name mono">{esc(column["name"])}</span>{line}</div>'
-                '<span class="mini-text muted">no answer yet</span></div></div></li>')
+                '<span class="mini-text muted">No answer yet</span></div></div></li>')
     period, cell = found
     human = column["kind"] == "human"
     changed = cell["state"] == "changed" and board["periods"][-1]["key"] == period["key"]
@@ -884,12 +924,15 @@ def _row(board: dict, href: str) -> str:
         else:
             lists.append(f'<ol class="minis{" minis-human" if several else ""}">{"".join(items)}</ol>')
     hook = f'<span class="row-hook">{esc(board["hook"])}</span>' if board["hook"] else ''
-    body = "\n    ".join(lists) if lists else '<p class="muted small row-none">Nothing recorded yet.</p>'
+    body = "\n    ".join(lists) if lists else '<p class="muted small row-none">Nothing here yet.</p>'
+    # A chat-app question leads with its hook, not its id: the id stays in the link, the data attributes and the
+    # page's "The exact words we used" block.
+    number = '' if board["track"] == "chat" else f'<span class="q-id mono">{esc(board["id"])}</span>'
     return ('  <article class="row">\n'
-            f'    <div class="row-head"><span class="q-id mono">{esc(board["id"])}</span>{hook}'
+            f'    <div class="row-head">{number}{hook}'
             f'<h3 class="row-q"><a href="{esc(href)}">{esc(board["text"])}</a></h3></div>\n'
             f'    {body}\n'
-            f'    <p class="row-more"><a href="{esc(href)}" aria-label="Every month of {esc(board["id"])}">Every month of this one</a></p>\n'
+            f'    <p class="row-more"><a href="{esc(href)}" aria-label="See every month of: {esc(board["text"])}">See every month</a></p>\n'
             '  </article>\n')
 
 
@@ -915,8 +958,11 @@ def chat_headline(chat: _Chat) -> list[str]:
     with several groups a neutral count of all of them and of the groups. Says nothing the data does not show."""
     count = len(chat.labels)
     number = count_word(count).capitalize()
+    models = any(column["kind"] == "model" for column in chat.columns)   # a model is not a chatbot: the count then says "AIs"
     if len(chat.groups) > 1:
-        apps = f"{number} chatbots in {count_word(len(chat.groups))} groups."
+        apps = f"{number} {'AIs' if models else 'chatbots'} in {count_word(len(chat.groups))} groups."
+    elif models:
+        apps = f"{number} AI model{'' if count == 1 else 's'}."
     else:
         from . import archive_chatbots   # lazy, as in render_chatbots
         ai = bool(chat.groups) and chat.groups[0]["id"] == archive_chatbots.DEFAULT_GROUP["id"]
@@ -929,37 +975,41 @@ def _page(view: _View, head: str, bar: str, body: list[str], foot: str, schema: 
                     '<div class="wrap wrap-foot">\n', foot, '</div>\n</body>\n</html>\n'])
 
 
+NOBODY_ASKED = "We haven't asked anyone yet."
 HOME_DESCRIPTION = "The same questions, asked again every month, with every answer kept."
+# The chat-app comparison (the public front page and the root page that leads to it).
+CHAT_DESCRIPTION = ("We ask chatbots the same silly questions every month and keep every answer. "
+                    "See who's funny, who's weird and who changed their answer.")
 
 
 def render_home(versions: dict[str, str] | None = None) -> str:
     """`index.html` at the root of a standalone archive: sends the visitor to `archive/index.html`
     with a meta refresh and shows a plain link for a browser that does not follow it. No script."""
     versions = versions or asset_versions()
-    head = _head("Answers Over Time", "", versions, HOME_DESCRIPTION)
+    head = _head("Answers Over Time", "", versions, CHAT_DESCRIPTION)
     title = '  <title>'
     if head.count(title) != 1:
         raise ValueError("the page head must hold exactly one <title>")
     head = head.replace(title, f'  <meta http-equiv="refresh" content="0; url=archive/{FIRST_PAGE}" />\n' + title)
     return (head + '<main id="main" class="wrap">\n<div class="list-head">\n'
-            '  <span class="tag tag-dark mono">Read-only archive · static snapshot</span>\n'
+            '  <span class="tag tag-dark mono">Read-only · a saved copy</span>\n'
             '  <h1 class="display">Answers Over Time</h1>\n'
-            f'  <p class="lede"><a href="archive/{FIRST_PAGE}">Open the archive</a></p>\n'
+            f'  <p class="lede"><a href="archive/{FIRST_PAGE}">See the answers</a></p>\n'
             '</div>\n</main>\n<div class="wrap wrap-foot">\n'
-            '<footer class="foot"><span>Nothing is running behind this page.</span>'
-            '<span class="mono small">No payments · nothing can be changed from this page</span></footer>\n'
+            '<footer class="foot"><span>This is a saved copy of the site. Nothing here can be changed.</span>'
+            f'<span class="mono small">{READ_ONLY}</span></footer>\n'
             '</div>\n</body>\n</html>\n')
 
 
 def _method_models(view: _View) -> str:
-    return ('<section id="method" class="method">\n  <h2 class="display">How the record is kept</h2>\n  <div class="method-grid">\n'
-            '    <div><strong>Answered alone</strong><span>No model sees another model\'s answer, now or from any earlier check.</span></div>\n'
-            '    <div><strong>Same words every time</strong><span>Exactly what we asked is on each question\'s page. We never edit it.</span></div>\n'
-            '    <div><strong>Nothing is rewritten</strong><span>An answer is kept as it came. The page may shorten what it shows; '
-            'the text is never changed.</span></div>\n'
+    return ('<section id="method" class="method">\n  <h2 class="display">How we keep track</h2>\n  <div class="method-grid">\n'
+            '    <div><strong>Answered alone</strong><span>No model sees another model\'s answer, from this time or any time before.</span></div>\n'
+            '    <div><strong>Same words every time</strong><span>The exact words are on each question\'s page. We never edit them.</span></div>\n'
+            '    <div><strong>Nothing is rewritten</strong><span>We keep each answer exactly as it came. The page may fold a long one; '
+            'the words never change.</span></div>\n'
             '    <div><strong>"Changed" is a plain comparison</strong><span>The text differs from that model\'s answer before, ignoring '
             'letter case, spacing and punctuation at the ends. It does not say which answer is right.</span></div>\n'
-            + ('    <div><strong>Asked more than once</strong><span>Some checks ask each question several times, each time on its own. '
+            + ('    <div><strong>Asked more than once</strong><span>Sometimes we ask each question several times in one go, each time on its own. '
                'You see the answer most tries gave; if the tries did not agree it says "Mixed answers", not "Changed".</span></div>\n'
                if view.multi else '')
             + '  </div>\n</section>\n')
@@ -976,7 +1026,7 @@ def _trending_section(view: _View, heading: str = "Trending", key: str = "") -> 
     if ordered:
         out += ['  <div class="qs">\n', *_model_rows(view, ordered, "t"), '  </div>\n']
     else:
-        out.append('  <p class="muted trend-none">No trending question has been added yet.</p>\n')
+        out.append('  <p class="muted trend-none">No trending questions yet.</p>\n')
     out.append('</section>\n')
     return out
 
@@ -1001,7 +1051,7 @@ def _core_note(view: _View) -> str:
                 'and does not change.')
     else:
         note = f'This list of {total} questions is a draft. Once the owner fixes it and the archive starts, it does not change.'
-    return f'<p class="list-note muted">{note} We check about once a month.</p>\n'
+    return f'<p class="list-note muted">{note} We ask about once a month.</p>\n'
 
 
 def _trending_note(view: _View) -> str:
@@ -1026,25 +1076,25 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
     versions = versions or asset_versions()
     chat = view.chat
     if standalone and not chat.dates:
-        body = [_list_head(view.tag("chat"), "Same question, asked again every month.", "No chat app has been asked yet."),
-                '<section class="group">\n  <p class="muted trend-none">Nothing has been recorded yet. '
-                '<a href="chatbots.html">Here is how we ask</a>.</p>\n</section>\n']
-        return _page(view, _head("Answers Over Time", "../", versions, HOME_DESCRIPTION, _meta(view, "", track="chat")),
+        body = [_list_head(view.tag("chat"), "Same question, asked again every month.", esc(NOBODY_ASKED)),
+                '<section class="group">\n  <p class="muted trend-none">Nothing to read yet. Come back soon. '
+                '<a href="chatbots.html">Here is how it works</a>.</p>\n</section>\n']
+        return _page(view, _head("Answers Over Time", "../", versions, CHAT_DESCRIPTION, _meta(view, "", track="chat")),
                      _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
                      _foot(view, "chat", []))
     if chat.dates:
         shown = [q["id"] for q in view.chat_questions]
         several = len(chat.groups) > 1
-        lede = "Asked again every month. Tap a question to see who changed their answer."
+        lede = "We ask again every month and keep every reply. Tap a question to see who changed their answer."
         if several:
             lede = f"{_listed([group['name'] for group in chat.groups])}. {lede}"
-        steps = [_plural(len(shown), "question"), "Same words every month", "Every answer kept"]
+        steps = [_plural(len(shown), "question"), "Same words every month", "Every reply kept"]
         body = [_list_head(view.tag("chat"), chat_headline(chat), esc(lede), steps), '<section class="group">\n']
         if several:
             # The group switch: one radio per group, the first one chosen. No script; without the stylesheet every group shows.
             body.append("".join(f'  <input class="g-radio" type="radio" name="group" id="grp-{n}"{" checked" if n == 1 else ""} />\n'
                                 for n in range(1, len(chat.groups) + 1)))
-        body.append(f'  <div class="group-head"><h2>Newest answers</h2>{_key(view, True)}</div>\n')
+        body.append(f'  <div class="group-head"><h2>The latest answers</h2>{_key(view, True)}</div>\n')
         if several:
             sizes = [sum(1 for app in chat.apps if app["group"] == group["id"]) for group in chat.groups]
             body.append('  <div class="group-strip" role="group" aria-label="Choose a group">'
@@ -1053,11 +1103,11 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
                                   for n, (group, size) in enumerate(zip(chat.groups, sizes), 1)) + '</div>\n')
         body += ['  <div class="qs">\n', *[_row(_chat_board(view, question_id), f"c/{question_id}.html") for question_id in shown],
                  '  </div>\n', '</section>\n']
-        body.append(f'<p class="list-note muted">{LEFT_OUT} The same words go to every app; '
-                    '<a href="chatbots.html">here is how we ask</a>.'
+        body.append('<p class="list-note muted">Every app gets the exact same words. '
+                    '<a href="chatbots.html">Here is how it works</a>.'
                     + ('' if standalone else ' Want the plain models instead? <a href="models.html">Models</a> and '
                                              '<a href="trending.html">Trending</a>.') + '</p>\n')
-        return _page(view, _head("Answers Over Time", "../", versions, HOME_DESCRIPTION, _meta(view, "", track="chat")),
+        return _page(view, _head("Answers Over Time", "../", versions, CHAT_DESCRIPTION, _meta(view, "", track="chat")),
                      _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
                      _foot(view, "chat", shown))
     body = [_list_head(view.tag(), "Simple questions, asked again every month.",
@@ -1121,7 +1171,7 @@ def _more(ids: _Ids, text: str, classes: str, clamp: str, what: str, prop: str =
         return body
     box = ids.next()
     return (f'<input class="more-box {clamp[6:]}" type="checkbox" id="{box}" aria-label="{esc(what)}" />{body}'
-            f'<label class="more {clamp[6:]}" for="{box}"><span class="more-open">Show more</span><span class="more-close">Show less</span></label>')
+            f'<label class="more {clamp[6:]}" for="{box}"><span class="more-open">Read the rest</span><span class="more-close">Show less</span></label>')
 
 
 def _author(column: dict, sample: bool) -> str:
@@ -1142,7 +1192,7 @@ def _history(board: dict, column: dict) -> str:
     if not groups:
         return ""
     word = "different answer" if column["kind"] == "human" else "change"
-    items = "".join(f'<li><span class="hist-when mono">{esc(_span(group["first"], group["last"]))} · {_plural(group["checks"], "check")}</span>'
+    items = "".join(f'<li><span class="hist-when mono">{esc(_span(group["first"], group["last"]))} · {_times(group["checks"])}</span>'
                     f'<span class="hist-text">{esc(group["text"])}</span></li>' for group in reversed(groups))
     count = _plural(len(groups) - 1, word) if len(groups) > 1 else f"no {word} yet"
     if len(groups) < 2:
@@ -1159,7 +1209,7 @@ def _card(board: dict, column: dict, period: dict, cell: dict, ids: _Ids, newest
     rec = record(board, column, period, cell)
     tags = []
     if human and cell["form"]:          # short, so it shares the name's line; the longer state tag follows
-        tags.append(f'<span class="tag-form mono">{esc(cell["form"])}</span>')
+        tags.append(f'<span class="tag-form mono">{esc(FORM_WORDS[cell["form"]])}</span>')
     if cell["state"] == "changed":
         tags.append(_changed_tag(human))
     if cell["state"] == "mixed":
@@ -1174,9 +1224,9 @@ def _card(board: dict, column: dict, period: dict, cell: dict, ids: _Ids, newest
         out.append(_before(previous, page=True))
     out += [f'<div class="bubble"><div class="acard-head">{_author(column, board["demo"])}'
             + (f'<span class="tags">{"".join(tags)}</span>' if tags else '') + '</div>',
-            _more(ids, cell["text"], "ans", _clamp(cell["text"]), f"Show the whole answer of {column['name']}", ' itemprop="text"')]
+            _more(ids, cell["text"], "ans", _clamp(cell["text"]), f"Show the whole answer from {column['name']}", ' itemprop="text"')]
     if cell["others"]:
-        out.append('<ul class="others" aria-label="Other answers from the same check">'
+        out.append('<ul class="others" aria-label="Other answers from the same time we asked">'
                    + "".join(f'<li><span class="mono">{esc(other["count"])} of {esc(rec["conditions"].get("samples", ""))}</span> '
                              f'{esc(other["text"])}</li>' for other in cell["others"]) + '</ul>')
     if column["attribution"]:
@@ -1244,10 +1294,10 @@ def _table(board: dict) -> str:
             if cell is None:
                 tds.append(f'<td role="cell" class="t-none"{label}>not asked</td>')
             elif not cell["shown"]:
-                why = "left out" if board["track"] == "chat" else cell["why_not"]
+                why = "no answer, left out" if board["track"] == "chat" else cell["why_not"]
                 tds.append(f'<td role="cell" class="t-none"{label}>{esc(why)}</td>')
             elif cell["state"] == "same":
-                tds.append(f'<td role="cell" class="t-same"{label}{data_attrs(record(board, column, period, cell))}>same as before</td>')
+                tds.append(f'<td role="cell" class="t-same"{label}{data_attrs(record(board, column, period, cell))}>same again</td>')
             else:
                 word = {"answered": "first answer", "mixed": "mixed answers",
                         "changed": "different answer" if column["kind"] == "human" else "changed"}[cell["state"]]
@@ -1259,13 +1309,13 @@ def _table(board: dict) -> str:
     tall = " history-tall" if len(board["columns"]) > WIDE_THREAD else ""    # many answerers: rows as blocks at every width
     return ('<section class="changes">\n  <h2>What changed</h2>\n'
             f'  <table class="history{tall}" role="table">\n'
-            f'    <caption>Every check of {esc(board["id"])}, newest first. Only a new or different answer is written out.</caption>\n'
+            '    <caption>Every time we asked, newest first. An answer is written out only when it is new or different.</caption>\n'
             f'    <thead role="rowgroup"><tr role="row"><th scope="col" role="columnheader">Month</th>{head}</tr></thead>\n'
             '    <tbody role="rowgroup">\n' + "".join(rows) + '    </tbody>\n  </table>\n</section>\n')
 
 
 def _sources(board: dict) -> str:
-    """The closed "Where each answer came from" block: per answerer, per month, everything recorded about
+    """The closed "The details behind each answer" block: per answerer, per month, everything recorded about
     how the answer got here. This is where the labels that left the cards can still be read by a person."""
     out = []
     for column in board["columns"]:
@@ -1273,7 +1323,7 @@ def _sources(board: dict) -> str:
         if not series:
             continue
         who = column["name"] + (f" · {column['maker']}" if column["maker"] else "") + (f" · {column['meta']}" if column.get("meta") else "")
-        items = "".join(f'<li><span class="mono">{esc(period["label"])}</span> {esc(" · ".join(cell["facts"]) or "nothing recorded")}</li>'
+        items = "".join(f'<li><span class="mono">{esc(period["label"])}</span> {esc(" · ".join(cell["facts"]) or "nothing noted")}</li>'
                         for period, cell in reversed(series))
         out.append(f'<div class="src"><strong>{esc(who)}</strong><ul>{items}</ul></div>')
     return "".join(out)
@@ -1283,7 +1333,8 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
     chat = board["track"] == "chat"
     question_id = board["id"]
     ids = _Ids()
-    title_row = (f'<span class="q-id mono">{esc(question_id)}</span>'
+    # A chat-app page opens with its hook; its id is in "The exact words we used" (and in the address and the data).
+    title_row = (('' if chat else f'<span class="q-id mono">{esc(question_id)}</span>')
                  + (f'<span class="hook">{esc(board["hook"])}</span>' if board["hook"] else
                     "".join(f'<span class="{kind}">{esc(text)}</span>' for kind, text in board["chips"]))
                  + f'<span class="tag tag-dark mono">{esc(view.tag("chat" if chat else "models"))}</span>'
@@ -1306,48 +1357,48 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
         body += [_panel(board, period, ids, n == 1, n) for n, period in enumerate(periods, 1)]
         body.append('</section>\n')
         if chat:
-            line = LEFT_OUT + (" A changed answer may come from how it was asked that day, not from the app."
-                               if any(cell["tags"] for cell in board["cells"].values()) else "")
+            line = DAY_NOTE if any(cell["tags"] for cell in board["cells"].values()) else ""
             cards = "".join(f'<a href="../card/{esc(question_id)}{"-" if suffix else ""}{esc(suffix)}.html">{esc(name)}</a>'
                             for suffix, (_panels, _kicker, name) in _chat_cards(board).items()
                             if _panels or not suffix)
-            body.append(f'<p class="under muted">{esc(line)}</p>\n'
-                        f'<p class="card-links small"><span class="muted">Share cards:</span>{cards}</p>\n')
+            body.append((f'<p class="under muted">{esc(line)}</p>\n' if line else '')
+                        + f'<p class="card-links small"><span class="muted">Share cards:</span>{cards}</p>\n')
         else:
             body.append(f'<p class="card-links card-links-one small"><a href="../card/{esc(question_id)}.html">Share card</a></p>\n')
         body.append(_table(board))
     else:
-        body.append('<p class="muted">No answers have been recorded for this question yet.</p>\n')
+        body.append('<p class="muted">No answers for this one yet. Come back next month.</p>\n')
     kinds = {cell["method"] for cell in board["cells"].values()}
     explain = []
     if SAMPLE in kinds:
-        explain.append("<strong>Sample</strong>: we wrote the answer and its date ourselves to show how the page works. Nothing was asked.")
+        explain.append("<strong>Sample</strong>: we wrote these answers and their dates ourselves to show how the page works. No AI and no person was asked.")
     if HUMAN_METHOD in kinds:
-        explain.append("<strong>Written by people</strong>: <em>quoted</em> is one person's words; "
-                       "<em>summarised</em> is our short summary of several replies. No names.")
+        explain.append("<strong>Written by people</strong>: <em>quoted</em> means one person's exact words; "
+                       "<em>summed up</em> means we boiled several replies down to one line. No names, ever.")
     if METHODS["engine"] in kinds:
         explain.append("<strong>We asked it ourselves</strong>: this server called the model and kept the receipt. "
                        "<em>run locally</em> or <em>via</em> a name says where the model ran; that is not the same as its maker's own chat app.")
     if METHODS["api"] in kinds:
         explain.append("<strong>Sent in by someone else, not checked</strong>: an outside program sent the answer and named its own version.")
     if any(cell["state"] == "mixed" for cell in board["cells"].values()):
-        explain.append("<strong>Mixed answers</strong>: we asked several times in one check and the tries did not all agree, then or the "
+        explain.append("<strong>Mixed answers</strong>: we asked several times in one go and the tries did not all agree, then or the "
                        "time before. You see the answer most tries gave; it is not counted as a change.")
     body.append('<section class="more-info">\n'
                 f'  <details><summary>Why we ask this</summary><p>{esc(board["why"])}</p></details>\n'
-                f'  <details><summary>Exactly what we asked</summary><pre class="prompt mono">{esc(board["prompt"])}</pre>'
-                f'<p class="muted small">{esc(board["prompt_note"])}</p></details>\n'
-                '  <details><summary>Where each answer came from</summary>'
+                f'  <details><summary>The exact words we used</summary><pre class="prompt mono">{esc(board["prompt"])}</pre>'
+                f'<p class="muted small">{esc(board["prompt_note"])} This is question {esc(question_id)} on our list.</p></details>\n'
+                '  <details><summary>The details behind each answer</summary>'
                 + "".join(f'<p class="small">{line}</p>' for line in explain)
                 + f'<div class="srcs">{_sources(board)}</div>'
-                f'<p class="small"><a href="../data/{esc(question_id)}.json">The same record as data</a></p></details>\n'
+                f'<p class="small"><a href="../data/{esc(question_id)}.json">The same answers as a data file</a></p></details>\n'
                 '</section>\n')
-    back = {"chat": '<a class="back" href="../index.html">All chat-app questions</a>',
+    back = {"chat": '<a class="back" href="../index.html">Back to all the questions</a>',
             "trending": '<a class="back" href="../trending.html">All trending questions</a>',
             "core": f'<a class="back" href="../models.html">All {esc(count_word(len(view.questions)))} questions</a>'}[board["track"]]
     track = "chat" if chat else "models"
     current = "front" if chat else "trending" if board["track"] == "trending" else "models"
-    return _page(view, _head(f"{board['text']} · Answers Over Time", "../../", versions, board["text"],
+    description = f"{board['text']} Every answer, month by month." if chat else board["text"]
+    return _page(view, _head(f"{board['text']} · Answers Over Time", "../../", versions, description,
                              _meta(view, "../", board=board, track=track)),
                  _bar(view, "../../", "../", versions, current, here=f"{question_id}.html", standalone=standalone, sibling=sibling), body,
                  _foot(view, track, [question_id], back), ' itemscope itemtype="https://schema.org/Question"')
@@ -1361,7 +1412,7 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
     return _question_page(view, _board(view, question_id), versions or asset_versions(), standalone=standalone, sibling=sibling)
 
 
-CHATBOTS_DESCRIPTION = "The same questions for every chat app: the same words every month, every reply kept."
+CHATBOTS_DESCRIPTION = "How it works: the same words for every app, a fresh chat each time, and every reply kept."
 
 
 def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
@@ -1371,12 +1422,12 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
     view = _View(payload)
     chat = view.chat
     versions = versions or asset_versions()
-    lede = ("Each app gets the same questions in the same words every month, each in a new chat, and every reply is kept."
-            + (" On this sample site the apps are made up and the replies are ours." if chat.demo else ""))
-    body = [_list_head(view.tag("chat") if chat.dates else "No chat app asked yet", "How we ask the chat apps.", esc(lede))]
+    lede = ("Every month, each app gets the same questions in the same words, in a fresh chat. We keep every reply."
+            + (" This is a sample site: the apps are made up and we wrote the replies." if chat.demo else ""))
+    body = [_list_head(view.tag("chat") if chat.dates else NO_ANSWERS, "How this works.", esc(lede))]
     if chat.dates and chat.columns:
-        body.append('<section class="group">\n  <div class="group-head"><h2>How each one was asked</h2>'
-                    '<span class="muted">As recorded the last time.</span></div>\n')
+        body.append('<section class="group">\n  <div class="group-head"><h2>How we asked each one</h2>'
+                    '<span class="muted">The settings from the last time we asked.</span></div>\n')
         for thread in chat.threads:
             rows = []
             for column in thread["columns"]:
@@ -1387,18 +1438,26 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
                         continue
                     collection = chat.collection[dates[-1]]
                     how = (f'<span>{esc(column["meta"])}</span>'
-                           f'<span class="muted small">From: {esc(collection["source"])} · collected {esc(full_date(collection["collected_on"]))} · '
-                           f'{esc(_plural(len(dates), "collection"))} in all · each answer is marked quoted or summarised · no names</span>')
+                           f'<span class="muted small">From: {esc(collection["source"])} · gathered {esc(full_date(collection["collected_on"]))} · '
+                           f'{esc(_plural(len(dates), "time"))} so far · each answer says if it is quoted or summed up · no names</span>')
                     rows.append(f'  <div class="app-row kind-human">{_av(column)}<div class="app-name"><strong>{esc(column["name"])}</strong></div>'
                                 f'<div class="app-how">{how}</div></div>\n')
+                    continue
+                if column["kind"] == "model":
+                    dates = [d for d in chat.dates if (key, d) in chat.models]
+                    rows.append(f'  <div class="app-row{column["who"]}">{_av(column)}<div class="app-name"><strong>' + esc(column["name"]) + '</strong>'
+                                + (f'<span class="muted small">{esc(column["maker"])}</span>' if column["maker"] else '') + '</div>'
+                                f'<div class="app-how"><span>model: {esc(_asked_model(chat.models[(key, dates[-1])]))}</span>'
+                                f'<span class="muted small">asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all'
+                                '</span></div></div>\n')
                     continue
                 dates = [d for d in chat.dates if (key, d) in chat.conditions]
                 conditions = chat.conditions[(key, dates[-1])]
                 rows.append(f'  <div class="app-row{column["who"]}">{_av(column)}<div class="app-name"><strong>' + esc(column["name"]) + '</strong>'
                             f'<span class="muted small">{esc(column["maker"])}</span></div>'
                             f'<div class="app-how"><span>{esc(conditions_line(conditions))}</span>'
-                            f'<span class="muted small">The app showed: {esc(conditions["shown_model"])} · '
-                            f'asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all'
+                            f'<span class="muted small">Version the app showed: {esc(conditions["shown_model"])} · '
+                            f'last asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} so far'
                             f'{esc(" · " + SAMPLE_WORD if chat.demo else "")}</span>'
                             + (f'<span class="muted small">{esc(conditions["note"])}</span>' if conditions["note"] else '')
                             + (f'<span class="mono small">{esc(column["attribution"])}</span>' if column["attribution"] else '')
@@ -1414,20 +1473,21 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
             if aside:
                 body.append(f'<p class="aside"><span class="aside-mark mono">Joke</span>{esc(aside)}</p>\n')
     else:
-        body.append('<section class="group">\n  <p class="muted trend-none">No chat app has been asked yet.</p>\n</section>\n')
-    body.append('<section id="method" class="method">\n  <h2 class="display">The rules we keep</h2>\n  <div class="method-grid">\n'
-                '    <div><strong>Same words</strong><span>Exactly what we asked is on each question\'s page. It asks for one short '
-                'sentence, so the replies are short.</span></div>\n'
-                '    <div><strong>Copied, not edited</strong><span>The whole reply is kept as it came. The page may shorten what it '
-                'shows; the words are never changed.</span></div>\n'
-                '    <div><strong>Only real answers shown</strong><span>If an app refuses or dodges, we keep that on file and leave it '
+        body.append(f'<section class="group">\n  <p class="muted trend-none">{esc(NOBODY_ASKED)} The first answers are on their way.</p>\n</section>\n')
+    body.append('<section id="method" class="method">\n  <h2 class="display">Our house rules</h2>\n  <div class="method-grid">\n'
+                '    <div><strong>Same words</strong><span>Every app gets the exact same words, every month. You can read them on '
+                'each question\'s page. We ask for one short sentence, which is why the replies are short.</span></div>\n'
+                '    <div><strong>Not a word changed</strong><span>We keep each reply exactly as it came. The page may fold a long '
+                'one, but the words never change.</span></div>\n'
+                '    <div><strong>No answer? We leave it out</strong><span>When an app refuses or dodges, we make a note and leave it '
                 'off the page.</span></div>\n'
-                '    <div><strong>It depends on the day</strong><span>Account, country, search on or off: all of it can move a reply. '
-                'We write it down, and say so when it differs.</span></div>\n'
-                '    <div><strong>Humans too</strong><span>The Human answers were written by people: one person\'s '
-                'words (quoted) or our summary of several (summarised). No names.</span></div>\n'
-                '    <div><strong>Not affiliated</strong><span>We\'re not connected to the companies named. Their names say which app '
-                'was asked, nothing more.</span></div>\n'
+                '    <div><strong>It depends on the day</strong><span>Account, country, search on or off: any of these can nudge a '
+                'reply. We write them down and tell you when something was different. So a new answer does not always mean the '
+                'app changed its mind.</span></div>\n'
+                '    <div><strong>Humans too</strong><span>The Human answers were written by people. Quoted means one person\'s exact '
+                'words. Summed up means we boiled several replies down to one line. No names.</span></div>\n'
+                '    <div><strong>Not affiliated</strong><span>We\'re independent, with no ties to the companies named. Their names '
+                'only tell you which app answered.</span></div>\n'
                 '  </div>\n</section>\n')
     return _page(view, _head("How it works · Answers Over Time", "../", versions, CHATBOTS_DESCRIPTION, _meta(view, "", track="chat")),
                  _bar(view, "../", "", versions, "chatbots", here="chatbots.html", standalone=standalone, sibling=sibling), body, _foot(view, "chat", []))
@@ -1477,7 +1537,7 @@ def _card_room(board: dict, panels: list[tuple[dict, dict, dict]]) -> bool:
 
 
 def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], versions: dict[str, str], *, title: str,
-               kicker: str, one: bool, track: str, extra: str = "", empty: str = "No answers recorded yet.",
+               kicker: str, one: bool, track: str, extra: str = "", empty: str = "No answers yet.",
                group: str = "", part: str = "") -> str:
     """A 9:16 share card. Laid out for a 1080 by 1920 image that a video app covers in part: the question,
     the names, the answers and the one honesty line sit inside x 65-940, y 270-1440 (`.card-safe`); the
@@ -1507,8 +1567,8 @@ def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], 
     for column, period, cell in panels:
         human = column["kind"] == "human"
         changed = cell["state"] == "changed"
-        word = "differs" if human else "changed"
-        form = f" · {cell['form']}" if human and cell["form"] else ""
+        word = "new answer" if human else "changed"
+        form = f" · {FORM_WORDS[cell['form']]}" if human and cell["form"] else ""
         credit = f"{column['attribution']} · " if column["attribution"] else ""
         previous = _previous(board, column["key"], cell) if changed else None
         before = (f'<p class="card-before"><span class="mono">Before · {esc(previous[0]["label"])}</span> {esc(previous[1]["text"])}</p>'
@@ -1525,8 +1585,9 @@ def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], 
     honesty = view.tag(track)
     if not sample and track == "chat":
         honesty = CHAT_CARD_FOOT
-    small = (f"{question_id} · same question every month · read-only · no payments" + (f" · {part}" if part else "")
-             + (f" · {CARD_FULL}" if cut else ""))
+    # The id comes last: it is for finding the page again, not for reading.
+    small = ("Same question every month · read-only · no payments" + (f" · {part}" if part else "")
+             + (f" · {CARD_FULL}" if cut else "") + f" · {question_id}")
     out.append('  </div>\n'
                f'  <p class="card-honest mono">{esc(honesty)}</p>\n'
                '  </div>\n'
@@ -1618,7 +1679,7 @@ def render_chatbot_card(payload: dict, question_id: str, which: str = ALL_CARD, 
         if several and not single else ""
     return _card_page(view, board, panels, versions,
                       title=f"{board['text']} · {name if single or several or part else 'everyone'} · card · Answers Over Time",
-                      kicker="Chatbots" if several else "Chat apps", one=single, track="chat", empty="No answers recorded yet.",
+                      kicker="Chatbots" if several else "Chat apps", one=single, track="chat", empty="No answers yet.",
                       group=group, part=part)
 
 
@@ -1627,9 +1688,9 @@ def render_chatbot_card(payload: dict, question_id: str, which: str = ALL_CARD, 
 README = """Answers Over Time: data files
 =============================
 
-These files hold the same answers as the pages next to them, for programs to read.
-They are built from the same reviewed record the pages are built from (archive.json at the
-site root) and hold nothing that is not in it.
+These files hold the same answers as the pages next to them, in a form a program
+can read. They are built from the same reviewed record as the pages (archive.json at the
+site root) and hold nothing that is not in it. Read-only; nothing here costs anything.
 
 Files
 -----
@@ -1644,8 +1705,8 @@ An answer with provenance "ai-generated" is the output of an AI system, recorded
 It was not edited, shortened or corrected. It may be wrong. It is not advice.
 
 An answer with provenance "human-written" was written by people.
-human_form says how: "quoted" is one person's words, copied exactly; "summarised" is the
-archive owner's short summary of several replies. There are no names in it.
+human_form says how: "quoted" is one person's words, copied exactly; "summarised" (the
+pages say "summed up") is our short summary of several replies. There are no names in it.
 
 An answer with provenance "scripted-sample" is NOT a real answer. It was written as a
 sample to show how the pages work. No AI and no person was asked. Never treat a
@@ -1655,7 +1716,7 @@ site carries this value, in every line.
 Fields
 ------
 schema              The version of this format: %(schema)s
-id                  A stable id of this answer: question / answerer / check.
+id                  A stable id of this answer: question / answerer / the time it was asked.
 question_id         Q.. (core list), T... (trending list) or C... (chat-app list).
 question            The question in plain words.
 prompt              Exactly what was asked, character for character.
@@ -1663,7 +1724,7 @@ answerer            The answerer's label. answerer_name is the name shown on the
 answerer_kind       chat-app | model | human
 maker               The company behind a chat app ("" when not recorded).
 version             The version name the app showed, or the model version asked ("" when none).
-collected           The date of the check, YYYY-MM-DD. period is the label the pages use.
+collected           The date it was asked, YYYY-MM-DD. period is the label the pages use.
 method              Model answers only; a chat-app or human record has no such field.
                     asked-by-server     the archive's own program called the model
                     sent-in-unverified  an outside program sent the answer; nothing about it was checked
@@ -1674,7 +1735,8 @@ state               answered   the first answer from this answerer
                     same       the same as its answer before
                     changed    the text differs from its answer before
                     mixed      asked several times in one check; the tries did not all agree
-                    refused, no-answer, hidden   kept on file, not shown on the pages
+                    refused, no-answer, hidden   not shown on the pages; text is always null
+                               (a refusal's words are not published anywhere)
 shown               true when the pages show this answer as a card.
 text                The answer in full (null when there is none). The pages may shorten what
                     they display; this is the whole text.
@@ -1688,9 +1750,9 @@ attribution         A line the app's maker asks to be shown with its output ("" 
 lang                The language of the text.
 notice              A short notice that travels with every record.
 
-"changed" is a plain text comparison (letter case, spacing and punctuation at the ends are
-ignored). It does not say which answer is right, and a chat app's reply can change because
-of how it was asked that day.
+"changed" only means the words are different (letter case, spacing and punctuation at the
+ends are ignored). It does not say which answer is right, and a chat app's reply can change
+because of how it was asked that day, not because the app changed its mind.
 
 Product names belong to their owners. This archive is independent and is not affiliated
 with, sponsored by or endorsed by them.
@@ -1725,6 +1787,20 @@ def _readme_chat() -> str:
 
 
 README_CHAT = _readme_chat()
+# And for a standalone archive that holds a model answerer: the three lines that then also speak of a model.
+_README_CHAT_MODELS = (
+    ("chat-app | human", "chat-app | model | human"),
+    ("The version name the app showed (", "The version name the app showed, or the model's name ("),
+    ("chat app; source and date for human answers). Never a web address, a key, a file path\n"
+     "                    or a username.",
+     "chat app; the model's name and where it ran for a model; source and date for human\n"
+     "                    answers). Never a web address, a key, a file path or a username."),
+)
+README_CHAT_MODELS = README_CHAT
+for _full, _short in _README_CHAT_MODELS:
+    if README_CHAT_MODELS.count(_full) != 1:
+        raise ValueError("the chat-app data README no longer holds a line its form with models replaces")
+    README_CHAT_MODELS = README_CHAT_MODELS.replace(_full, _short)
 
 
 def _dump(node: object) -> str:
@@ -1756,7 +1832,8 @@ def render_data(payload: dict, *, chat_only: bool = False) -> dict[str, str]:
         out[f"data/{question['id']}.json"] = json.dumps(data, ensure_ascii=True, indent=1) + "\n"
         lines += [_dump(answer) for answer in data["answers"]]
     out["data/answers.jsonl"] = "".join(line + "\n" for line in lines)
-    out["data/README.txt"] = README_CHAT if chat_only else README
+    models = any(column["kind"] == "model" for column in view.chat.columns)
+    out["data/README.txt"] = (README_CHAT_MODELS if models else README_CHAT) if chat_only else README
     return out
 
 

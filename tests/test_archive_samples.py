@@ -114,8 +114,8 @@ def test_three_samples_one_model_unanimous_one_two_of_three(ready, monkeypatch):
     assert 'version gpt-test-1 · same answer 3 times out of 3' in page and 'version gpt-test-2 · same answer 2 times out of 3' in page
     assert page.count('acard is-mixed') == 1 and page.count('>Mixed answers</span>') == 1 and '>Changed<' not in page
     assert page.count('data-state="mixed"') == 2                                   # the card and its cell of the table
-    assert '<li><span class="mono">1 of 3</span> Six, I think.</li>' in page and 'aria-label="Other answers from the same check"' in page
-    assert '<strong>Mixed answers</strong>: we asked several times in one check' in page and 'it is not counted as a change' in page
+    assert '<li><span class="mono">1 of 3</span> Six, I think.</li>' in page and 'aria-label="Other answers from the same time we asked"' in page
+    assert '<strong>Mixed answers</strong>: we asked several times in one go' in page and 'it is not counted as a change' in page
     assert 'unsettled' not in page.lower()                                         # the internal word stays in the code
     index = archive_pages.render_index(payload)
     assert_page_is_safe(index)
@@ -179,9 +179,9 @@ def test_stability_across_runs_and_changed_compares_representatives(ready, monke
     assert [view.kind(a) for a in series] == ['same', 'unsettled', 'unsettled', 'same', 'changed', 'unsettled', 'unsettled']
     page = archive_pages.render_question(payload, 'Q01')
     assert page.count('acard is-mixed') == 4 and page.count('acard is-changed') == 1
-    assert 'same answer 3 times out of 3 · the check before gave mixed answers' in page            # run 3: unanimous, but after a split run
+    assert 'same answer 3 times out of 3 · the time before gave mixed answers' in page            # run 3: unanimous, but after a split run
     index = archive_pages.render_index(payload)
-    assert re.search(r'aria-label="model-b: changed [^;"]+; mixed answers [^;"]+; 7 checks"', index)
+    assert re.search(r'aria-label="model-b: changed [^;"]+; mixed answers [^;"]+; asked 7 times"', index)
     assert index.count('sq sq-mixed') == 4 * 20 + 1                                                  # four squares per question, and the key
     # The card shows the latest answer (run 7, mixed), never a "changed" mark for an answer that only wobbled.
     card = archive_pages.render_card(payload, 'Q01')

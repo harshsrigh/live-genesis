@@ -7,7 +7,7 @@ Two kinds of values live in the local `.env` file:
   `live_genesis.core` is imported.
 * **Provider credentials** (everything else, notably `OPENAI_API_KEY`,
   `ANTHROPIC_API_KEY`, `OPENAI_COMPATIBLE_API_KEY` and the key variables that
-  `LIVE_ARCHIVE_ENDPOINT_<NAME>_KEY_VAR` names): needed only by the process that makes a model call. Only the operator CLI's `archive-run` and
+  `LIVE_ARCHIVE_ENDPOINT_<NAME>_KEY_VAR` names): needed only by the process that makes a model call. Only the operator CLI's `archive-run`, `archive-chatbot-ask` and
   `check-provider` (which prints only whether a key is set) commands call `load_provider_credentials()`.
 
 The web process never calls a model. It calls `drop_provider_secrets()` so that a key

@@ -259,7 +259,7 @@ def test_cli_commands_are_the_archive_and_the_accounting_only(isolated_db,monkey
         run_cli(monkeypatch,'--help')
     listed=capsys.readouterr().out
     commands={'init','reconcile','backup','check-provider','archive-check-endpoints','archive-lock','archive-plan','archive-dry-run',
-              'archive-run','archive-status','demo-archive','archive-chatbot-template','archive-chatbot-import','archive-trends'}
+              'archive-run','archive-status','demo-archive','archive-chatbot-template','archive-chatbot-import','archive-chatbot-ask','archive-trends'}
     choices=[name.strip() for name in listed[listed.index('{')+1:listed.index('}')].split(',')]
     assert set(choices)==commands, sorted(set(choices)^commands)
     # The commands of the removed agent society are gone: argparse refuses them (exit 2) and nothing runs.

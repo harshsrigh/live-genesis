@@ -141,7 +141,7 @@ def test_archive_only_round_trip_renders_the_chat_track_and_nothing_else(ready, 
     assert_every_address_resolves(site)                                                # no link to a page that is not published
     page = (site / 'archive' / 'c' / 'C001.html').read_text(encoding='utf-8')
     assert CHAT_TEXT in page and 'AI-generated · may be wrong' in page and 'by hand' not in page.lower()
-    assert 'Not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI' in page and 'Read-only archive.' in page and 'No payments' in page
+    assert 'not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI' in page and 'Read-only.' in page and 'No payments' in page
     assert 'scripted' not in page.lower() and not re.search(r'(?i)sample', page)
     everything = all_text(site)
     assert MODEL_TEXT not in everything
@@ -417,7 +417,9 @@ def test_archive_json_must_hold_exactly_the_chat_track_keys(ready, tmp_path, mon
     refused(lambda d: (d.clear(), d.update(whole)), 'it holds the model track; an export of Answers Over Time only holds the chat-app track alone')
     refused(lambda d: d.update(schema='live-genesis-archive/6'), 'it holds the model track')
     refused(lambda d: d.update(schema='live-genesis-archive/3'), 'it holds the model track')
-    refused(lambda d: d.update(schema='live-genesis-chat-archive/3'), 'archive.json is refused: unknown schema')
+    refused(lambda d: d.update(schema='live-genesis-chat-archive/4'), 'archive.json is refused: unknown schema')
+    # /3 is the marker of a file that holds a model answerer, and of no other.
+    refused(lambda d: d.update(schema='live-genesis-chat-archive/3'), 'archive.json is refused: the schema marker does not fit the file')
     refused(lambda d: d.pop('schema'), 'archive.json is refused: unknown schema')
     refused(lambda d: d.pop('chatbots'), 'top level: key chatbots is missing')
     refused(lambda d: d.update(chatbots=None), 'chatbots: a key is missing or has the wrong type')

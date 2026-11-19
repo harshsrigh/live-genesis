@@ -40,13 +40,13 @@ By hand instead: open the card in a browser, responsive mode, 540 x 960, device 
 
 | On the card or page | Meaning | How to say it |
 |---|---|---|
-| The name on each panel (for example `small-a`) | For a model: the label the operator gave that answerer in `LIVE_ARCHIVE_MODELS`. It is not the maker's product name | Give the version from "Where each answer came from" on the question's page, not only the label |
+| The name on each panel (for example `small-a`) | For a model: the label the operator gave that answerer in `LIVE_ARCHIVE_MODELS`. It is not the maker's product name | Give the version from "The details behind each answer" on the question's page, not only the label |
 | `We asked it ourselves` | This project's server requested that version and stored the reply | "we asked <version>" |
 | `Sent in by someone else, not checked` | An outside client sent the answer and named its own version. Nothing verified it | "sent by an outside client, which says it used <version>"; or leave these out of posts |
 | `Typed in by hand` | A person typed the question into the chat app and pasted the reply. No receipt | "typed in by hand on <date>" |
-| `Human` with `quoted` / `summarised` | Written by people, collected by hand: one person's words, or our summary of several | "a person wrote" / "people said, in short". Never a name |
+| `Human` with `quoted` / `summed up` (and `new answer` when it is not the one from last time) | Written by people, collected by hand: one person's words, or our summary of several | "a person wrote" / "people said, in short". Never a name |
 | `Sample we wrote, not a real AI answer` | Hand-written sample text. Nothing was asked | Do not post as an answer |
-| `run locally` (question page, "Where each answer came from") | A model file run on the operator's own machine, usually a small, compressed version | "a small open model run on our own computer". Never "<maker>'s chatbot says" |
+| `run locally` (question page, "The details behind each answer") | A model file run on the operator's own machine, usually a small, compressed version | "a small open model run on our own computer". Never "<maker>'s chatbot says" |
 | `via <name>` (same place) | The model ran at a third-party hosting service with that endpoint name | "<version>, hosted by a third party". Not the maker's own app |
 | `new version` / `new model file` (same place) | The requested version, the name the service reported, or the local file digest differs from the check before | Say that the model changed, when a change in the answer is the point of the post |
 | `Changed` / the accent edge | The text differs from that answerer's previous recorded answer | "worded differently from last time", unless you have read both and the content really differs |
@@ -101,7 +101,7 @@ The first step towards human voting is the platform's own poll (TikTok poll stic
 
 ## Chat-app cards
 
-The chat-app track (`docs/ANSWERS-OVER-TIME.md`, "The chat-app track") has its own cards: `archive/card/C001.html` shows the latest answer of up to four answerers, the Human among them (the Human's bubble is dark, on the right, and says quoted or summarised; with more answerers the rest are on `C001-2.html` and so on, and with several answerer groups each later group has `C001-<group id>.html`), `archive/card/C001-<app label>.html` (for example `C001-grok`) shows one app at a larger size, and `archive/card/C001-human.html` the human answer.
+The chat-app track (`docs/ANSWERS-OVER-TIME.md`, "The chat-app track") has its own cards: `archive/card/C001.html` shows the latest answer of up to four answerers, the Human among them (the Human's bubble is dark, on the right, and says quoted or summed up; with more answerers the rest are on `C001-2.html` and so on, and with several answerer groups each later group has `C001-<group id>.html`), `archive/card/C001-<app label>.html` (for example `C001-grok`) shows one app at a larger size, and `archive/card/C001-human.html` the human answer.
 
 ```bash
 node scripts/capture-cards.mjs --url https://harshsrigh.github.io/live-genesis/ --out ./cards --ids C001,C001-grok,C001-human

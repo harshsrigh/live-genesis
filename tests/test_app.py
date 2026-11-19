@@ -192,8 +192,8 @@ def test_exported_keys_are_dropped_at_import_and_environment_wins_over_dotenv(tm
 
 
 def test_provider_credentials_are_loaded_only_by_archive_run_and_check_provider():
-    """`.env` provider keys enter a process in two places only: `cli archive-run` (the paid command) and
-    `cli check-provider` / `archive-check-endpoints` (which print only whether a key is set)."""
+    """`.env` provider keys enter a process in three places only: `cli archive-run` and `cli archive-chatbot-ask` (the
+    paid commands) and `cli check-provider` / `archive-check-endpoints` (which print only whether a key is set)."""
     loaders = {}
     for path in sorted((REPO / 'live_genesis').glob('*.py')):
         text = path.read_text(encoding='utf-8')
@@ -202,7 +202,14 @@ def test_provider_credentials_are_loaded_only_by_archive_run_and_check_provider(
         if calls:
             loaders[path.name] = calls
     # config.py defines the function (its `def` line and one mention in the module text).
-    assert set(loaders) == {'archive.py', 'config.py', 'providers.py'}, loaders
+    assert set(loaders) == {'archive.py', 'archive_chatbots.py', 'config.py', 'providers.py'}, loaders
+    # The chat-app module loads them once, in the branch of its one PAID command, after the plan and the dry-run exit.
+    chat_source = (REPO / 'live_genesis' / 'archive_chatbots.py').read_text(encoding='utf-8')
+    assert loaders['archive_chatbots.py'] == 1
+    chat_head = chat_source.split('settings.load_provider_credentials()')[0]
+    assert [line.strip() for line in chat_head.splitlines() if line.strip().startswith('if args.command')][-1] == \
+        'if args.command == "archive-chatbot-ask":'
+    assert chat_head.rstrip().splitlines()[-1].strip().startswith('print("PAID RUN') and 'if args.dry_run:' in chat_head.rsplit('if args.command', 1)[1]
     archive_source = (REPO / 'live_genesis' / 'archive.py').read_text(encoding='utf-8')
     head = archive_source.split('config.load_provider_credentials()')[0]
     branch = [line.strip() for line in head.splitlines() if line.strip().startswith(('if args.command', 'elif args.command'))][-1]

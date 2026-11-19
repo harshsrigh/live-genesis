@@ -1,13 +1,13 @@
 # Developer guide
 
-How to run, test and operate the code. Where things stand: [SESSION-STATE.md](SESSION-STATE.md). The owner's decisions for the product: [PLAN-CHATBOT-COMPARISON.md](PLAN-CHATBOT-COMPARISON.md). Rules and settings in full: [ANSWERS-OVER-TIME.md](ANSWERS-OVER-TIME.md).
+How to run, test and operate the code. Where things stand: [SESSION-STATE.md](SESSION-STATE.md). The owner's decisions for the product: [PLAN-CHATBOT-COMPARISON.md](PLAN-CHATBOT-COMPARISON.md). Rules and settings in full: [ANSWERS-OVER-TIME.md](ANSWERS-OVER-TIME.md). The owner's monthly round, step by step: [MONTHLY-ROUND.md](MONTHLY-ROUND.md).
 
 <p><img src="brand/lockup.svg" alt="Answers Over Time" width="381" /></p>
 
 ## What this is
 **Answers Over Time** puts the same questions to consumer chat apps (ChatGPT, Gemini, Grok) and to people, about once a month, and keeps every reply side by side. The public site is static: <https://harshsrigh.github.io/live-genesis/>.
 
-- **Chat-app track** (published): the owner asks the apps by hand and imports the replies from a file. Nothing in this repository opens a chat app.
+- **Chat-app track** (published): the owner asks the apps by hand and imports the replies from a file. Nothing in this repository opens a chat app. A second group of answerers, models asked the same questions by software (`archive-chatbot-ask`, PAID class), sits beside the apps under its own names.
 - **Model track** (not published): `archive-run` asks API or local models a locked question list behind a budget gate. Its pages show only in the local web app.
 
 Until the first hand-collected round is exported and approved, the public site shows scripted samples, labelled as samples on every page. Answers are AI output and may be wrong. Nothing here is a benchmark or a score.
@@ -67,12 +67,14 @@ python -m live_genesis.cli demo-archive              # scripted sample, empty da
 python -m live_genesis.cli archive-chatbot-template --out FILE [--date YYYY-MM-DD]
 python -m live_genesis.cli archive-chatbot-import FILE --dry-run
 python -m live_genesis.cli archive-chatbot-import FILE [--allow-old]    # audited: one hand-entered collection
+python -m live_genesis.cli archive-chatbot-ask --dry-run               # the plan for the model answerers; calls nothing
 python -m live_genesis.cli reconcile [--provider-usd X | --receipt ID --actual-usd X]
 python -m live_genesis.cli backup NEW-FILE
 # PAID: only on the owner's explicit word
 python -m live_genesis.cli archive-run --max-usd 0.02 [--models a,b] [--set core|trending] [--samples N]
+python -m live_genesis.cli archive-chatbot-ask --max-usd 0.02 [--models a,b] [--pause N]   # the chat-app questions, once, to each model answerer
 ```
-Every command except `archive-run` is free and calls no model. `archive-run` refuses without `LIVE_ALLOW_PAID_CALLS=YES`, a usable key, valid budget settings and a `--max-usd` the worst case fits under.
+Every command except `archive-run` and `archive-chatbot-ask` (without `--dry-run`) is free and calls no model. Both refuse without `LIVE_ALLOW_PAID_CALLS=YES`, a usable key, valid budget settings and a `--max-usd` the worst case fits under.
 
 ## The local web app
 ```bash
