@@ -32,9 +32,11 @@ def question(n, text, hook=''):
 
 
 def config_file(tmp_path, monkeypatch, count=4, edit=None):
-    """A copy of the checked-in configuration with its first `count` questions; `edit(data)` changes it."""
+    """A copy of the checked-in configuration with its first `count` questions and WITHOUT its model answerers (which
+    models the owner asks is the owner's choice and changes; a test adds its own); `edit(data)` changes it."""
     data = json.loads(CONFIG.read_text(encoding='utf-8'))
     data['questions'] = data['questions'][:count]
+    data['chatbots'] = [entry for entry in data['chatbots'] if entry.get('kind') != 'model']
     if edit:
         edit(data)
     path = tmp_path / 'chatbots-config.json'
@@ -96,12 +98,17 @@ def test_checked_in_configuration_three_apps_human_and_ten_draft_questions_of_it
     assert raw['status'] == 'draft' and config['status'] == 'draft' and raw['format'] == 'live-genesis-chatbots/3'
     assert [(c['label'], c['name'], c['maker']) for c in config['chatbots']] == [
         ('chatgpt', 'ChatGPT', 'OpenAI'), ('gemini', 'Gemini', 'Google'), ('grok', 'Grok', 'xAI')]
-    # Two answerer groups: the apps', which every app belongs to, and one for models asked by software, which is seeded
-    # EMPTY (the owner adds them) and so shows nowhere (tests/test_archive_ask.py; tests/test_archive_groups.py covers several).
+    # Two answerer groups: the apps', which every app belongs to, and one for models asked by software. The owner added
+    # four local models to it on 19 Nov 2026; each is a model entry in that group, never an app
+    # (tests/test_archive_ask.py; tests/test_archive_groups.py covers several groups).
     assert raw['groups'] == config['groups'] == [{'id': 'ai-apps', 'name': 'AI chat apps'}, {'id': 'ai-models', 'name': 'AI models'}]
-    assert config['groups'][0] == chatbots.DEFAULT_GROUP and config['models'] == [] and all('kind' not in c for c in raw['chatbots'])
-    assert {c['group'] for c in config['chatbots']} == {'ai-apps'} and all('group' not in c for c in raw['chatbots'])
-    assert 'opilot' not in json.dumps(raw['chatbots']) and 'Microsoft' not in json.dumps(raw)      # dropped (owner, 14 Nov 2026)
+    raw_apps = [c for c in raw['chatbots'] if c.get('kind') != 'model']
+    assert config['groups'][0] == chatbots.DEFAULT_GROUP and all('kind' not in c for c in raw_apps)
+    assert [(m['label'], m['answerer'], m['group'], m['kind']) for m in config['models']] == [
+        (label, label, 'ai-models', 'model') for label in ('phi4-mini', 'gemma3-4b', 'granite42-3b', 'qwen35-4b')]
+    assert all('(local)' in m['name'] for m in config['models'])
+    assert {c['group'] for c in config['chatbots']} == {'ai-apps'} and all('group' not in c for c in raw_apps)
+    assert 'opilot' not in json.dumps(raw['chatbots']) and 'Microsoft' not in json.dumps(raw_apps)  # the app was dropped (owner, 14 Nov 2026)
     # A maker's attribution line is configuration, not a special case in the code: only one app has one.
     assert {c['label']: c['attribution'] for c in config['chatbots']} == {'chatgpt': '', 'gemini': '', 'grok': 'Written with Grok'}
     # Human is a kind of its own, never one of the apps.

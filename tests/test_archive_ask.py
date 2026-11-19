@@ -92,9 +92,13 @@ class Status(Exception):
 
 # ---- the configuration: a second kind of answerer ------------------------------------------------------------
 
-def test_the_checked_in_configuration_seeds_an_empty_model_group_that_shows_nowhere(chat, tmp_path):
+def test_a_model_group_without_an_answerer_shows_nowhere(chat, tmp_path):
+    # The checked-in file keeps its apps free of `kind` and `answerer`; any model in it sits in the group "AI models".
+    # The `chat` configuration is that file without its models: the group is then empty.
     raw = json.loads((REPO / 'live_genesis' / 'archive_chatbots.json').read_text(encoding='utf-8'))
-    assert raw['groups'][1] == AI_MODELS and all('kind' not in entry and 'answerer' not in entry for entry in raw['chatbots'])
+    assert raw['groups'][1] == AI_MODELS and all(
+        entry.get('group') == 'ai-models' and entry.get('answerer') if entry.get('kind') == 'model'
+        else 'kind' not in entry and 'answerer' not in entry for entry in raw['chatbots'])
     plain = chatbots.load_config()
     assert plain['models'] == [] and [c['label'] for c in plain['chatbots']] == APPS and AI_MODELS in plain['groups']
     # The empty group does not even change the configuration hash a run records: it is what it was before the group.

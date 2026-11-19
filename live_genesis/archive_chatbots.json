@@ -10,7 +10,11 @@
  "chatbots": [
   {"label": "chatgpt", "name": "ChatGPT", "maker": "OpenAI"},
   {"label": "gemini", "name": "Gemini", "maker": "Google"},
-  {"label": "grok", "name": "Grok", "maker": "xAI", "attribution": "Written with Grok"}
+  {"label": "grok", "name": "Grok", "maker": "xAI", "attribution": "Written with Grok"},
+  {"label": "phi4-mini", "kind": "model", "name": "Phi-4 mini (local)", "maker": "Microsoft", "answerer": "phi4-mini", "group": "ai-models"},
+  {"label": "gemma3-4b", "kind": "model", "name": "Gemma 3 4B (local)", "maker": "Google", "answerer": "gemma3-4b", "group": "ai-models"},
+  {"label": "granite42-3b", "kind": "model", "name": "Granite 4.2 3B (local)", "maker": "IBM", "answerer": "granite42-3b", "group": "ai-models"},
+  {"label": "qwen35-4b", "kind": "model", "name": "Qwen 3.5 4B (local)", "maker": "Alibaba", "answerer": "qwen35-4b", "group": "ai-models"}
  ],
  "human": {"name": "Human", "meta": "written by people"},
  "aside": "Why no Copilot? It is cheaper to ask a human than Copilot.",

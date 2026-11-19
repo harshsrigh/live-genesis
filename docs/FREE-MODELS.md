@@ -158,8 +158,8 @@ LIVE_ALLOW_PAID_CALLS=YES
 ```
 {"label": "phi4-mini", "kind": "model", "name": "Phi-4 mini (local)", "maker": "Microsoft", "answerer": "phi4-mini", "group": "ai-models"},
 {"label": "gemma3-4b", "kind": "model", "name": "Gemma 3 4B (local)", "maker": "Google", "answerer": "gemma3-4b", "group": "ai-models"},
-{"label": "granite-3b", "kind": "model", "name": "Granite 4.2 3B (local)", "maker": "IBM", "answerer": "granite-3b", "group": "ai-models"},
-{"label": "qwen-4b", "kind": "model", "name": "Qwen 3.5 4B (local)", "maker": "Alibaba", "answerer": "qwen-4b", "group": "ai-models"}
+{"label": "granite42-3b", "kind": "model", "name": "Granite 4.2 3B (local)", "maker": "IBM", "answerer": "granite42-3b", "group": "ai-models"},
+{"label": "qwen35-4b", "kind": "model", "name": "Qwen 3.5 4B (local)", "maker": "Alibaba", "answerer": "qwen35-4b", "group": "ai-models"}
 ```
 
 Then `python -m live_genesis.cli archive-chatbot-ask --dry-run` (free; calls nothing) and, on the owner's word, `python -m live_genesis.cli archive-chatbot-ask --max-usd 0.01`. The names are the owner's to choose; a name that holds the name of a chat app (ChatGPT, Gemini, Grok) is refused, and "Gemma" is not "Gemini". The tags are as unverified here as above. For a hosted service the entry is the same; only the `LIVE_ARCHIVE_MODELS` label it names points at a hosted endpoint or a native provider, which then needs its key and, unless declared free, its rates. This was checked with the dry run and a stand-in adapter only, never against an Ollama server.
