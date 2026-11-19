@@ -6,7 +6,7 @@ What this module is, honestly:
   archive-chatbot-import` checks it and stores it. Nothing here contacts a chat app, a model or the
   network, and nothing here may ever be made to: no automated collection of any kind.
 * A hand-entered reply cannot be verified. There is no receipt, no token count and no model id beyond
-  the name the app displayed. Pages and exports label every such reply "entered by hand".
+  the name the app displayed. The published pages and files do not say how a reply was collected (owner decision).
 * The questions are this track's OWN list (`archive_chatbots.json`, ids C001...): text, the exact prompt
   (one fixed prefix, a blank line, the question), an optional short `hook` and the date added. It is not
   linked to the locked core list or the trending list, and an import needs neither of them locked.
@@ -28,7 +28,8 @@ What this module is, honestly:
   people answered, nobody changed their mind.
 * A refusal or a non-answer is STORED (so the record is honest) and never shown as a card: the owner
   marks it `"refused": true` (with or without the refusal's text) or `"skipped": "reason"`. A refused
-  reply never takes part in `changed`.
+  reply never takes part in `changed`. Its words (and the note behind a skipped one) stay in the database and
+  are in no published file: the public payload carries the fact only (`_public_answer`).
 * A chat app's dates only move forward: an import for a date that is not later than that app's latest
   recorded date is refused (the same date twice included), so the stored `changed` flags stay true.
 * The question list is `draft` until the first real import. That import records every question with a
@@ -96,39 +97,41 @@ CONDITION_KEYS = ("account", "fresh_chat", "temporary_chat", "memory_off", "web_
 # The conditions whose change is flagged on the pages. The model name an app shows is reported separately.
 COMPARED = ("account", "temporary_chat", "memory_off", "web_search", "country", "app")
 SKIPPED = "skipped"       # prefix of the reason of a question the owner could not ask or the app refused
+GUIDE = "docs/MONTHLY-ROUND.md"    # the owner's step-by-step guide; named in the sheet and in the messages
 HOW_TO = (
-    "Ask by hand. Open each chat app yourself. No program may open, read or copy from these apps: their terms forbid "
+    "This is your sheet for this month. It is about half an hour of copy and paste, and you cannot break anything: "
+    "nothing in this file is sent anywhere, and nothing is stored until you say so. The whole month, step by step, is in "
+    + GUIDE + ".",
+    "Do it by hand. Open each chat app yourself. No program may open, read or copy from these apps: their terms forbid "
     "automated access, and this software never contacts them.",
-    "Read each app's current terms before every monthly session: they change, and they decide whether you may publish "
-    "what the app wrote.",
-    "Recommended, and the same every month: a logged-in FREE account, with the app's temporary or private chat where it has "
-    "one (ChatGPT \"Temporary Chat\", Gemini \"Temporary chat\", Grok \"Private Chat\"). If the reply shows a \"Sources\" or "
-    "citations indicator, search was on: record web_search as on; if you switched search off, off; if you cannot tell, unknown.",
-    "Before you start an app, fill in its `conditions`. Choices: account = logged_out | free_account | paid_account; "
-    "fresh_chat = true (required: a new chat for every question); temporary_chat = true | false; "
-    "memory_off = true | false | \"not_applicable\"; web_search = on | off | unknown; country = two letters, e.g. US; "
-    "app = web | mobile | desktop; shown_model = the model name the app displays, or \"not shown\"; note = optional, short.",
-    "For every question: start a NEW chat, paste the text of `prompt` exactly, wait for the reply, copy the WHOLE reply "
-    "and paste it into `answer`.",
+    "Before you start, read each app's current terms. They change, and they decide whether you may publish what the app wrote.",
+    "Use the same setup every month: a logged-in FREE account and the app's temporary or private chat where it has one "
+    "(ChatGPT \"Temporary Chat\", Gemini \"Temporary chat\", Grok \"Private Chat\"), with memory off.",
+    "Fill in each app's `conditions` before you ask it anything. account: logged_out, free_account or paid_account. "
+    "fresh_chat: true (always: a new chat for every question). temporary_chat: true or false. memory_off: true, false or "
+    "\"not_applicable\". web_search: on, off or unknown (if the reply shows a \"Sources\" or citations marker, search was "
+    "on). country: two capital letters, like US. app: web, mobile or desktop. shown_model: the model name the app shows, or "
+    "\"not shown\". note: optional and short.",
+    "For every question: start a NEW chat, paste the `prompt` exactly as it is, wait for the reply, then copy the WHOLE "
+    "reply into `answer`.",
     "Paste the whole reply even if it is long; never trim or reword it. The page shortens the display, not the text.",
-    "A reply with several lines or with quotation marks is awkward to paste into this file. Save it as a plain text file "
-    "next to this file instead, and put that file's name in \"answer_file\" (leave `answer` empty).",
-    "If the app refused or dodged the question, add \"refused\": true (paste what it said into `answer` if you like; it is "
-    "stored and never shown). If you could not ask at all, leave `answer` empty and add \"skipped\": \"a short reason\". "
-    "The pages show only real answers and say that refusals and non-answers are left out.",
-    "Optional, per answer: \"screenshot\": \"file name of a screenshot you kept\". Only its sha256 fingerprint is stored, "
+    "A reply with line breaks or quotation marks will not sit nicely inside this file. Save it as a plain text file next to "
+    "this one and put that file's name in \"answer_file\" (leave `answer` empty).",
+    "If the app refused or dodged the question, that is fine and it happens: add \"refused\": true. You may paste what it "
+    "said into `answer`; it stays in your own database and is never published. If you could not ask at all, leave `answer` "
+    "empty and add \"skipped\": \"a short reason\". The site shows only real answers.",
+    "Optional, per answer: \"screenshot\": \"the file name of a screenshot you kept\". Only its sha256 fingerprint is stored, "
     "never the picture and never the file name.",
-    "If you did not ask one of the apps today, remove its whole block. Never remove single questions and never change a prompt.",
-    "Keep the conditions the same from month to month where you can (same account state, temporary chat where the app "
-    "has one, memory off, same country) and always record whether search was on.",
-    "The `human` block is optional: remove it if you collected no answers from people this time. It is for answers PEOPLE "
-    "wrote, which you collected yourself by hand (no program contacts Reddit or any other site). Before you publish other "
-    "people's words, say where you ask that replies may be quoted, and read that community's rules. `conditions`: source = "
-    "where, in a few plain words (e.g. \"Reddit thread\"; no link, no username); collected_on = YYYY-MM-DD; count = how "
-    "many replies you read (a number, or null). Per question: one short `answer` (one sentence, like the apps) and `kind` = "
-    "\"quoted\" (one person's words, copied exactly) or \"summarised\" (your own short summary of several replies), or "
-    "\"skipped\": \"reason\". No usernames, no @handles, no links: such a text is refused.",
-    "Then check the file without storing anything: python -m live_genesis.cli archive-chatbot-import THIS_FILE --dry-run",
+    "Did not ask one of the apps this time? Remove its whole block. Please never remove single questions and never change "
+    "a prompt.",
+    "The `human` block is optional: remove it if you have no answers from people this time. It is for answers PEOPLE wrote, "
+    "which you gathered yourself by hand (no program contacts Reddit or any other site). The working rule: post the question "
+    "yourself, say in the post that replies may be quoted or summed up on the site, and read that community's rules first. "
+    "`conditions`: source = where, in a few plain words (like \"Reddit thread\"; no link, no username); collected_on = "
+    "YYYY-MM-DD; count = how many replies you read (a number, or null). Per question: one short `answer` and `kind` = "
+    "\"summarised\" (your own short summary of several replies; prefer this) or \"quoted\" (one person's short, harmless "
+    "line, copied exactly), or \"skipped\": \"reason\". No usernames, no @handles, no links: such a text is refused.",
+    "When you are done, check the file. This stores nothing: python -m live_genesis.cli archive-chatbot-import THIS_FILE --dry-run",
 )
 
 TABLES = """
@@ -506,7 +509,7 @@ def _date(value: Any, what: str) -> datetime.date:
             raise ValueError
         return datetime.date.fromisoformat(value)
     except ValueError:
-        raise _refused(f"{what} must be a date written YYYY-MM-DD") from None
+        raise _refused(f"{what} must be a date written YYYY-MM-DD, for example 2026-12-01") from None
 
 
 def template(date: str | None = None) -> dict:
@@ -533,7 +536,8 @@ def write_template(out: str | Path | None, date: str | None = None) -> Path:
     data = template(date)
     target = Path(out) if out is not None else Path(f"chatbots-{data['collected_on']}.json")
     if target.exists():
-        raise _refused(f"{target} already exists; it was not overwritten. Choose another name with --out.")
+        raise _refused(f"{target} already exists, so it was left alone (it may hold replies you already pasted). "
+                       "Choose another name with --out, for example --out chatbots-2.json.")
     target.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     return target
 
@@ -575,26 +579,36 @@ def _beside(folder: Path, name: Any, limit: int) -> bytes | None:
         return None
 
 
+def _blank(value: Any) -> str:
+    """" (it is still empty)" for a value the owner has not filled in yet; never echoes what was written."""
+    return " (it is still empty)" if value in (None, "") else ""
+
+
 def _conditions(raw: Any, where: str, problems: list[str]) -> dict | None:
     if not isinstance(raw, dict) or set(raw) - set(CONDITION_KEYS) or any(key not in raw for key in CONDITION_KEYS[:-1]):
-        problems.append(f"{where}: conditions must hold exactly " + ", ".join(CONDITION_KEYS[:-1]) + " and optionally note")
+        problems.append(f"{where}: conditions must hold exactly " + ", ".join(CONDITION_KEYS[:-1]) + " and optionally note. "
+                        "A line was added or removed there: copy that block from a new sheet and fill it in again")
         return None
     before = len(problems)
     if raw["account"] not in ACCOUNTS:
-        problems.append(f"{where}: account must be one of " + " | ".join(ACCOUNTS))
+        problems.append(f"{where}: account must be one of " + " | ".join(ACCOUNTS) + _blank(raw["account"])
+                        + ". Write the one you used, in quotes")
     if raw["fresh_chat"] is not True:
-        problems.append(f"{where}: fresh_chat must be true. Every question is asked in a new chat; replies from one long "
-                        "chat are not accepted")
+        problems.append(f"{where}: fresh_chat must be true{_blank(raw['fresh_chat'])}. Every question needs a new chat of its "
+                        "own. If you asked them all in one long chat, please ask again, one new chat per question")
     if type(raw["temporary_chat"]) is not bool:
-        problems.append(f"{where}: temporary_chat must be true or false")
+        problems.append(f"{where}: temporary_chat must be true or false{_blank(raw['temporary_chat'])}, without quotes: true if "
+                        "you used the app's temporary or private chat")
     if type(raw["memory_off"]) is not bool and raw["memory_off"] != NOT_APPLICABLE:
-        problems.append(f'{where}: memory_off must be true, false or "{NOT_APPLICABLE}"')
+        problems.append(f'{where}: memory_off must be true, false or "{NOT_APPLICABLE}"{_blank(raw["memory_off"])}: true if the '
+                        "app's memory was switched off")
     if raw["web_search"] not in SEARCH:
-        problems.append(f"{where}: web_search must be one of " + " | ".join(SEARCH))
+        problems.append(f"{where}: web_search must be one of " + " | ".join(SEARCH) + _blank(raw["web_search"])
+                        + ". If the reply showed sources write on; if you cannot tell, unknown")
     if not isinstance(raw["country"], str) or not COUNTRY.fullmatch(raw["country"]):
-        problems.append(f"{where}: country must be two capital letters, e.g. US")
+        problems.append(f"{where}: country must be two capital letters, e.g. US{_blank(raw['country'])}: the country you asked from")
     if raw["app"] not in APPS:
-        problems.append(f"{where}: app must be one of " + " | ".join(APPS))
+        problems.append(f"{where}: app must be one of " + " | ".join(APPS) + _blank(raw["app"]) + ": where you used it")
     if not _line_ok(raw["shown_model"], SHOWN_MODEL_CHARS):
         problems.append(f'{where}: shown_model must be 1-{SHOWN_MODEL_CHARS} plain characters on one line: the model name the '
                         'app displays, or "not shown"')
@@ -619,16 +633,18 @@ def _question_of(raw: Any, where: str, keys: set, prompts: dict[str, dict], prob
     """(question id, place) of one answer entry whose question and prompt are right, or None (problem noted)."""
     if not isinstance(raw, dict) or set(raw) - keys or not isinstance(raw.get("question"), str):
         problems.append(f"{where}: an answer entry must hold question, prompt, answer and optionally "
-                        + ", ".join(sorted(keys - {"question", "prompt", "answer"})))
+                        + ", ".join(sorted(keys - {"question", "prompt", "answer"}))
+                        + ". Something else is written there: take it out")
         return None
     question_id = raw["question"]
     where = f"{where}, {question_id if CHAT_QUESTION_ID.fullmatch(question_id) else 'an unknown question'}"
     if question_id not in prompts:
-        problems.append(f"{where}: not one of the questions in {CONFIG_FILE.name}")
+        problems.append(f"{where}: not one of the questions in {CONFIG_FILE.name}. Question ids must stay as they are: "
+                        "make a new sheet and paste your replies into it")
         return None
     if raw.get("prompt") != prompts[question_id]["prompt"]:
-        problems.append(f"{where}: the prompt in the file is not the prompt of {CONFIG_FILE.name}. It must not be edited; "
-                        "make a new template")
+        problems.append(f"{where}: the prompt in the file is not the prompt of {CONFIG_FILE.name}. A prompt must stay exactly "
+                        "as written: make a new sheet and paste your replies into it")
         return None
     return question_id, where
 
@@ -640,22 +656,24 @@ def _answer(raw: Any, where: str, folder: Path, prompts: dict[str, dict], proble
     question_id, where = found
     text, named, skipped, refused = raw.get("answer", ""), raw.get("answer_file", ""), raw.get("skipped", ""), raw.get("refused", False)
     if not isinstance(text, str) or not isinstance(named, str) or not isinstance(skipped, str):
-        problems.append(f"{where}: answer, answer_file and skipped must be text")
+        problems.append(f"{where}: answer, answer_file and skipped must be text, in quotes")
         return None
     if type(refused) is not bool:
-        problems.append(f"{where}: refused must be true or false")
+        problems.append(f"{where}: refused must be true or false, without quotes")
         return None
     given = [bool(text.strip()), bool(named.strip()), bool(skipped.strip())]
     if sum(given) > 1 or (not any(given) and not refused) or (refused and given[2]):
         problems.append(f"{where}: give exactly one of answer, answer_file or skipped"
-                        + (" (all are empty)" if not any(given) else "") + '; "refused": true may stand alone or with the reply')
+                        + (" (all are empty: paste the reply, or add \"refused\": true, or say in skipped why you could not ask)"
+                           if not any(given) else " (more than one is filled in: keep one)")
+                        + '. "refused": true may stand alone or with the reply')
         return None
     screenshot_hash = None
     if raw.get("screenshot") not in ("", None):
         picture = _beside(folder, raw["screenshot"], MAX_SCREENSHOT_BYTES)
         if picture is None:
             problems.append(f"{where}: the screenshot file was not found, is not a plain file or is larger than "
-                            f"{MAX_SCREENSHOT_BYTES // 1_000_000} MB")
+                            f"{MAX_SCREENSHOT_BYTES // 1_000_000} MB. Check its name, or take the screenshot line out")
             return None
         screenshot_hash = hashlib.sha256(picture).hexdigest()
     if given[2]:
@@ -675,10 +693,10 @@ def _answer(raw: Any, where: str, folder: Path, prompts: dict[str, dict], proble
             text = None
         if text is None:
             problems.append(f"{where}: the answer_file was not found, is not plain UTF-8 text or is larger than "
-                            f"{MAX_REPLY_FILE_BYTES // 1000} kB")
+                            f"{MAX_REPLY_FILE_BYTES // 1000} kB. Check its name; it should sit in the same folder as this sheet")
             return None
         if not text.strip():
-            problems.append(f"{where}: the answer_file is empty")
+            problems.append(f"{where}: the answer_file is empty. Paste the whole reply into it and save")
             return None
     state, reason, kept = classify_reply(text)
     return {"question": question_id, "state": state, "reason": reason, "text": kept, "chars": len(text.strip()),
@@ -705,7 +723,7 @@ def _human_conditions(raw: Any, day: datetime.date, problems: list[str]) -> dict
         problems.append(str(err))
     count = raw["count"]
     if count is not None and (type(count) is not int or not 1 <= count <= 100_000):
-        problems.append("human: count must be a whole number of replies read, or null")
+        problems.append("human: count must be a whole number of replies read, or null if you did not count")
     if len(problems) != before:
         return None
     return {"source": source.strip(), "collected_on": collected.isoformat(), "count": count}
@@ -721,7 +739,8 @@ def _human_answer(raw: Any, prompts: dict[str, dict], problems: list[str]) -> di
         problems.append(f"{where}: answer, kind and skipped must be text")
         return None
     if bool(text.strip()) == bool(skipped.strip()):
-        problems.append(f"{where}: give exactly one of answer or skipped")
+        problems.append(f"{where}: give exactly one of answer or skipped: write one short answer, or say in skipped why "
+                        "there is none")
         return None
     if skipped.strip():
         if not _line_ok(skipped, SKIP_CHARS):
@@ -734,11 +753,21 @@ def _human_answer(raw: Any, prompts: dict[str, dict], problems: list[str]) -> di
         return None
     looks = handle_or_link(text)
     if looks:
-        problems.append(f"{where}: the answer holds a {looks}. No usernames, handles or links in an answer written by people")
+        problems.append(f"{where}: the answer holds a {looks}. No usernames, handles or links in an answer written by people: "
+                        "take it out, or sum the replies up in your own words")
         return None
     state, reason, kept = classify_reply(text, HUMAN_CHARS)
     return {"question": question_id, "state": state, "reason": reason, "text": kept, "chars": len(text.strip()),
             "manner": manner if state == "answered" else None}
+
+
+def _untouched(conditions: Any, entries: Any) -> bool:
+    """Whether a chat-app block is exactly as the template wrote it: no condition filled in and no reply given."""
+    if not isinstance(conditions, dict) or not isinstance(entries, list) or not entries:
+        return False
+    return all(value in (None, "") for value in conditions.values()) and all(
+        isinstance(entry, dict) and not any(entry.get(key) for key in ("answer", "answer_file", "skipped", "refused", "screenshot"))
+        for entry in entries)
 
 
 def read_collection(path: str | Path, config: dict, *, allow_old: bool = False) -> dict:
@@ -761,25 +790,29 @@ def read_collection(path: str | Path, config: dict, *, allow_old: bool = False) 
         raw_bytes = source.read_bytes()
         raw = _load_json(raw_bytes)
     except (OSError, ValueError) as err:
-        raise _refused(f"{source.name} is missing, larger than {MAX_FILE_BYTES // 1_000_000} MB or not valid JSON "
-                       f"({type(err).__name__}). A reply with line breaks or quotation marks cannot be pasted into a JSON "
-                       "text as it is: save it as a text file and name it in \"answer_file\". Nothing was stored.") from None
+        raise _refused(f"{source.name} could not be read: it is missing, larger than {MAX_FILE_BYTES // 1_000_000} MB or not "
+                       f"valid JSON ({type(err).__name__}). If the file is there, the usual cause is a reply with line breaks or "
+                       "quotation marks pasted straight in: save that reply as a text file next to the sheet and name it in "
+                       "\"answer_file\". A missing comma or quote does it too. Nothing was stored.") from None
     if not isinstance(raw, dict) or raw.get("format") != FILE_FORMAT:
-        raise _refused(f'{source.name} is not a chat-app collection file (format must be "{FILE_FORMAT}"; make a new '
-                       "template if it was written by an older version). Nothing was stored.")
+        raise _refused(f'{source.name} is not a chat-app collection file (format must be "{FILE_FORMAT}"). If it came from '
+                       "an older version, make a new sheet with archive-chatbot-template and paste your replies into it. "
+                       "Nothing was stored.")
     if set(raw) - {"format", "how_to", "collected_on", "chatbots", "human"}:
-        raise _refused(f"{source.name}: top level must hold format, how_to, collected_on, chatbots and human only. Nothing was stored.")
+        raise _refused(f"{source.name}: top level must hold format, how_to, collected_on, chatbots and human only. Something "
+                       "else was added at the top of the file: take it out. Nothing was stored.")
     day = _date(raw.get("collected_on"), f"{source.name}: collected_on")
     now = today()
     if day > now:
-        raise _refused(f"{source.name}: collected_on {day} is in the future. Nothing was stored.")
+        raise _refused(f"{source.name}: collected_on {day} is in the future. Write the day you actually asked. "
+                       "Nothing was stored.")
     if (now - day).days > MAX_AGE_DAYS and not allow_old:
-        raise _refused(f"{source.name}: collected_on {day} is more than {MAX_AGE_DAYS} days ago. If the date is right, "
-                       "repeat with --allow-old. Nothing was stored.")
+        raise _refused(f"{source.name}: collected_on {day} is more than {MAX_AGE_DAYS} days ago. If that really is the day you "
+                       "asked, run the same command again with --allow-old at the end. Nothing was stored.")
     listed, person = raw.get("chatbots", []), raw.get("human")
     if not isinstance(listed, list) or (not listed and person is None):
         raise _refused(f"{source.name}: chatbots must list at least one chat app, or the file must hold the human block. "
-                       "Nothing was stored.")
+                       "This file has neither: make a new sheet. Nothing was stored.")
     known = {c["label"]: c for c in config["chatbots"]}
     order = {question_id: n for n, question_id in enumerate(config["questions"])}
     problems: list[str] = []
@@ -793,17 +826,25 @@ def read_collection(path: str | Path, config: dict, *, allow_old: bool = False) 
     for item in listed:
         if not isinstance(item, dict) or set(item) - {"chatbot", "name", "maker", "conditions", "answers"} \
                 or not isinstance(item.get("chatbot"), str):
-            problems.append("a chat-app block must hold chatbot, name, maker, conditions and answers only")
+            problems.append("a chat-app block must hold chatbot, name, maker, conditions and answers only. Something else is "
+                            "written in one of them: take it out")
             continue
         label = item["chatbot"]
         if label not in known:
-            problems.append("a chat-app block names a label that is not in " + CONFIG_FILE.name)
+            problems.append("a chat-app block names an app that is not in " + CONFIG_FILE.name + ". The \"chatbot\" lines "
+                            "must stay as the sheet wrote them")
             continue
         if any(c["label"] == label for c in chatbots):
-            problems.append(f"{label}: listed twice")
+            problems.append(f"{label}: listed twice. Keep one block for each app")
+            continue
+        entries = item.get("answers")
+        if _untouched(item.get("conditions"), entries):
+            # One kind line for a block nobody has started, instead of one line per empty field.
+            problems.append(f"{label}: this block is still blank. Fill in its conditions and paste the replies, or remove the "
+                            "whole block if you did not ask this app")
+            chatbots.append({**known[label], "conditions": None, "answers": []})
             continue
         conditions = _conditions(item.get("conditions"), label, problems)
-        entries = item.get("answers")
         if not isinstance(entries, list):
             problems.append(f"{label}: answers must be a list")
             continue
@@ -814,7 +855,13 @@ def read_collection(path: str | Path, config: dict, *, allow_old: bool = False) 
     human = None
     if person is not None:
         if not isinstance(person, dict) or set(person) - {"name", "conditions", "answers"} or not isinstance(person.get("answers"), list):
-            problems.append("the human block must hold name, conditions and answers only")
+            problems.append("the human block must hold name, conditions and answers only. Something else is written there: "
+                            "take it out")
+        elif isinstance(person.get("conditions"), dict) and person["conditions"].get("source") in (None, "") and person["answers"] \
+                and all(isinstance(entry, dict) and not any(entry.get(key) for key in ("answer", "kind", "skipped"))
+                        for entry in person["answers"]):
+            problems.append("human: this block is still blank. Fill it in, or remove the whole human block if you have no "
+                            "answers from people this time")
         else:
             conditions = _human_conditions(person.get("conditions"), day, problems)
             answers = [found for found in (_human_answer(entry, config["prompts"], problems) for entry in person["answers"])
@@ -823,7 +870,9 @@ def read_collection(path: str | Path, config: dict, *, allow_old: bool = False) 
             human = {"conditions": conditions, "answers": sorted(answers, key=lambda a: order[a["question"]])}
     if problems:
         shown = problems[:20] + ([f"... and {len(problems) - 20} more"] if len(problems) > 20 else [])
-        raise _refused(f"{source.name} was refused; nothing was stored:\n  " + "\n  ".join(shown))
+        raise _refused(f"{source.name} is not ready yet, and nothing was stored. That is what this check is for. "
+                       f"Fix {'this' if len(problems) == 1 else 'these'} in the file and run the same command again:\n  "
+                       + "\n  ".join(shown))
     return {"collected_on": day.isoformat(), "file_sha256": hashlib.sha256(raw_bytes).hexdigest(), "chatbots": chatbots,
             "human": human}
 
@@ -951,7 +1000,8 @@ def import_collection(path: str | Path, *, dry_run: bool = False, allow_old: boo
         cx.execute("BEGIN IMMEDIATE")
         if archive._has(cx, "demo") or _has_run(cx, DEMO):
             raise _refused("This database holds scripted demo answers; hand-entered replies are never mixed with them. "
-                           "Use the real database. Nothing was stored.")
+                           "Point LIVE_DB at your real database (or at a new, empty file) and run the command again. "
+                           "Nothing was stored.")
         problem = questions_problem(cx, config)
         if problem:
             raise _refused(f"{problem}. Nothing was stored.")
@@ -960,16 +1010,19 @@ def import_collection(path: str | Path, *, dry_run: bool = False, allow_old: boo
                                 "ON r.id=c.run_id WHERE c.chatbot=? AND r.kind='manual'", (chatbot["label"],)).fetchone()[0]
             if latest == day:
                 raise _refused(f"{chatbot['label']} already has a hand-entered run dated {day}. One run per chat app and day; "
-                               "a stored reply is never replaced. Nothing was stored.")
+                               "a stored reply is never replaced. If this sheet is a new month, correct collected_on at the "
+                               "top of it; if you imported it already, there is nothing more to do. Nothing was stored.")
             if latest is not None and latest > day:
                 raise _refused(f"{chatbot['label']} already has a hand-entered run dated {latest}, after {day}. A chat app's "
-                               "dates only move forward. Nothing was stored.")
+                               "dates only move forward, so an earlier month cannot be added now. Check collected_on at the "
+                               "top of the sheet. Nothing was stored.")
         if collection["human"]:
             latest = cx.execute("SELECT MAX(r.collected_on) FROM archive_human_collections c JOIN archive_chatbot_runs r "
                                 "ON r.id=c.run_id WHERE r.kind='manual'").fetchone()[0]
             if latest is not None and latest >= day:
                 raise _refused(f"Human answers already have a hand-entered run dated {latest}. One collection per day, and the "
-                               "dates only move forward. Nothing was stored.")
+                               "dates only move forward. Check collected_on at the top of the sheet, or take the human block "
+                               "out if it is already stored. Nothing was stored.")
         first = not _has_run(cx, MANUAL)
         summary = {"dry_run": dry_run, "collected_on": day, "imported_at": imported_at, "questions": config["questions"],
                    "config_sha256": config["sha256"], "first_import": first, "chatbots": []}
@@ -1157,6 +1210,26 @@ HUMAN_ANSWER_KEYS_PUBLIC = ("id", "run", "question", "source", "state", "reason"
 LEGACY_HUMAN_META = {"written by people · collected by hand": "written by people"}
 
 
+def _public_reason(reason: str) -> str:
+    """A skipped question is published as "skipped" alone: the owner's note behind it stays in the database
+    (it may say what the app wrote instead of answering)."""
+    return SKIPPED if reason.startswith(SKIPPED) else reason
+
+
+def _public_answer(row: dict, run_number: int) -> dict:
+    """One stored chat-app answer as the public payload carries it. A reply the owner marked as a refusal
+    is published as the FACT only (decided by default, 15 November 2026): `refused` true, state
+    `no_answer`, reason "refused" and no text, whether or not the owner pasted what the app said. The
+    words stay in the database row, which is never changed. The shape is the one a refusal stored
+    without its words always had, so the schema markers are unchanged."""
+    refused = bool(row["refused"])
+    return {"id": row["id"], "run": run_number, "question": row["question_id"], "chatbot": row["chatbot"],
+            "source": row["source"], "state": "no_answer" if refused else row["state"],
+            "reason": REFUSED if refused else _public_reason(row["reason"]), "text": None if refused else row["answer_text"],
+            "changed": None if row["changed"] is None else bool(row["changed"]), "screenshot_hash": row["screenshot_sha256"],
+            "refused": refused}
+
+
 def public_block(cx, tables: set[str]) -> dict | None:
     """The chat-app track for the pages and the export, or None when the database holds no such run (the
     payload then has no `chatbots` key at all and is what it always was). Runs are ordered by the day
@@ -1165,7 +1238,8 @@ def public_block(cx, tables: set[str]) -> dict | None:
     group. `questions` are the recorded questions (id, text, prompt, hook, added); `human` is
     the Human column's wording ({name, meta}) or None when no human answer was ever collected; each run
     carries the apps' `conditions` and `human` ({source, collected_on, count} or None). A reply the owner
-    marked as a refusal is here (`refused`: true) and on no page. Never the imported file's hash or any
+    marked as a refusal is here as a fact (`refused`: true, no text; `_public_answer`) and on no page; a
+    skipped question carries the owner's short reason, never a reply. Never the imported file's hash or any
     path; a screenshot is its sha256 only."""
     if not set(TABLE_NAMES) <= tables:
         return None
@@ -1201,15 +1275,12 @@ def public_block(cx, tables: set[str]) -> dict | None:
                           "ORDER BY r.collected_on,r.number"):
         collected[row["run_id"]] = {"source": row["source"], "collected_on": row["collected_on"], "count": row["replies"]}
         human = {"name": row["display_name"], "meta": LEGACY_HUMAN_META.get(row["meta"], row["meta"])}   # the newest run's wording
-    answers = [{"id": a["id"], "run": number[a["run_id"]], "question": a["question_id"], "chatbot": a["chatbot"],
-                "source": a["source"], "state": a["state"], "reason": a["reason"], "text": a["answer_text"],
-                "changed": None if a["changed"] is None else bool(a["changed"]), "screenshot_hash": a["screenshot_sha256"],
-                "refused": bool(a["refused"])}
+    answers = [_public_answer(a, number[a["run_id"]])
                for a in (dict(r) for r in cx.execute(
                    "SELECT a.* FROM archive_chatbot_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id "
                    "ORDER BY r.collected_on,r.number,a.id")) if a["run_id"] in number]
     human_answers = [{"id": a["id"], "run": number[a["run_id"]], "question": a["question_id"], "source": a["source"],
-                      "state": a["state"], "reason": a["reason"], "text": a["answer_text"], "manner": a["manner"],
+                      "state": a["state"], "reason": _public_reason(a["reason"]), "text": a["answer_text"], "manner": a["manner"],
                       "changed": None if a["changed"] is None else bool(a["changed"])}
                      for a in (dict(r) for r in cx.execute(
                          "SELECT a.* FROM archive_human_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id "
@@ -1336,6 +1407,8 @@ def block_problem(block: Any, question_ids: set[str] | None = None) -> str | Non
             return "chatbots: an answer's text does not fit its state or is longer than the archive stores"
         if answer["refused"] and answer["changed"] is not None:
             return "chatbots: a refused reply carries a changed flag"
+        if answer["refused"] and (answer.get("text") is not None or answer["state"] != "no_answer"):
+            return "chatbots: a refused reply carries its words; only the fact that it was refused is published"
         shot = answer.get("screenshot_hash")
         if shot is not None and not (isinstance(shot, str) and HASH.fullmatch(shot)):
             return "chatbots: a screenshot is not given as a sha256 hash"
@@ -1463,8 +1536,38 @@ def status(cx) -> dict:
 # ---- CLI glue ---------------------------------------------------------------------------------------------
 
 COMMANDS = ("archive-chatbot-template", "archive-chatbot-import")
-IMPORT_NOTE = ("Entered by hand: these replies cannot be verified and are labelled so on every page. They are published "
-               "only through the reviewed path: python -m live_genesis.snapshot --export --archive-only")
+IMPORT_NOTE = ("Nothing is public yet. The replies are in your own database only. To publish them you export, read every answer "
+               f"and approve: {GUIDE} walks through it.")
+
+
+def summary_lines(done: dict) -> list[str]:
+    """The import summary in plain words, one line per app and one for the human block: counts and categories only,
+    never the text of a reply."""
+    lines = []
+
+    def held(rows: list[dict]) -> str:
+        reasons = sorted({row["reason"] for row in rows if row["state"] == "withheld"})
+        return f" ({', '.join(reasons)})" if reasons else ""
+    for app in done["chatbots"]:
+        rows, counts = app["rows"], app["answers"]
+        empty = sum(1 for row in rows if row["state"] == "no_answer" and not row["refused"]) - app["skipped"]
+        parts = [f"{app['shown']} of {len(rows)} answers will show", f"{app['refused']} refused", f"{app['skipped']} skipped"]
+        if counts["withheld"]:
+            parts.append(f"{counts['withheld']} held back by the content check{held(rows)}")
+        if empty:
+            parts.append(f"{empty} empty or too long")
+        lines.append(f"  {app['chatbot']}: " + ", ".join(parts))
+    if "human" in done:
+        rows, counts = done["human"]["rows"], done["human"]["answers"]
+        parts = [f"{counts['answered']} of {len(rows)} answers will show"]
+        if counts["withheld"]:
+            parts.append(f"{counts['withheld']} held back by the content check{held(rows)}")
+        if counts["no_answer"]:
+            parts.append(f"{counts['no_answer']} skipped, empty or too long")
+        lines.append("  human: " + ", ".join(parts))
+    else:
+        lines.append("  human: no human block in this file")
+    return lines
 
 
 def add_parsers(sub) -> None:
@@ -1481,18 +1584,22 @@ def handle_command(args) -> None:
     """Run one of COMMANDS; ArchiveRefused is left to the caller. Prints counts and lengths, never a reply."""
     if args.command == "archive-chatbot-template":
         target = write_template(args.out, args.date)
-        print(f"Template written to {target}. Nothing was contacted and nothing was stored.")
+        print(f"Template written to {target}. This is your sheet for the month. Nothing was contacted and nothing was stored.")
         print("Fill it in BY HAND: open each chat app yourself, a new chat for every question, paste the prompt exactly, "
-              "copy the whole reply. Never use a program to collect replies.")
-        print(f"Then: python -m live_genesis.cli archive-chatbot-import {target} --dry-run")
+              "copy the whole reply. Never use a program to collect replies. The notes at the top of the sheet say how; "
+              f"{GUIDE} has every step.")
+        print(f"When it is filled in, check it (this stores nothing): python -m live_genesis.cli archive-chatbot-import {target} --dry-run")
         return
     done = import_collection(args.file, dry_run=args.dry_run, allow_old=args.allow_old)
     print(json.dumps(done, indent=1))
     if done["dry_run"]:
-        print("DRY RUN: the file passed every check. Nothing was stored. Repeat without --dry-run to store it.")
+        print("DRY RUN: the file passed every check. Nothing was stored.")
+        print("\n".join(summary_lines(done)))
+        print("If those numbers look right, run the same command again without --dry-run to store it.")
         return
-    print(f"Stored as hand-entered run {done['run']}, collected {done['collected_on']}. Recorded in the operator audit log.")
+    print(f"Done. Stored as hand-entered run {done['run']}, collected {done['collected_on']}. Recorded in the operator audit log.")
+    print("\n".join(summary_lines(done)))
     if done["first_import"]:
-        print(f"This was the first hand-entered import: from now on the questions in {CONFIG_FILE.name} may only be added to; "
-              "a recorded question never changes.")
+        print(f"This was your first import, so the question list is now fixed: you can add questions to {CONFIG_FILE.name}, "
+              "but a recorded question never changes.")
     print(IMPORT_NOTE)

@@ -173,7 +173,7 @@ def test_the_headline_and_copy_are_counted_from_the_data(chat, tmp_path, monkeyp
     assert headline(payload) == ['Same question.', 'Five AI apps.', 'One human.']
     front = archive_pages.render_index(payload)
     assert 'Same question. Five AI apps. One human.' in visible(front) and 'Three' not in visible(front)
-    assert '<ol class="steps"><li>4 questions</li><li>Same words every month</li><li>Every answer kept</li></ol>' in front
+    assert '<ol class="steps"><li>4 questions</li><li>Same words every month</li><li>Every reply kept</li></ol>' in front
     block = payload['chatbots']
     one = json.loads(json.dumps(payload))
     one['chatbots'].update(apps=block['apps'][:1], human=None, human_answers=[],
@@ -215,7 +215,7 @@ def test_two_groups_a_switch_on_the_front_page_and_one_thread_per_group_on_a_que
     front, page, method = pages['index.html'], pages['c/C001.html'], pages['chatbots.html']
     # The headline is neutral and counted; the groups are named in the lede.
     assert 'Same question. Eleven chatbots in two groups. One human.' in visible(front) and 'AI apps.' not in visible(front)
-    assert 'AI chat apps and Help-desk bots. Asked again every month.' in visible(front)
+    assert 'AI chat apps and Help-desk bots. We ask again every month and keep every reply.' in visible(front)
     # The group switch: one radio per group, the first checked, labels with the name and a count. No script.
     assert front.count('<input class="g-radio" type="radio" name="group"') == 2
     assert '<input class="g-radio" type="radio" name="group" id="grp-1" checked />' in front and front.count(' checked />') == 1
@@ -288,7 +288,7 @@ def test_a_group_added_later_starts_as_new_columns_from_its_first_month(chat, tm
     assert re.findall(r'<h3 class="thread-name">([^<]+)</h3>', older) == ['AI chat apps', 'Human']       # not asked then: no empty thread
     assert older.count('<article class="acard') == 4 and newest.count('<article class="acard') == 6
     assert page.count('>not asked</td>') == 2                                             # the table says so, once per new column
-    assert 'aria-label="Sample bot D: no change; 1 check"' in archive_pages.render_index(payload)
+    assert 'aria-label="Sample bot D: no change; asked once"' in archive_pages.render_index(payload)
 
 
 # ---- share cards: at most four bubbles, more answerers on further cards ------------------------------------------

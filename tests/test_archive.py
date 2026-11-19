@@ -480,7 +480,7 @@ def test_replaced_infer_and_dry_run_are_mock_and_never_public(ready, monkeypatch
     assert payload['answers'] == [] and payload['runs'] == [] and payload['answerers'] == [] and payload['demo_only'] is True
     pages = archive_pages.render_site(payload)
     assert not any('MOCKED-REPLY' in page or 'DRY-RUN' in page for page in pages.values())
-    assert 'No answers recorded yet' in pages['index.html']
+    assert 'No answers yet' in pages['index.html']
     # A real run numbers from 1 regardless of mock runs, and mock rows never reach an export.
     archive.lock()
     as_real(monkeypatch, 'Seven.')
@@ -669,15 +669,15 @@ def test_pages_for_the_demo_archive(ready):
         assert 'no payments' in page.lower()
         if not name.startswith('card/'):
             assert f'<a class="skip" href="{name.rsplit("/", 1)[-1]}#main">' in page and '<header class="bar">' in page and '<main id="main"' in page, name
-            assert 'READ-ONLY ARCHIVE' not in page and 'Read-only archive.' in page
+            assert 'READ-ONLY ARCHIVE' not in page and 'Read-only. No payments. Just answers.' in page
     # The model list: every core question with each model's newest answer inline and a timeline that says WHEN it changed.
-    assert 'The same questions, straight to the models.' in models and 'How the record is kept' in models
-    assert 'It does not say which answer is right.' in models and 'one square per check, oldest first' in models
+    assert 'The same questions, straight to the models.' in models and 'How we keep track' in models
+    assert 'It does not say which answer is right.' in models and 'one square each time we asked, oldest first' in models
     assert models.count('class="timeline"') == 60 and models.count('role="img"') == 60
     assert models.count('<h3 class="row-q"><a href="q/') == 20 and models.count('class="mini-text"') == 60
-    assert 'aria-label="model-a: changed Aug 2026 and Nov 2026; 8 checks"' in models
-    assert 'aria-label="model-c: changed Jun 2026; no answer Sep 2026; 8 checks"' in models
-    assert 'aria-label="model-a: no change; 8 checks"' in models
+    assert 'aria-label="model-a: changed Aug 2026 and Nov 2026; asked 8 times"' in models
+    assert 'aria-label="model-c: changed Jun 2026; no answer Sep 2026; asked 8 times"' in models
+    assert 'aria-label="model-a: no change; asked 8 times"' in models
     assert [g for g in ('Everyday facts', 'Health and home', 'Right now', 'About the AI') if f'<h2>{g}</h2>' in models] == \
         ['Everyday facts', 'Health and home', 'Right now', 'About the AI']
     assert 'href="q/Q11.html"' in models and 'archive-mark.svg?v=' in models and 'rel="icon"' in models
@@ -699,17 +699,17 @@ def test_pages_for_the_demo_archive(ready):
     # Per-cell and per-row repeats are gone from the cards; the labels live in the closed block and in the attributes.
     assert 'scripted' not in re.sub(r'<[^>]*>', '', cards).lower() and 'model-a-2' not in re.sub(r'<[^>]*>', '', cards)
     assert cards.count('data-method="scripted-sample" data-provenance="scripted-sample"') == 23 and 'data-version="model-a-2"' in cards
-    assert '<details><summary>Where each answer came from</summary>' in date
+    assert '<details><summary>The details behind each answer</summary>' in date
     assert 'version model-a-2 · new version: version changed from model-a-1 to model-a-2' in date
     # Changed shown inline: what it was before, with its month.
     assert ('<span class="before-when mono">Before · <time datetime="2026-10-01">Oct 2026</time></span>'
             'It is probably some time in 2026.</p>') in date
-    assert '<summary>History · 2 changes</summary>' in date and 'Aug–Oct 2026 · 3 checks' in date
+    assert '<summary>History · 2 changes</summary>' in date and 'Aug–Oct 2026 · asked 3 times' in date
     # What changed: a real table with headers; an unchanged cell is one short line.
     assert '<table class="history" role="table">' in date and '<caption>' in date and date.count('<th scope="col" role="columnheader">') == 4
-    assert date.count('<th scope="row" role="rowheader"><time datetime="') == 8 and '>same as before</td>' in date
+    assert date.count('<th scope="row" role="rowheader"><time datetime="') == 8 and '>same again</td>' in date
     assert date.count('<span class="t-word mono">changed</span>') == 3 and date.count('<span class="t-word mono">first answer</span>') == 3
-    assert '<details><summary>Exactly what we asked</summary><pre class="prompt mono">Answer in one or two sentences.\n\nWhat is today&#x27;s date?</pre>' in date
+    assert '<details><summary>The exact words we used</summary><pre class="prompt mono">Answer in one or two sentences.\n\nWhat is today&#x27;s date?</pre>' in date
     assert '<details><summary>Why we ask this</summary>' in date and ' open' not in date.split('<section class="more-info">')[1]
     assert re.search(r'href="\.\./\.\./static/archive\.css\?v=[0-9a-f]{12}"', date) and 'href="../models.html"' in date
     for gone in ('class="side"', 'grid-scroll', 'class="grid n-', 'scripted date', 'class="legend"', 'What moved', 'The exact prompt'):

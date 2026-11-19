@@ -21,7 +21,20 @@ The decisions above are built and merged: three apps (ChatGPT, Gemini, Grok) and
 
 Added after the owner chose mock-up A, "Group chat" (and said not to stop at three chatbots): every Answers Over Time page has the Group chat look (threads in panes, a bubble with a mark and a name per answerer, the Human on the right in a dark bubble, the earlier answer struck through above a changed one); nothing assumes three apps (up to 24, in up to six answerer groups; `"groups"` and `"group"` in `archive_chatbots.json`, format `/3`); a later group of chatbots is a configuration addition and starts as new columns from its first month; share cards hold at most four bubbles and paginate. All groups are asked the same questions; a question list per group is not built. Details: `docs/ANSWERS-OVER-TIME.md`, "Answerer groups".
 
-Still the owner's to decide: the Reddit quoting rule (before the first human answer is imported); whether a refused reply's words may stay in the published data files (they are on no page); the wording and place of the Copilot joke (one line on the "How it works" page, marked as a joke); whether hooks stay frozen with their question; the name.
+### Decided by default on 15 November 2026; the owner can change them
+
+The owner said "do what you feel right", so these were settled by the coding session. Each is a default, not a ruling: say the word and it changes.
+
+1. **A refused or skipped reply's words are not published.** They stay in the private database (append-only, unchanged). The pages, `archive.json` and the data files carry only the fact that there was no answer (`"refused": true`, no text; a skipped one says `skipped`, without the note). `--check` refuses a file in which a refused reply still has its words. The schema markers did not change: the shape is the one a refusal stored without its words always had.
+2. **The Human column's working rule.** The owner posts the question themselves and says in the post that replies may be quoted or summed up on the site; no usernames, handles or links are ever copied; prefer a summary of the thread over quoting one person; quote only short, harmless lines; follow each community's rules; nothing is collected by software. Written out in `docs/ANSWERS-OVER-TIME.md` ("Other people's words: the working rule") and `docs/MONTHLY-ROUND.md` (step 7).
+3. **The accent stays indigo.**
+4. **Hooks stay fixed with their question** (a hook is part of the question's recorded hash, as built).
+5. **The Copilot line stays where it is**, once, on "How it works" of a real archive, marked "Joke", in the owner's own words. It was not reworded: it is the owner's line, and the mark says how to read it.
+6. **The public copy was rewritten in a friendlier voice** (pages, cards, footer, the sheet's notes, the import messages). The honesty labels are all still there, each said once per page; the footer no longer reads "Part of LIVE Genesis".
+
+The owner's step-by-step guide for the monthly round is `docs/MONTHLY-ROUND.md`.
+
+Still the owner's to decide: the name.
 
 ### State when these decisions were made
 
@@ -83,6 +96,7 @@ Done when: the full test suite passes, the pages are clean in a browser at phone
 5. Create the TikTok and Instagram accounts under the chosen name.
 
 ### Phase 3: first collection (owner, about half an hour)
+The steps, one action at a time, with what you should see after each: `docs/MONTHLY-ROUND.md`.
 1. `archive-chatbot-template` writes the sheet.
 2. Ask: one new chat per question, paste the prompt exactly, copy the whole reply, do not edit. Keep a private screenshot of each.
 3. `archive-chatbot-import --dry-run`, then the import.
@@ -109,7 +123,7 @@ Nothing here calls a model or costs money. The exact command names are confirmed
 | Name | Owner | Before the first post |
 | ~~Keep Copilot~~ | Decided: dropped | 14 Nov |
 | ~~Logged in or out~~ | Decided: logged in | 14 Nov |
-| How Reddit answers are collected and quoted | Owner | Before the first human answer is imported |
+| ~~How Reddit answers are collected and quoted~~ | Decided by default (see above); the owner can change it | 15 Nov |
 | ~~What to do with the question T004~~ | Decided: removed | 14 Nov |
 | Whether to build an on-site vote | Owner | After there are visitors |
 

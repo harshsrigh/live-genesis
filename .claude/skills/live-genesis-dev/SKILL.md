@@ -16,7 +16,7 @@ A public static site that puts the same questions to consumer chat apps (ChatGPT
 3. Scripted (`demo`), server-asked (`engine`), older self-declared (`api`) and hand-entered (`manual`) answers stay separately labelled. `mock` answers are never shown or exported. A scripted sample is never presented as a real answer.
 4. Only the owner runs `snapshot --export` and `--approve`. Never approve for them.
 5. The public site and the export hold the chat-app track only. Nothing of the model track is published.
-6. Pages carry no script and no inline style; every value goes through `archive_pages.esc`. Keep the honesty labels. The published pages do not say how replies were collected.
+6. Pages carry no script and no inline style; every value goes through `archive_pages.esc`. Keep the honesty labels. The published pages do not say how replies were collected. A refusal is published without its words (`archive_chatbots._public_answer`).
 7. Append-only tables and locked questions never change. No migration may drop or alter a table this code does not own: an older database still holds the removed society's tables.
 8. No payments, donation links, outreach or posting automation. No new dependency without the owner's approval.
 
@@ -38,7 +38,7 @@ A public static site that puts the same questions to consumer chat apps (ChatGPT
 | `cli.py` | `init`, `reconcile`, `backup`, and the commands the modules above register |
 | `static/` | `archive.css`, mark, icon, three fonts |
 
-Outside the package: `scripts/capture-cards.mjs` (share cards to PNG with the operator's own Playwright), `scripts/wsl-check.sh`. Docs to know: `docs/DEVELOPER.md`, `docs/ANSWERS-OVER-TIME.md`, `docs/PLAN-CHATBOT-COMPARISON.md`, `docs/SESSION-STATE.md`, `docs/FREE-MODELS.md` (Part 2 is a dated record of free-tier terms: do not update it from memory), `docs/SOCIAL-POSTS.md`.
+Outside the package: `scripts/capture-cards.mjs` (share cards to PNG with the operator's own Playwright), `scripts/wsl-check.sh`. Docs to know: `docs/DEVELOPER.md`, `docs/ANSWERS-OVER-TIME.md`, `docs/PLAN-CHATBOT-COMPARISON.md`, `docs/SESSION-STATE.md`, `docs/FREE-MODELS.md` (Part 2 is a dated record of free-tier terms: do not update it from memory), `docs/SOCIAL-POSTS.md`. The owner's step-by-step guide: `docs/MONTHLY-ROUND.md`.
 
 ## Database (SQLite, one line each)
 - `api_usage`, `budget_reservations`, `cost_reconciliations`: spend estimates and holds.
