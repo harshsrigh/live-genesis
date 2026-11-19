@@ -1157,6 +1157,26 @@ HUMAN_ANSWER_KEYS_PUBLIC = ("id", "run", "question", "source", "state", "reason"
 LEGACY_HUMAN_META = {"written by people · collected by hand": "written by people"}
 
 
+def _public_reason(reason: str) -> str:
+    """A skipped question is published as "skipped" alone: the owner's note behind it stays in the database
+    (it may say what the app wrote instead of answering)."""
+    return SKIPPED if reason.startswith(SKIPPED) else reason
+
+
+def _public_answer(row: dict, run_number: int) -> dict:
+    """One stored chat-app answer as the public payload carries it. A reply the owner marked as a refusal
+    is published as the FACT only (decided by default, 15 November 2026): `refused` true, state
+    `no_answer`, reason "refused" and no text, whether or not the owner pasted what the app said. The
+    words stay in the database row, which is never changed. The shape is the one a refusal stored
+    without its words always had, so the schema markers are unchanged."""
+    refused = bool(row["refused"])
+    return {"id": row["id"], "run": run_number, "question": row["question_id"], "chatbot": row["chatbot"],
+            "source": row["source"], "state": "no_answer" if refused else row["state"],
+            "reason": REFUSED if refused else _public_reason(row["reason"]), "text": None if refused else row["answer_text"],
+            "changed": None if row["changed"] is None else bool(row["changed"]), "screenshot_hash": row["screenshot_sha256"],
+            "refused": refused}
+
+
 def public_block(cx, tables: set[str]) -> dict | None:
     """The chat-app track for the pages and the export, or None when the database holds no such run (the
     payload then has no `chatbots` key at all and is what it always was). Runs are ordered by the day
@@ -1165,7 +1185,8 @@ def public_block(cx, tables: set[str]) -> dict | None:
     group. `questions` are the recorded questions (id, text, prompt, hook, added); `human` is
     the Human column's wording ({name, meta}) or None when no human answer was ever collected; each run
     carries the apps' `conditions` and `human` ({source, collected_on, count} or None). A reply the owner
-    marked as a refusal is here (`refused`: true) and on no page. Never the imported file's hash or any
+    marked as a refusal is here as a fact (`refused`: true, no text; `_public_answer`) and on no page; a
+    skipped question carries the owner's short reason, never a reply. Never the imported file's hash or any
     path; a screenshot is its sha256 only."""
     if not set(TABLE_NAMES) <= tables:
         return None
@@ -1201,15 +1222,12 @@ def public_block(cx, tables: set[str]) -> dict | None:
                           "ORDER BY r.collected_on,r.number"):
         collected[row["run_id"]] = {"source": row["source"], "collected_on": row["collected_on"], "count": row["replies"]}
         human = {"name": row["display_name"], "meta": LEGACY_HUMAN_META.get(row["meta"], row["meta"])}   # the newest run's wording
-    answers = [{"id": a["id"], "run": number[a["run_id"]], "question": a["question_id"], "chatbot": a["chatbot"],
-                "source": a["source"], "state": a["state"], "reason": a["reason"], "text": a["answer_text"],
-                "changed": None if a["changed"] is None else bool(a["changed"]), "screenshot_hash": a["screenshot_sha256"],
-                "refused": bool(a["refused"])}
+    answers = [_public_answer(a, number[a["run_id"]])
                for a in (dict(r) for r in cx.execute(
                    "SELECT a.* FROM archive_chatbot_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id "
                    "ORDER BY r.collected_on,r.number,a.id")) if a["run_id"] in number]
     human_answers = [{"id": a["id"], "run": number[a["run_id"]], "question": a["question_id"], "source": a["source"],
-                      "state": a["state"], "reason": a["reason"], "text": a["answer_text"], "manner": a["manner"],
+                      "state": a["state"], "reason": _public_reason(a["reason"]), "text": a["answer_text"], "manner": a["manner"],
                       "changed": None if a["changed"] is None else bool(a["changed"])}
                      for a in (dict(r) for r in cx.execute(
                          "SELECT a.* FROM archive_human_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id "
@@ -1336,6 +1354,8 @@ def block_problem(block: Any, question_ids: set[str] | None = None) -> str | Non
             return "chatbots: an answer's text does not fit its state or is longer than the archive stores"
         if answer["refused"] and answer["changed"] is not None:
             return "chatbots: a refused reply carries a changed flag"
+        if answer["refused"] and (answer.get("text") is not None or answer["state"] != "no_answer"):
+            return "chatbots: a refused reply carries its words; only the fact that it was refused is published"
         shot = answer.get("screenshot_hash")
         if shot is not None and not (isinstance(shot, str) and HASH.fullmatch(shot)):
             return "chatbots: a screenshot is not given as a sha256 hash"
