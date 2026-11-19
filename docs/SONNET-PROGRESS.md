@@ -1,11 +1,11 @@
 # Sonnet progress checkpoint
 
-Base main SHA: e88066a (open PRs not checked: no gh CLI)
-Working branch / PR / latest commit: claude/sonnet-takeover-task-b (stacked on task-a 3581de1) / no PR / see git log
-Task A/B/C and status: A done (pushed); B done pending review; C not started
-Changes completed: B = tests/test_offline_collection_proof.py (3 collections, stub SDK through real infer + archive; disposable DB). A's collector doc corrected for the charge case.
-Exact test commands and results: `python -m pytest -q` (WSL venv) 537 passed. No live calls.
-Unverified or failing: real OpenRouter cost field shape. FINDINGS: a charge reported on a free call is skipped as `no_usage`, hold released, charge NOT recorded (check dashboard). Interrupted $0 call leaves hold `held` (blocks nothing).
-Pending owner decisions: question set; samples 1 vs 3; publication stays local
-Next action: Task C Windows launcher reusing cli (setup, model select, plan preview, results)
+Base main SHA: e88066a (open PRs #1 and #12 seen; #12 superseded by #13)
+Working branch / PR / latest commit: stacked a -> b -> c. PR #13 https://github.com/harshsrigh/live-genesis/pull/13 (A, base main); PR #14 .../pull/14 (B, base A); PR #15 .../pull/15 (C, base B). Merge in order.
+Task A/B/C and status: A, B, C done, PRs open, none merged
+Changes completed: A guard + setup port; B offline end-to-end proof; C launcher (operator_launcher.py, Collect-Free.cmd). C's tests fixed a bug (choice "0" picked the last model).
+Exact test commands and results: `python -m pytest -q` (WSL venv): A 535, B 537, C 555 passed. No live calls.
+Unverified or failing: launcher and Collect-Free.cmd not run on Windows; real OpenRouter cost field shape. Charge on free call = gap, not recorded (check dashboard); interrupted $0 hold stays `held`.
+Pending owner decisions: question set; samples 1 vs 3; publication stays local; close #12
+Next action: owner runs `Collect-Free.cmd --preview-only`, reviews #13-#15 in order
 Local scratch paths (no secrets): none
