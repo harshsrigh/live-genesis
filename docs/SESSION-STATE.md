@@ -26,8 +26,8 @@ From `docs/PLAN-CHATBOT-COMPARISON.md` (written by the PC session on 14 Nov 2026
 
 ## Next (the owner's moves, in order)
 1. Read the ten chat-app questions in `live_genesis/archive_chatbots.json` and edit them while the file's status is `draft`; `docs/ANSWERS-OVER-TIME.md` ("The chat-app track") says when they become fixed.
-2. Decide what is still open in `docs/PLAN-CHATBOT-COMPARISON.md`: the Reddit quoting rule before the first human answer, the Copilot joke line, whether hooks stay frozen with their question, the name.
-3. Collect the first round by hand: `archive-chatbot-template --out FILE`, fill it in, `archive-chatbot-import FILE --dry-run`, then import.
+2. Read the defaults recorded in `docs/PLAN-CHATBOT-COMPARISON.md` ("Decided by default on 15 November 2026") and change any you disagree with; still open there: the name.
+3. Collect the first round by hand, following `docs/MONTHLY-ROUND.md` step by step (sheet, ask, check, store, export, read, approve, push, cards).
 4. Export, read, approve, commit, push (only the owner): `snapshot --export`, read `published/archive.json`, `snapshot --approve --i-have-read-it`.
 5. First share card and post by hand (`docs/SOCIAL-POSTS.md`).
 
@@ -36,7 +36,7 @@ For a coding session, when asked: help word questions; never write trending ques
 ## Open code items
 - `archive-chatbot-ask` has been exercised with a stand-in adapter only (`tests/test_archive_ask.py`). Its first real use is the owner's: add model answerers to `archive_chatbots.json` (the group `ai-models`), check with `--dry-run`, back up the database (the upgrade rebuilds four chat-app tables once), then run it with `--max-usd`.
 - The Content-Security-Policy still allows same-origin scripts and style attributes that no page uses (`web.CONTENT_SECURITY_POLICY`); tightening it changes the text inside every published page.
-- The page footer still reads "Part of LIVE Genesis" (`archive_pages._foot`). Public copy is the owner's to change.
+- The public copy was rewritten in a friendlier voice on 15 November 2026 (footer included: it no longer reads "Part of LIVE Genesis"). The owner can change any of it; the strings are in `archive_pages.py`.
 - `archive.publish_problem` and the closed-key rules of the model payload have no caller since the full export went; they are kept, with tests, for the day model answers are published again.
 - `docs/SOCIAL-POSTS.md` and parts of `docs/PLAN-CHATBOT-COMPARISON.md` and `docs/FREE-MODELS.md` (Part 2) describe the state of their date.
 

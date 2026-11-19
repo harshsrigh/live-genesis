@@ -713,13 +713,13 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
     front, page, how = site['index.html'], site['c/C001.html'], site['chatbots.html']
     # The front page: a neutral count, a group switch with both groups, the models in their own group.
     assert 'Same question. Five AIs in two groups. One human.' in visible(front)
-    assert front.count('class="g-radio"') == 2 and 'AI chat apps and AI models. Asked again every month.' in visible(front)
+    assert front.count('class="g-radio"') == 2 and 'AI chat apps and AI models. We ask again every month and keep every reply.' in visible(front)
     assert re.findall(r'<span class="g-name">([^<]+)</span><span class="g-count">([^<]+)</span>', front) == [('AI chat apps', '3 asked'), ('AI models', '2 asked')]
     # The question page: one thread per group; a model answerer is a bubble with its name, like an app.
     assert re.findall(r'class="thread-name[^"]*"[^>]*>([^<]+)<', page)[:2] == ['AI chat apps', 'AI models']
     for shown in ('Sample model L', 'Sample model M', 'PLACEHOLDER model reply, new.', 'PLACEHOLDER model reply gpt-test-mini 1.'):
         assert shown in page, shown
-    sources = page.split('<summary>Where each answer came from</summary>')[1]
+    sources = page.split('<summary>The details behind each answer</summary>')[1]
     # In the place an app shows "the app showed: ...": the model the service reported, plainly. No method label.
     assert '<strong>Sample model L · Made-up maker L</strong><ul><li><span class="mono">Nov 2026</span> model: sample-local:1b-r2 · run locally · ' \
            'a different model name than before</li><li><span class="mono">Oct 2026</span> model: sample-local:1b-r · run locally</li></ul>' in sources
@@ -732,9 +732,10 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
     assert 'PLACEHOLDER model reply sample-local:1b 1.' in local and 'Before' in local   # what it said before
     assert 'data-state="same"' in page.split('data-answerer="api-one"')[1].split('</article>')[0]
     # The labels and the notice: as for apps, and the notice names the makers of model answerers that have one.
-    notice = ('Not affiliated with, sponsored by or endorsed by OpenAI, Google, xAI or Made-up maker L; product names belong to their owners.')
+    notice = 'not affiliated with, sponsored by or endorsed by OpenAI, Google, xAI or Made-up maker L; product names belong to their owners.'
     for text in (front, page, how):
-        assert notice in text and 'They may be wrong and are not advice.' in text and 'Read-only archive.' in text
+        assert notice in text and 'These answers are AI-generated and shown exactly as they came. They can be wrong' in text
+        assert 'Read-only. No payments. Just answers.' in text
         assert '<span class="tag tag-dark mono">AI-generated · may be wrong</span>' in text
     # How it works: a model answerer's row says which model, when, how often; never an app's conditions.
     assert '<strong>Sample model L</strong><span class="muted small">Made-up maker L</span></div><div class="app-how"><span>model: sample-local:1b-r2</span>' \
@@ -774,7 +775,7 @@ def test_a_group_of_models_alone_and_a_model_without_a_maker(asking, tmp_path, m
     front = site['index.html']
     assert 'Same question. One AI model.' in visible(front), visible(front)[:400]
     assert 'g-radio' not in front and 'One AI app' not in visible(front) and 'chatbot' not in visible(front)
-    assert ('Not affiliated with, sponsored by or endorsed by the makers of the products named; product names belong to their owners.'
+    assert ('not affiliated with, sponsored by or endorsed by the makers of the products named; product names belong to their owners.'
             in site['c/C001.html'])
     assert 'PLACEHOLDER asked gpt-test-mini 1.' in site['c/C001.html'] and 'PLACEHOLDER asked gpt-test-mini 1.' in site['card/C001.html']
 

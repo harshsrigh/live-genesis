@@ -1,6 +1,6 @@
 # Developer guide
 
-How to run, test and operate the code. Where things stand: [SESSION-STATE.md](SESSION-STATE.md). The owner's decisions for the product: [PLAN-CHATBOT-COMPARISON.md](PLAN-CHATBOT-COMPARISON.md). Rules and settings in full: [ANSWERS-OVER-TIME.md](ANSWERS-OVER-TIME.md).
+How to run, test and operate the code. Where things stand: [SESSION-STATE.md](SESSION-STATE.md). The owner's decisions for the product: [PLAN-CHATBOT-COMPARISON.md](PLAN-CHATBOT-COMPARISON.md). Rules and settings in full: [ANSWERS-OVER-TIME.md](ANSWERS-OVER-TIME.md). The owner's monthly round, step by step: [MONTHLY-ROUND.md](MONTHLY-ROUND.md).
 
 <p><img src="brand/lockup.svg" alt="Answers Over Time" width="381" /></p>
 
