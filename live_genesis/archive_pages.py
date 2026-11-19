@@ -796,7 +796,7 @@ def _foot(view: _View, track: str, shown_ids: list[str], back: str = "") -> str:
         honesty = SAMPLE_FOOT
     elif track == "chat":
         honesty = chat_disclaimer([view.chat.maker[label] for label in view.chat.labels]) if view.chat.labels else \
-            "These answers were written by people."
+            "These answers were written by people." if view.chat.human else "No answers here yet."
     else:
         honesty = "These answers came from AI models. They can be wrong, so please don't take them as advice."
     lines = [LEFT_OUT] if track == "chat" else []
@@ -951,7 +951,7 @@ def _page(view: _View, head: str, bar: str, body: list[str], foot: str, schema: 
 NOBODY_ASKED = "We haven't asked anyone yet."
 HOME_DESCRIPTION = "The same questions, asked again every month, with every answer kept."
 # The chat-app comparison (the public front page and the root page that leads to it).
-CHAT_DESCRIPTION = ("We ask AI chat apps the same silly questions every month and keep every answer. "
+CHAT_DESCRIPTION = ("We ask chatbots the same silly questions every month and keep every answer. "
                     "See who's funny, who's weird and who changed their answer.")
 
 
@@ -1049,7 +1049,7 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
     versions = versions or asset_versions()
     chat = view.chat
     if standalone and not chat.dates:
-        body = [_list_head(view.tag("chat"), "Same question, asked again every month.", NOBODY_ASKED),
+        body = [_list_head(view.tag("chat"), "Same question, asked again every month.", esc(NOBODY_ASKED)),
                 '<section class="group">\n  <p class="muted trend-none">Nothing to read yet. Come back soon. '
                 '<a href="chatbots.html">Here is how it works</a>.</p>\n</section>\n']
         return _page(view, _head("Answers Over Time", "../", versions, CHAT_DESCRIPTION, _meta(view, "", track="chat")),
@@ -1438,7 +1438,7 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
             if aside:
                 body.append(f'<p class="aside"><span class="aside-mark mono">Joke</span>{esc(aside)}</p>\n')
     else:
-        body.append(f'<section class="group">\n  <p class="muted trend-none">{NOBODY_ASKED} The first answers are on their way.</p>\n</section>\n')
+        body.append(f'<section class="group">\n  <p class="muted trend-none">{esc(NOBODY_ASKED)} The first answers are on their way.</p>\n</section>\n')
     body.append('<section id="method" class="method">\n  <h2 class="display">Our house rules</h2>\n  <div class="method-grid">\n'
                 '    <div><strong>Same words</strong><span>Every app gets the exact same words, every month. You can read them on '
                 'each question\'s page. We ask for one short sentence, which is why the replies are short.</span></div>\n'

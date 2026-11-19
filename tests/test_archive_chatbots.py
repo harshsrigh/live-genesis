@@ -686,23 +686,26 @@ def test_demo_uses_made_up_names_only_and_is_marked_as_a_sample_for_people_and_m
     assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<a href="models.html">Models</a>' in front
     assert front.count('<h3 class="row-q"><a href="c/C00') == 6 and front.count('class="mini-text"') == 24      # every answerer's newest answer inline
     assert '<span class="row-hook">Hot dog: sandwich or not?</span>' in front and 'Human (sample)' in front
-    assert 'aria-label="Chat app A: changed Oct 2026; conditions changed Oct 2026; 4 checks"' in front
-    assert 'aria-label="Human (sample): different answer Nov 2026; 3 checks"' in front        # people did not "change"
-    assert 'aria-label="Chat app B: no change; no answer Oct 2026; 4 checks"' in front
+    assert 'aria-label="Chat app A: changed Oct 2026; asked a bit differently Oct 2026; asked 4 times"' in front
+    assert 'aria-label="Human (sample): different answer Nov 2026; asked 3 times"' in front        # people did not "change"
+    assert 'aria-label="Chat app B: no change; no answer Oct 2026; asked 4 times"' in front
     # One sample label per page, not per card; made-up names; no notice about real companies.
     for text in (front, page, method, card, one, person):
         assert visible(text).count('Sample we wrote, not a real AI answer') == 1
         assert 'AI-generated' not in text and 'Not affiliated with, sponsored' not in text and 'Why no' not in text
-    assert 'the apps are made up and the replies are ours' in method and 'Written with Chat app C' in one
-    assert 'Everything here is a sample we wrote. No AI and no person was asked.' in page
+    assert 'the apps are made up and we wrote the replies' in method and 'Written with Chat app C' in one
+    assert 'Everything here is a sample we wrote to show how the site works. No AI and no person was asked.' in page
     # The scripted conditions change (search switched on) is flagged on its card; another shown version name is not a change of conditions.
     october = page.split('id="m-2026-10-01"')[1].split('<section class="panel"')[0]
-    assert october.count('<span class="tag-cond mono">Conditions changed</span>') == 1        # chat-app-a, the month search was switched on
-    assert 'conditions changed · search: off → on' in page and 'country: US → GB' in page and 'the app showed a new version name' in page
-    assert page.count('>Conditions changed</span>') == 2
-    # The scripted refusal and the scripted error are stored, and shown nowhere.
-    assert "rather not say anything unkind" in json.dumps(block) and 'rather not say' not in ''.join(v for k, v in pages.items() if k.endswith('.html'))
-    assert 'Refusals and non-answers are left out.' in page and '1 reply left out' in page
+    assert october.count('<span class="tag-cond mono">Asked a bit differently</span>') == 1        # chat-app-a, the month search was switched on
+    assert 'asked a bit differently this time · search: off → on' in page and 'country: US → GB' in page and 'the app showed a new version name' in page
+    assert page.count('>Asked a bit differently</span>') == 2
+    # The scripted refusal and the scripted error are stored; neither a page nor a data file nor the payload holds the refusal's words.
+    assert rows("SELECT COUNT(*) AS n FROM archive_chatbot_answers WHERE refused=1 AND answer_text LIKE '%rather not say anything unkind%'") == [{'n': 1}]
+    assert 'rather not say' not in json.dumps(payload) + ''.join(pages.values())
+    assert [(a['state'], a['reason'], a['text']) for a in block['answers'] if a['refused']] == [('no_answer', 'refused', None)]
+    assert {a['reason'] for a in block['answers'] if a['state'] == 'no_answer' and not a['refused']} == {'skipped'}    # never the owner's note
+    assert visible(page).count('When an app refuses or dodges, we leave it out.') == 1 and '1 reply left out' in page
     for _text, _hook, script in chatbots.DEMO_QUESTIONS:
         for label, steps in script.items():
             limit = chatbots.HUMAN_CHARS if label == 'human' else chatbots.REPLY_CHARS
@@ -744,15 +747,18 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
         assert 'scripted' not in page.lower() and 'Sample we wrote' not in page, name         # real data never carries the sample label
     front, page, method = pages['index.html'], pages['c/C001.html'], pages['chatbots.html']
     # The front page: the chat-app questions with everyone's newest answer.
-    assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<h2>Newest answers</h2>' in front
+    assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<h2>The latest answers</h2>' in front
     assert 'Same question. Three AI apps. One human.' in visible(front) and front.count('<span class="hl') == 3
     assert front.count('<h3 class="row-q"><a href="c/C00') == 4 and front.count('class="mini-text"') == 16
-    assert 'aria-label="ChatGPT: changed Nov 2026; conditions changed Nov 2026; 2 checks"' in front
-    assert 'aria-label="Human: different answer Nov 2026; 2 checks"' in front and 'aria-label="Grok: no change; no answer Nov 2026; 2 checks"' in front
-    assert '<span class="sq sq-changed sq-cond"></span>' in front and 'Refusals and non-answers are left out.' in front
+    assert 'aria-label="ChatGPT: changed Nov 2026; asked a bit differently Nov 2026; asked 2 times"' in front
+    assert 'aria-label="Human: different answer Nov 2026; asked 2 times"' in front and 'aria-label="Grok: no change; no answer Nov 2026; asked 2 times"' in front
+    assert '<span class="sq sq-changed sq-cond"></span>' in front and visible(front).count(archive_pages.LEFT_OUT) == 1      # once, in the footer
+    assert archive_pages.LEFT_OUT == 'When an app refuses or dodges, we leave it out.'
+    assert '<span class="q-id' not in front and '>C001<' not in front                         # a question leads with its hook, not its id
     assert '<span class="tag tag-dark mono">AI-generated · may be wrong</span>' in front
     assert archive_pages.esc(archive_pages.chat_disclaimer(['OpenAI', 'Google', 'xAI'])) in front
-    assert 'Not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners.' in front
+    assert 'not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners.' in front
+    assert 'AI-generated' in front and 'They can be wrong' in front and 'take them as advice' in front
     # The question page.
     assert '<title>Is a hot dog a sandwich? · Answers Over Time</title>' in page
     assert '<h1 class="display display-q" itemprop="name">Is a hot dog a sandwich?</h1>' in page
@@ -765,7 +771,7 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     names = re.findall(r'<span class="acard-name mono"[^>]*>(?:<meta[^>]*>|<span itemprop="name">)?([^<]+)', newest)
     assert names == ['ChatGPT', 'Gemini', 'Grok', 'Human']
     # Changed is shown inline, with the month and the text it had before.
-    assert ('<span class="tag-changed mono">Changed</span><span class="tag-cond mono">Conditions changed</span>') in newest
+    assert ('<span class="tag-changed mono">Changed</span><span class="tag-cond mono">Asked a bit differently</span>') in newest
     assert ('<span class="before-when mono">Before · <time datetime="2026-10-10">Oct 2026</time></span>PLACEHOLDER first chatgpt C001.</p>') in newest
     assert newest.count('>Changed</span>') == 2 and newest.count('class="before"') == 3      # chatgpt, gemini (the long one), human
     # Human: outlined card, quoted or summarised, and never "changed".
@@ -784,33 +790,37 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     seen = visible(newest)
     for moved in ('PLACEHOLDER model', 'free account', 'temporary chat', 'memory off', 'search on', 'US ·'):
         assert moved not in seen, moved
-    block = page.split('<summary>Where each answer came from</summary>')[1]
+    block = page.split('<summary>The details behind each answer</summary>')[1]
     for moved in ('the app showed: PLACEHOLDER model · free account · temporary chat · memory off · search on · US · web',
-                  'conditions changed · search: off → on', 'the app showed: PLACEHOLDER model 2', 'the app showed a new version name',
+                  'asked a bit differently this time · search: off → on', 'the app showed: PLACEHOLDER model 2', 'the app showed a new version name',
                   'PLACEHOLDER note.', 'Written by people · from: PLACEHOLDER thread · 12 replies read · quoted',
                   '<strong>Written by people</strong>: <em>quoted</em>',
-                  '<em>quoted</em> is one person&#x27;s words' if False else "<em>quoted</em> is one person's words"):
+                  "<em>quoted</em> means one person's exact words", '<em>summed up</em> means'):
         assert moved in block, moved
-    assert ('<details><summary>Exactly what we asked</summary><pre class="prompt mono">' + archive_pages.esc(PREFIX)
+    assert ('<details><summary>The exact words we used</summary><pre class="prompt mono">' + archive_pages.esc(PREFIX)
             + '\n\nIs a hot dog a sandwich?</pre>') in page
+    assert 'This is question C001 on our list.' in page and '<span class="q-id' not in page   # the id is there, not up front
     assert page.count('<details>') == 3 and '<details open' not in page
     assert 'href="../card/C001.html">All answers</a>' in page and 'href="../card/C001-grok.html">Grok</a>' in page
     assert 'href="../card/C001-human.html">Human</a>' in page
-    # A refusal, a skipped reply: stored, in the payload, on no page; the page says so once, plainly.
+    # A refusal, a skipped reply: stored; in the payload as a fact without its words; on no page and in no data file.
     four = pages['c/C004.html']
-    assert 'PLACEHOLDER refusal words.' in json.dumps(payload) and not any('PLACEHOLDER refusal words.' in p for p in html.values())
+    assert rows("SELECT COUNT(*) AS n FROM archive_chatbot_answers WHERE answer_text='PLACEHOLDER refusal words.'") == [{'n': 1}]
+    assert not any('PLACEHOLDER refusal words.' in p for p in {**pages, 'payload': json.dumps(payload)}.values())
+    assert [(a['state'], a['reason'], a['text']) for a in payload['chatbots']['answers'] if a['refused']] == [('no_answer', 'refused', None)]
     panel = four.split('<section class="panel"')[1]
     assert panel.count('<article class="acard') == 2 and '<div class="cards n-2">' in panel and '2 replies left out' in panel
-    assert visible(four).count('Refusals and non-answers are left out.') == 2               # under the cards, and in the footer
-    assert 'acard-none' not in four and '>left out</td>' in four and 'refus' not in visible(panel).lower().replace('refusals and non-answers', '')
+    assert visible(four).count(archive_pages.LEFT_OUT) == 1                                  # said once, in the footer
+    assert 'acard-none' not in four and '>no answer, left out</td>' in four and 'refus' not in visible(panel).lower()
     # How it works: the method, the recorded conditions, and the owner's one joke line, once, small, marked as a joke.
     assert '<a href="chatbots.html" aria-current="page">How it works</a>' in method
     assert 'free account · temporary chat · memory off · search on · US · web' in method and 'Written with Grok' in method
-    assert 'PLACEHOLDER note.' in method and 'The app showed: PLACEHOLDER model 2' in method
+    assert 'PLACEHOLDER note.' in method and 'Version the app showed: PLACEHOLDER model 2' in method
     assert '<span>written by people</span>' in method and 'From: PLACEHOLDER thread' in method
     assert method.count('<p class="aside"><span class="aside-mark mono">Joke</span>Why no Copilot? It is cheaper to ask a human than Copilot.</p>') == 1
     assert sum(text.count('Copilot') for name, text in pages.items() if name != 'chatbots.html') == 0     # never on a card, a question page or in the data
-    for phrase in ('Same words', 'Copied, not edited', 'Only real answers shown', 'It depends on the day', 'Humans too', 'Not affiliated'):
+    for phrase in ('Same words', 'Not a word changed', 'No answer? We leave it out', 'It depends on the day', 'Humans too', 'Not affiliated',
+                   'does not always mean the app changed its mind', 'Quoted means one person', 'Summed up means'):
         assert phrase in method, phrase
     with pytest.raises(KeyError):
         archive_pages.render_chatbot_card(payload, 'Q01')
@@ -832,7 +842,7 @@ def test_the_front_page_is_the_chat_app_comparison_only_once_a_chat_app_run_exis
     assert 'Simple questions, asked again every month.' in front and front.count('<h3 class="row-q"><a href="q/') == 20
     assert 'Seven.' in front and 'Chat app' not in front and 'Human' not in front and 'c/C0' not in front
     assert not any(name.startswith('c/') or name.startswith('card/C') for name in pages)
-    assert 'No chat app has been asked yet.' in pages['chatbots.html']
+    assert 'We haven&#x27;t asked anyone yet. The first answers are on their way.' in pages['chatbots.html']
     for name in REAL_NAMES + ('Copilot',):
         assert all(name not in page for key, page in pages.items() if key != 'data/README.txt'), name
     assert pages['models.html'].count('<h3 class="row-q"><a href="q/') == 20
@@ -862,7 +872,7 @@ def test_chat_cards_three_apps_and_human_in_the_safe_box(chat, tmp_path):
     assert four.count('<section class="card-panel') == 4 and '<div class="card-panels n-4">' in four and 'card card-safe card-four' in four
     assert re.findall(r'<span class="card-label">([^<]+)</span>', four) == ['ChatGPT', 'Gemini', 'Grok', 'Human']
     # Human's panel is its own kind (outlined in the stylesheet) and says quoted or summarised; never "changed".
-    assert four.count('card-panel-human') == 1 and '<span class="card-when">Nov 2026 · quoted · differs</span>' in four
+    assert four.count('card-panel-human') == 1 and '<span class="card-when">Nov 2026 · quoted · new answer</span>' in four
     assert '<span class="card-when">Nov 2026 · changed</span>' in four and four.count('card-panel-changed') == 3
     assert four.count('Written with Grok · Nov 2026') == 1 == one.count('Written with Grok')
     # The long reply is clamped on the picture, so the card says where the whole text is. The text itself is never cut.
@@ -1087,9 +1097,13 @@ def test_machine_readable_labels_on_real_hand_entered_data(chat, tmp_path):
     assert ('itemprop="author" itemscope itemtype="https://schema.org/SoftwareApplication"><span itemprop="name">Grok</span>'
             '<span itemprop="creator" itemscope itemtype="https://schema.org/Organization"><meta itemprop="name" content="xAI" /></span>') in page
     assert '<meta itemprop="dateCreated" content="2026-11-14" />' in page and 'itemtype="https://schema.org/Person"' not in page
-    # The refused and skipped replies are in the data, marked, and on no element.
+    # The refused and skipped replies are in the data as facts, marked, without their words, and on no element.
     refusal = next(r for r in records if r['id'] == 'C004/grok/2026-11-14')
-    assert (refusal['state'], refusal['shown'], refusal['text']) == ('refused', False, 'PLACEHOLDER refusal words.')
+    assert (refusal['state'], refusal['shown'], refusal['text']) == ('refused', False, None)
+    skipped = next(r for r in records if r['id'] == 'C004/gemini/2026-11-14')
+    assert (skipped['state'], skipped['shown'], skipped['text']) == ('no-answer', False, None)
+    assert 'PLACEHOLDER refusal words.' not in ''.join(pages.values()) and 'the app showed an error' not in ''.join(pages.values())
+    assert "a refusal's words are not published anywhere" in pages['data/README.txt']
     assert not any(attrs['data-answerer'] == 'grok' and attrs['data-collected'] == '2026-11-14' for _t, attrs in answer_elements(pages['c/C004.html']))
     human = next(r for r in records if r['id'] == 'C001/human/2026-11-14')
     assert human['conditions'] == {'source': 'PLACEHOLDER thread', 'collected_on': '2026-11-14', 'count': 12}
@@ -1151,7 +1165,7 @@ def test_machine_readable_labels_on_recorded_model_answers(ready, monkeypatch):
     seen = visible(cards).replace('AI-generated · we asked it ourselves · may be wrong', '')
     for moved in ('gpt-test-1', 'times out of', 'We asked it ourselves', 'version'):
         assert moved not in seen, moved
-    block = page.split('<summary>Where each answer came from</summary>')[1]
+    block = page.split('<summary>The details behind each answer</summary>')[1]
     assert 'We asked it ourselves · version gpt-test-1 · same answer 3 times out of 3' in block
     assert 'We asked it ourselves · version gpt-test-2 · same answer 2 times out of 3' in block
     assert 'data-version="gpt-test-1"' in cards and 'data-method="asked-by-server" data-provenance="ai-generated"' in cards
@@ -1410,25 +1424,34 @@ def test_a_real_site_does_not_say_how_replies_were_collected_and_keeps_its_other
     front, page, how = texts['archive/index.html'], texts['archive/c/C001.html'], texts['archive/chatbots.html']
     card, readme = texts['archive/card/C001.html'], texts['archive/data/README.txt']
     # What an answer is, the notices and the recorded setting are all still there.
-    for kept in ('<span class="tag tag-dark mono">AI-generated · may be wrong</span>', 'They may be wrong and are not advice.',
-                 'Not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners.',
-                 'Read-only archive.', 'No payments · nothing can be changed from this page', 'Refusals and non-answers are left out.'):
+    for kept in ('<span class="tag tag-dark mono">AI-generated · may be wrong</span>',
+                 'These answers are AI-generated and shown exactly as they came. They can be wrong, so please don&#x27;t take them as advice.',
+                 'not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners.',
+                 'Read-only. No payments. Just answers.', 'When an app refuses or dodges, we leave it out.'):
         assert kept in front and kept in page and kept in how, kept
+        assert front.count(kept) == page.count(kept) == 1, kept                               # each thing is said once
+    for gone in ('Part of LIVE Genesis', 'Read-only archive.', 'Refusals and non-answers'):  # the compliance-notice wording
+        assert gone not in front + page + how, gone
     assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in card and 'read-only · no payments' in card
     assert 'Written with Grok' in card and 'Written with Grok' in page and 'Nov 2026' in card
-    block = page.split('<summary>Where each answer came from</summary>')[1]
+    block = page.split('<summary>The details behind each answer</summary>')[1]
     for kept in ('the app showed: PLACEHOLDER model · free account · temporary chat · memory off · search on · US · web',
-                 'Written by people · from: PLACEHOLDER thread · 12 replies read · quoted', '<strong>Written by people</strong>: <em>quoted</em>'):
+                 'Written by people · from: PLACEHOLDER thread · 12 replies read · quoted', '<strong>Written by people</strong>: <em>quoted</em>',
+                 '<em>summed up</em> means we boiled several replies down to one line. No names, ever.'):
         assert kept in block, kept
-    assert 'Asked in a new chat each time. The first line is why the replies are short.' in page
-    assert 'Asked again every month. Tap a question to see who changed their answer.' in front
+    assert 'A fresh chat every time. That first line is why the replies are so short.' in page
+    assert 'We ask again every month and keep every reply. Tap a question to see who changed their answer.' in front
+    # A human answer always says it was written by people and whether it is quoted or summed up, in plain words.
+    assert '<span class="tag-form mono">quoted</span>' in page and '<span class="tag-form mono">summed up</span>' in texts['archive/c/C002.html']
+    assert 'data-human-form="summarised"' in texts['archive/c/C002.html'] and '>summarised<' not in texts['archive/c/C002.html']
     # How it works: what is compared and the rules that are left; six rules, none about who or what did the asking.
     assert f'<meta name="description" content="{archive_pages.CHATBOTS_DESCRIPTION}" />' in how
-    assert 'Each app gets the same questions in the same words every month, each in a new chat, and every reply is kept.' in how
+    assert 'Every month, each app gets the same questions in the same words, in a fresh chat. We keep every reply.' in how
     assert re.findall(r'<div><strong>([^<]+)</strong>', how.split('<section id="method"')[1]) == [
-        'Same words', 'Copied, not edited', 'Only real answers shown', 'It depends on the day', 'Humans too', 'Not affiliated']
+        'Same words', 'Not a word changed', 'No answer? We leave it out', 'It depends on the day', 'Humans too', 'Not affiliated']
+    assert 'So a new answer does not always mean the app changed its mind.' in how
     assert 'trusting' not in how and 'receipt' not in how and 'written by people' in how and 'From: PLACEHOLDER thread' in how
-    assert 'free account · temporary chat · memory off · search on · US · web' in how and 'The app showed: PLACEHOLDER model 2' in how
+    assert 'free account · temporary chat · memory off · search on · US · web' in how and 'Version the app showed: PLACEHOLDER model 2' in how
     for kept in ('recorded verbatim', 'It may be wrong. It is not advice.', '"human-written" was written by people.', 'not affiliated'):
         assert kept in readme, kept
     records = [json.loads(line) for line in texts['archive/data/answers.jsonl'].splitlines()]
@@ -1445,12 +1468,12 @@ def test_the_sample_site_does_not_say_how_replies_were_collected_and_still_says_
             assert 'Sample we wrote, not a real AI answer' in text, name
             assert '<meta name="aot:content" content="scripted-sample" />' in text, name
     for name in ('archive/index.html', 'archive/c/C001.html', 'archive/chatbots.html'):
-        for kept in ('Everything here is a sample we wrote. No AI and no person was asked.', 'Read-only archive.',
-                     'No payments · nothing can be changed from this page', 'Refusals and non-answers are left out.'):
-            assert kept in texts[name], (name, kept)
-    assert 'On this sample site the apps are made up and the replies are ours.' in texts['archive/chatbots.html']
+        for kept in ('Everything here is a sample we wrote to show how the site works. No AI and no person was asked.',
+                     'Read-only. No payments. Just answers.', 'When an app refuses or dodges, we leave it out.'):
+            assert texts[name].count(kept) == 1, (name, kept)
+    assert 'This is a sample site: the apps are made up and we wrote the replies.' in texts['archive/chatbots.html']
     assert 'sample we wrote · no person was asked' in texts['archive/chatbots.html']
-    assert ('<strong>Sample</strong>: we wrote the answer and its date ourselves to show how the page works. Nothing was asked.'
+    assert ('<strong>Sample</strong>: we wrote these answers and their dates ourselves to show how the page works. No AI and no person was asked.'
             in texts['archive/c/C001.html'])
     assert 'No AI and no person was asked.' in texts['archive/data/README.txt'] and 'NOT a real answer' in texts['archive/data/README.txt']
     lines = [json.loads(line) for line in texts['archive/data/answers.jsonl'].splitlines()]

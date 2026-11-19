@@ -243,14 +243,14 @@ def test_a_run_asks_every_locked_question_of_both_sets_and_set_limits_it(ready, 
         'prompt': 'Answer in one or two sentences.\n\nWhat is the newest iPhone?', 'added': '2026-05-18', 'topic': 'new phones',
         'trend_source': 'Google Trends US, 2026-05-18'}
     listing = archive_pages.render_trending(payload)
-    assert 'aria-label="model-a: no change; 1 check"' in listing                  # T003: one square, no "missing" ones before it
-    assert 'aria-label="model-a: no change; 4 checks"' in listing                 # T001: runs 2, 3, 5, 6
+    assert 'aria-label="model-a: no change; asked once"' in listing                  # T003: one square, no "missing" ones before it
+    assert 'aria-label="model-a: no change; asked 4 times"' in listing                 # T001: runs 2, 3, 5, 6
     assert listing.count('sq-none') == 1                                          # only the key's sample square
     page = archive_pages.render_question(payload, 'T003')
     assert page.count('role="rowheader"') == 1 and 'acard-none' not in page and 'id="m-run-6"' in page and 'm-run-5' not in page
     core_page = archive_pages.render_question(payload, 'Q01')
     assert core_page.count('role="rowheader"') == 5 and 'run 3' not in core_page    # run 3 asked the trending set only
-    assert 'aria-label="model-a: no change; 5 checks"' in archive_pages.render_index(payload)
+    assert 'aria-label="model-a: no change; asked 5 times"' in archive_pages.render_index(payload)
 
 
 def test_a_changed_or_missing_trending_file_stops_real_answers(ready, tmp_path, monkeypatch):
@@ -479,11 +479,11 @@ def test_trending_pages_for_the_demo(ready):
     assert listing.index('t/T003.html') < listing.index('t/T002.html') < listing.index('t/T001.html')
     assert listing.count('class="timeline"') == 9 and listing.count('class="mini-text"') == 9
     assert '<h3 class="row-q"><a href="t/T002.html">What is Nvidia&#x27;s share price today?</a></h3>' in listing
-    assert 'aria-label="model-a: no change; 4 checks"' in listing and 'aria-label="model-a: no change; 2 checks"' in listing
-    assert re.search(r'aria-label="model-b: changed Oct 2026; 4 checks"', listing)
+    assert 'aria-label="model-a: no change; asked 4 times"' in listing and 'aria-label="model-a: no change; asked 2 times"' in listing
+    assert re.search(r'aria-label="model-b: changed Oct 2026; asked 4 times"', listing)
     assert listing.count('<span class="sq sq-none"></span>') == 1                # the key only: no dashed squares before a question existed
     assert listing.count('<span class="sq ') == 3 + 3 * (6 + 4 + 2)
-    assert 'written by hand' in listing and 'one square per check, oldest first' in listing
+    assert 'written by hand' in listing and 'one square each time we asked, oldest first' in listing
     assert listing.count('<main') == 1 and listing.count('<h1') == 1
     # One trending question: the same layout plus topic and source.
     assert '<span class="q-id mono">T002</span><span class="chip chip-topic">chip stocks</span><span class="chip-note">added Jul 2026</span>' in t2
@@ -587,8 +587,8 @@ def test_share_card_picks_three_models_and_labels_recorded_answers():
     assert '<div class="card-panels n-2">' in archive_pages.render_card(card_payload(['a', 'b'], [
         (1, 'a', 'engine', 'answered', 'x', None), (1, 'b', 'engine', 'answered', 'y', None)]), 'Q01')
     empty = archive_pages.render_card(archive.empty_payload(), 'Q01')
-    assert '<div class="card-panels n-1">' in empty and 'No answers recorded yet.' in empty and '<p class="card-honest mono">No answers recorded yet</p>' in empty
-    assert archive_pages.render_card(payload, 'Q02').count('No answers recorded yet.') == 1
+    assert '<div class="card-panels n-1">' in empty and 'No answers yet.' in empty and '<p class="card-honest mono">No answers yet</p>' in empty
+    assert archive_pages.render_card(payload, 'Q02').count('No answers yet.') == 1
 
 
 def test_hostile_text_is_escaped_on_trending_pages_and_cards():

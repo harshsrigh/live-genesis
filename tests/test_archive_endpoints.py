@@ -464,7 +464,7 @@ def test_reported_model_and_digest_are_recorded_and_fire_model_changed(three, mo
     assert 'We asked it ourselves · version gemini-flash-latest · the service called it gemini-2.5-flash-002 · via goog' in page
     assert f"version gemma3:4b · run locally · model file {'b' * 12}" in page
     # The answers themselves stayed the same: no card is marked changed, and the table says so.
-    assert 'acard is-changed' not in page and '>same as before</td>' in page
+    assert 'acard is-changed' not in page and '>same again</td>' in page
     assert 'data-version="gemini-2.5-flash-002"' in page
 
 
