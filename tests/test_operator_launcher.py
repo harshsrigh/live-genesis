@@ -116,7 +116,7 @@ def test_a_malformed_catalog_stops_cleanly(desk, monkeypatch, capsys):
     assert code == 1 and 'Stopped' in out
 
 
-def test_a_provider_charge_on_the_launcher_path_is_a_gap_not_a_free_answer(desk, monkeypatch, capsys):
+def test_a_provider_charge_on_the_launcher_path_stops_the_collection(desk, monkeypatch, capsys):
     catalog, db = desk
     from types import SimpleNamespace
     from test_archive_endpoints import reply
@@ -125,10 +125,11 @@ def test_a_provider_charge_on_the_launcher_path_is_a_gap_not_a_free_answer(desk,
         done = reply(model=request['model'])
         done.usage = SimpleNamespace(prompt_tokens=40, completion_tokens=12, cost=0.01)
         return done
-    fake_sdk(monkeypatch, script)
+    seen = fake_sdk(monkeypatch, script)
     code, out, _ = drive(monkeypatch, capsys, catalog, db, ['1', '1', '', 'yes', 'RUN 20 CALLS'])
-    assert code == 0 and 'complete_with_gaps' in out and 'no_usage' in out
+    assert code == 1 and 'reported a charge' in out and 'reconcile' in out and len(seen) == 1
     assert rows('SELECT COUNT(*) n FROM archive_answers')[0]['n'] == 0
+    assert [r['status'] for r in rows('SELECT status FROM budget_reservations')] == ['unconfirmed']
 
 
 def scripted_names(out):

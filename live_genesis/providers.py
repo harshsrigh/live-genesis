@@ -31,6 +31,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import os
+import re
 import socket
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -138,6 +139,11 @@ def compat_settings() -> CompatSettings:
         raise ProviderConfigError("LIVE_COMPAT_BASE_URL is required for LIVE_PROVIDER=openai-compatible "
                                   "(for example http://localhost:11434/v1)")
     scheme, host, port, loopback = _base_url("LIVE_COMPAT_BASE_URL", raw, "OPENAI_COMPATIBLE_API_KEY")
+    if is_openrouter_host(host):
+        # The single openai-compatible provider is priced at positive rates; OpenRouter is free-only here, so
+        # it is reachable only as a named archive endpoint (see docs/OPENROUTER-COLLECTOR.md).
+        raise ProviderConfigError("LIVE_COMPAT_BASE_URL must not point at OpenRouter: this project uses OpenRouter's free "
+                                  f"models only, through a named archive endpoint ({config.ENDPOINTS_VARIABLE})")
     effort = os.getenv("LIVE_COMPAT_REASONING_EFFORT", "").strip().lower() or None
     if effort is not None and effort not in REASONING_EFFORTS:
         raise ProviderConfigError("LIVE_COMPAT_REASONING_EFFORT must be low, medium or high (or unset)")
@@ -153,6 +159,26 @@ BASIS_RATES, BASIS_LOCAL, BASIS_FREE = "rates", "local", "declared-free"
 PRICING_BASES = (BASIS_RATES, BASIS_LOCAL, BASIS_FREE)
 ENDPOINT_REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
 MAX_PAUSE_SECONDS = 600.0
+# ---- OpenRouter: free models only (owner's rule) -------------------------------------------------
+# An OpenRouter base URL is accepted only as a named archive endpoint that is declared free, and only
+# with an explicit `vendor/model:free` id. A router alias (`openrouter/auto`, `openrouter/free`) picks
+# the model itself, so it is refused even when it says "free". engine._chat adds the request-side
+# limits (zero maximum prices, no fallback) and refuses an answer that reports a charge.
+OPENROUTER_FREE_ID = re.compile(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*:free")
+OPENROUTER_RULE = ("on OpenRouter must be an explicit free model id of the form vendor/model:free "
+                   "(no router alias such as openrouter/auto or openrouter/free, no paid model)")
+
+
+def is_openrouter_host(host: str | None) -> bool:
+    """True for openrouter.ai and any name under it. A trailing dot and capitals do not get around it."""
+    name = (host or "").strip().lower().rstrip(".")
+    return name == "openrouter.ai" or name.endswith(".openrouter.ai")
+
+
+def openrouter_free_model_ok(model: object) -> bool:
+    return isinstance(model, str) and OPENROUTER_FREE_ID.fullmatch(model) is not None and not model.startswith("openrouter/")
+
+
 RESERVED_ENDPOINT_NAMES = NAMES  # an entry `label=openai:model` always means the native provider
 
 
@@ -235,6 +261,10 @@ def endpoints() -> dict[str, Endpoint]:
             raise ProviderConfigError(f"{var('KEY_VAR')} is required: endpoint {name} is not on a loopback host")
         free = _yes_no(var("FREE_TIER"), False)
         rate_in, rate_out = _amount(var("INPUT_USD_PER_M"), None), _amount(var("OUTPUT_USD_PER_M"), None)
+        if is_openrouter_host(host) and (not free or rate_in or rate_out):
+            raise ProviderConfigError(f"Endpoint {name} is on OpenRouter, where this project uses free models only: set "
+                                      f"{var('FREE_TIER')}=YES and leave {var('INPUT_USD_PER_M')} / {var('OUTPUT_USD_PER_M')} "
+                                      "unset or 0. A priced OpenRouter endpoint is refused")
         if loopback or free:
             rate_in, rate_out = rate_in or 0.0, rate_out or 0.0
         elif not rate_in or not rate_out:

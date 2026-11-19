@@ -145,11 +145,16 @@ def test_a_nonzero_reported_charge_on_a_free_call_is_never_recorded_as_a_free_an
         done = reply(model=request['model'])
         done.usage = Usage()
         return done
-    fake_sdk(monkeypatch, script)
+    seen = fake_sdk(monkeypatch, script)
     done = archive.run_archive(max_usd=1)
-    # Observed behaviour on a ZERO-priced endpoint: the reported charge is a failed call (`no_usage`) like any other. Each model is
-    # skipped, its $0 hold is released, nothing is stored as an answer, and no hold is left unconfirmed. The charge itself is NOT
-    # recorded anywhere: if the provider really billed it, only the provider's dashboard shows it. Documented, not hidden.
-    assert done['status'] == 'complete_with_gaps' and 'or-free-1 (no_usage)' in done['stop_reason']
+    # A reported charge on a free-only call is not a gap to skip past: the answer is not stored, the run STOPS after
+    # that one request (the second model is not asked), and the hold stays unconfirmed, so every later run is refused
+    # until the owner has looked at the provider's billing page and reconciled.
+    assert done['status'] != 'complete' and done['status'] != 'complete_with_gaps'
+    assert 'reported a charge' in done['stop_reason'] and 'reconcile' in done['stop_reason'] and len(seen) == 1
     assert rows('SELECT COUNT(*) n FROM archive_answers')[0]['n'] == 0
-    assert {r['status'] for r in rows('SELECT status FROM budget_reservations')} == {'released'}
+    assert [r['status'] for r in rows('SELECT status FROM budget_reservations')] == ['unconfirmed']
+    assert any('reported a charge on a free-only call' in r['operation'] for r in rows('SELECT operation FROM operator_audit'))
+    fake_sdk(monkeypatch)
+    with pytest.raises(archive.ArchiveRefused, match='Unconfirmed provider charge'):
+        archive.run_archive(max_usd=1)

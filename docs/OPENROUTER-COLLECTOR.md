@@ -41,16 +41,24 @@ existing archive-lock/plan workflow in ANSWERS-OVER-TIME.md before collecting.
 ## Free-only protections and limits
 
 - The generated endpoint has zero estimated input/output rates and `declared-free` provenance.
-- Named OpenRouter endpoints declared free reject anything except an explicit `:free` model ID.
+- Any endpoint whose host is OpenRouter (capitals, a trailing dot and subdomains included) must be declared
+  free at zero rates and accepts only an explicit `vendor/model:free` id. A paid id or a router alias
+  (`openrouter/auto`, `openrouter/free`) is refused when settings are read, again by `archive-plan` and
+  `archive-run` before a run exists, and again just before the request is built. `LIVE_COMPAT_BASE_URL`
+  may not point at OpenRouter.
 - Requests include zero maximum prompt, completion, request and image prices, with provider
   fallback disabled. No web-search plugin is requested. The existing SDK retry count is zero.
-- A free call whose usage reports a nonzero or unreadable `cost` raises `UsageMissing`, which the archive
-  treats as a failed call (`no_usage`) on a zero-priced endpoint: nothing is stored as an answer, the
-  $0 hold is released, that model is skipped for the rest of the run, and the run ends
-  `complete_with_gaps`. The reported charge itself is not recorded anywhere, so check the provider's
-  dashboard after such a run and stop if anything was billed. A missing `cost` field is NOT proof of
-  zero billing; only the dashboard confirms that. A call interrupted mid-request leaves a $0 hold
-  `held` (it blocks nothing).
+- **A reported charge stops the collection.** A free call whose usage reports a nonzero or unreadable
+  `cost` raises `engine.UnexpectedCharge`: nothing is stored as an answer, no further call is made to
+  that model or any other, and the hold stays `unconfirmed`, so every later run is refused until you
+  have looked at OpenRouter's billing page and run `python -m live_genesis.cli reconcile` as the
+  message says. It is written to the operator audit log. A missing `cost` field is NOT proof of zero
+  billing; only the dashboard confirms that. A call interrupted mid-request leaves a $0 hold `held`
+  (it blocks nothing).
+- Before each collection, `python -m live_genesis.openrouter_setup --check` (with your settings loaded)
+  reads the public list again and says whether each configured model is still listed free. No key, no
+  model call; exit code 1 if one is not. If it fails, stop and choose another free model in a new
+  settings file; never switch to a paid one.
 - No price metadata is a billing guarantee. Keep the account unfunded and use only the free IDs.
 - The existing opt-in and explicit `--max-usd` gate still apply, including to free calls. This setup
   does not execute archive-run or enable opt-in. A later run needs the owner's instruction.
@@ -97,8 +105,8 @@ model-track list, not the ten manual chat-app prompts) -> key via a hidden promp
 the exact phrase it prints (`RUN <calls> CALLS`); anything else calls nothing -> results.
 
 Failure recovery: a rate-limited or failing model is skipped for the rest of the run and shows as a gap; run the
-launcher again later to ask again (a missing answer is a gap, never a change). A reported charge is a gap too:
-check the OpenRouter dashboard. Close the window to stop; recorded answers stay. Nothing is retried. If the key
+launcher again later to ask again (a missing answer is a gap, never a change). A reported charge is different: the collection stops
+at once and later runs are refused until you have checked the OpenRouter dashboard and reconciled. Close the window to stop; recorded answers stay. Nothing is retried. If the key
 was typed wrongly, run again; a rejected call is a gap. Local data: the database file named at the start; back it up
 with `python -m live_genesis.cli backup NEW-FILE` (set `LIVE_DB` first). Read the saved answers locally with the
 `uvicorn` line the launcher prints; the public site never carries them.
