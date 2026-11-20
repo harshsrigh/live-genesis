@@ -118,11 +118,12 @@ def test_checked_in_configuration_three_apps_human_and_ten_draft_questions_of_it
     assert config['aside'] == raw['aside'] == 'Why no Copilot? It is cheaper to ask a human than Copilot.'
     assert config['aside'].startswith('Why no Copilot?') and len(config['aside']) <= chatbots.ASIDE_CHARS
     # The questions are this track's own list: ids C001..., one fixed prefix, nothing taken from the two locked lists.
-    assert config['questions'] == [f'C{n:03d}' for n in range(1, 11)] and raw['prompt_prefix'] == chatbots.PROMPT_PREFIX == PREFIX
+    # The first ten of 14 Nov 2026, then questions appended later (three on 20 Nov 2026, from the weekly trend ideas).
+    assert config['questions'] == [f'C{n:03d}' for n in range(1, 14)] and raw['prompt_prefix'] == chatbots.PROMPT_PREFIX == PREFIX
     locked_ids = {q['id'] for track in archive.TRACKS for q in archive.load_questions(track=track)['questions']}
     assert not set(config['questions']) & locked_ids                                          # ids of its own: nothing refers to the two lists
     for item in config['items']:
-        assert item['prompt'] == f"{PREFIX}\n\n{item['text']}" and item['added'] == '2026-11-14'
+        assert item['prompt'] == f"{PREFIX}\n\n{item['text']}" and item['added'] == ('2026-11-14' if item['id'] <= 'C010' else '2026-11-20')
         assert 0 < len(item['hook']) <= 60 and len(item['text']) <= chatbots.QUESTION_CHARS
         # The seeded ten pass every mechanical check: the crude politics list and the existing content guards.
         for text in (item['text'], item['hook'], item['prompt']):
