@@ -877,16 +877,15 @@ def _timeline(board: dict, column: dict) -> str:
             + "".join(_square(cell) for _period, cell in series) + '</span>')
 
 
-def _key(view: _View, chat: bool) -> str:
-    """The one-line key to the timeline squares. It opens with what a square is, so that a square next to a word
-    is read as a mark and not as a box to tick."""
+def _key(view: _View) -> str:
+    """The one-line key to the timeline squares, on the model lists (a chat-app list has no squares and so no
+    key). It opens with what a square is, so that a square next to a word is read as a mark and not as a box
+    to tick."""
     return ('<p class="key"><span class="key-note">One square each time we asked, oldest first:</span>'
             '<span class="key-item"><span class="sq sq-same"></span>same as last time</span>'
             '<span class="key-item"><span class="sq sq-changed"></span>changed</span>'
-            + ('<span class="key-item"><span class="sq sq-mixed"></span>mixed answers</span>' if view.multi and not chat else '')
-            + '<span class="key-item"><span class="sq sq-none"></span>no answer</span>'
-            + ('<span class="key-item"><span class="sq sq-same sq-cond"></span>asked a bit differently</span>' if chat else '')
-            + '</p>')
+            + ('<span class="key-item"><span class="sq sq-mixed"></span>mixed answers</span>' if view.multi else '')
+            + '<span class="key-item"><span class="sq sq-none"></span>no answer</span></p>')
 
 
 def _changed_tag(human: bool) -> str:
@@ -909,12 +908,19 @@ def _before(previous: tuple[dict, dict], page: bool = False) -> str:
 
 
 def _mini(board: dict, column: dict) -> str:
-    """One answerer's newest answer on a list page, as a bubble: mark, name, timeline, the text clamped by
-    the stylesheet. "" for an answerer that was never asked this question."""
+    """One answerer's newest answer on a list page, as a bubble: mark, name, the text clamped by the
+    stylesheet. "" for an answerer that was never asked this question. A chat-app bubble carries no row of
+    squares (owner's decision of 20 November 2026: they read as boxes to tick): a new answer says "Changed"
+    in words, an answer that is not from the newest month says which month it is from ("From Oct 2026": the
+    answerer gave none since), and every month is on the question's page. A model list keeps its squares:
+    they are its only sign of mixed answers and of earlier changes."""
     found = _latest(board, column["key"])
     line = _timeline(board, column)
+    asked = bool(line)
+    if board["track"] == "chat":
+        line = ""
     if found is None:
-        if not line:
+        if not asked:
             return ""
         return (f'<li class="mini mini-none{column["who"]}">{_av(column)}<div class="stack"><div class="bubble">'
                 f'<div class="mini-top"><span class="mini-name mono">{esc(column["name"])}</span>{line}</div>'
@@ -923,6 +929,8 @@ def _mini(board: dict, column: dict) -> str:
     human = column["kind"] == "human"
     changed = cell["state"] == "changed" and board["periods"][-1]["key"] == period["key"]
     previous = _previous(board, column["key"], cell) if changed else None
+    if board["track"] == "chat" and board["periods"][-1]["key"] != period["key"]:
+        line = (f'<span class="mini-when">From <time datetime="{esc(cell["collected"])}">{esc(period["label"])}</time></span>')
     return (f'<li class="mini{" is-changed" if changed else ""}{" kind-human" if human else ""}{column["who"]}"'
             f'{data_attrs(record(board, column, period, cell))}>{_av(column)}<div class="stack">'
             + (_before(previous) if previous else '')
@@ -1187,7 +1195,7 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
             # The group switch: one radio per group, the first one chosen. No script; without the stylesheet every group shows.
             body.append("".join(f'  <input class="g-radio" type="radio" name="group" id="grp-{n}"{" checked" if n == 1 else ""} />\n'
                                 for n in range(1, len(chat.groups) + 1)))
-        body.append(f'  <div class="group-head"><h2>The latest answers</h2>{_key(view, True)}</div>\n')
+        body.append(f'  <div class="group-head"><h2>The latest answers</h2></div>\n')
         if several:
             sizes = [sum(1 for app in chat.apps if app["group"] == group["id"]) for group in chat.groups]
             body.append('  <div class="group-strip" role="group" aria-label="Choose a group">'
@@ -1205,7 +1213,7 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
                      _foot(view, "chat", shown))
     body = [_list_head(view.tag(), "Simple questions, asked again every month.",
                        "We ask AI the same basic things again and again, and keep every answer.")]
-    body += _trending_section(view, key=_key(view, False)) + _core_sections(view)
+    body += _trending_section(view, key=_key(view)) + _core_sections(view)
     body += [_core_note(view), _method_models(view)]
     return _page(view, _head("Answers Over Time", "../", versions, HOME_DESCRIPTION, _meta(view, "")),
                  _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
@@ -1219,7 +1227,7 @@ def render_models(payload: dict, versions: dict[str, str] | None = None, *, stan
     versions = versions or asset_versions()
     body = [_list_head(view.tag(), "The same questions, straight to the models.",
                        "No app in between: we ask each model ourselves and keep every answer.")]
-    body += _core_sections(view, key=_key(view, False))
+    body += _core_sections(view, key=_key(view))
     body += [_core_note(view), _method_models(view)]
     return _page(view, _head("Models · Answers Over Time", "../", versions,
                              "The core questions, asked of AI models directly, with every answer kept.", _meta(view, "")),
@@ -1234,7 +1242,7 @@ def render_trending(payload: dict, versions: dict[str, str] | None = None, *, st
     versions = versions or asset_versions()
     body = [_list_head(view.tag(), "Questions from what people search for.",
                        "Now and then we write a question from a topic lots of people looked up, then keep asking it.")]
-    body += _trending_section(view, key=_key(view, False))
+    body += _trending_section(view, key=_key(view))
     body.append(_trending_note(view))
     return _page(view, _head("Trending · Answers Over Time", "../", versions,
                              "Questions written from what many people were searching for, asked of AI models ever since.",

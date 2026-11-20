@@ -151,6 +151,11 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .mini.kind-human { flex-direction: row-reverse; align-self: flex-end; }
 .mini-top { display: flex; flex-wrap: wrap; gap: 0.15rem 0.5rem; align-items: center; }
 .mini-top .timeline { margin-left: auto; padding-left: 0.5rem; }
+/* On a list "Changed" is a word with a mark at the right of the bubble's top line: a label, not a pill. */
+.mini .tag-changed, .mini.kind-human .tag-changed { margin-left: auto; padding: 0 0 0 0.5rem; background: none; color: var(--ink); border-radius: 0; }
+.mini.kind-human .tag-changed { color: var(--on-dark); }
+.mini-when { margin-left: auto; padding-left: 0.5rem; font-size: 0.75rem; font-weight: 600; line-height: 1.4; color: var(--ink-soft); }
+.kind-human .mini-when { color: var(--on-dark-soft); }
 .mini-name, .acard-name { font-size: 0.75rem; font-weight: 700; color: var(--hue); }
 .kind-human .mini-name, .kind-human .acard-name { color: var(--on-dark-soft); }
 .mini-text { font-size: 1rem; line-height: 1.35; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; line-clamp: 4; overflow: hidden; }
