@@ -1732,9 +1732,12 @@ def render_chatbot_card(payload: dict, question_id: str, which: str = ALL_CARD, 
     several = len(chat.groups) > 1
     group = next((thread["name"] for thread in board["threads"] if panels and panels[0][0] in thread["columns"]), "") \
         if several and not single else ""
+    # A card whose AI answerers are all models asked by software says so: a model is never called a chat app.
+    kinds = {panel[0]["kind"] for panel in panels if panel[0]["kind"] != "human"}
+    kicker = "AI models" if kinds == {"model"} else "Chatbots" if several else "Chat apps"
     return _card_page(view, board, panels, versions,
                       title=f"{board['text']} · {name if single or several or part else 'everyone'} · card · Answers Over Time",
-                      kicker="Chatbots" if several else "Chat apps", one=single, track="chat", empty="No answers yet.",
+                      kicker=kicker, one=single, track="chat", empty="No answers yet.",
                       group=group, part=part)
 
 

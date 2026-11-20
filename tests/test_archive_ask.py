@@ -715,6 +715,10 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
     assert site_data['schema'] == 'live-genesis-chat-archive/3' and chatbots.site_problem(site_data) is None
     site = archive_pages.render_site(site_data, standalone=True)
     front, page, how = site['index.html'], site['c/C001.html'], site['chatbots.html']
+    # A card of models alone says "AI models" in its corner, never "Chat apps" or "Chatbots"; an app's card keeps its word.
+    corner = {name: re.findall(r'<span class="card-kicker">([^<]+)</span>', text) for name, text in site.items() if name.startswith('card/C001')}
+    assert corner['card/C001-local-one.html'] == corner['card/C001-api-one.html'] == corner['card/C001-ai-models.html'] == ['AI models']
+    assert corner['card/C001.html'] == corner['card/C001-chatgpt.html'] == corner['card/C001-human.html'] == ['Chatbots']
     # The front page: a neutral count, a group switch with both groups, the models in their own group.
     assert 'Same question. Five AIs in two groups. One human.' in visible(front)
     assert front.count('class="g-radio"') == 2 and 'AI chat apps and AI models. We ask again every month and keep every reply.' in visible(front)

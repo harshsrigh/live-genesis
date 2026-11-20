@@ -268,10 +268,10 @@ Wait a few minutes, then open <https://harshsrigh.github.io/live-genesis/>. Chec
 ### Step 18. Make the share cards
 
 ```bash
-node scripts/capture-cards.mjs --site ../site-preview --out ../cards --set chat
+LD_LIBRARY_PATH=~/.local/opt/chromium-libs/usr/lib/x86_64-linux-gnu node scripts/capture-cards.mjs --site ../site-preview --out ../cards --set chat
 ```
 
-This step needs Node and Playwright, which are not installed in WSL on this PC yet; without them it says `node: command not found` and nothing is harmed.
+Node, Playwright, its browser and an emoji font were installed in WSL on this PC on 19 November 2026, all under your home folder. The first part of the line tells the browser where three system files it needs were put; on a machine where they are installed the usual way, leave that part out. If `node` is not found, open a new WSL window.
 
 You should see one line per card and, at the end, `card(s) written to ../cards at 1080 x 1920.` Posting them is by hand too: `docs/SOCIAL-POSTS.md`.
 
@@ -309,4 +309,4 @@ export LIVE_DB=~/live-genesis/live.db
 
 *Checked on 19 November 2026 against a scratch database with placeholder replies: `backup`, `archive-status`, `archive-chatbot-template` (`--out`, `--date`), `archive-chatbot-import` (`--dry-run`, `--allow-old`, plain), the local pages, `snapshot` (`--export`, `--replace`, `--approve --i-have-read-it`, `--check`, `--from-data`) and `capture-cards.mjs` (`--site`, `--out`, `--set chat`). Not run: the `git` commands of step 16 and the two PowerShell forms named at the top.*
 
-*Checked again on 19 November 2026 in WSL on the owner's PC, in a throwaway copy of the project with a scratch database and placeholder replies: steps 1, 3, 8 to 15 printed what this guide says. Step 16: `git add published` staged exactly the two files, `git commit` worked, `git push` was run as a dry run only. Not run: step 17, step 18 (no Node here), a real push, and the two PowerShell forms.*
+*Checked again on 19 November 2026 in WSL on the owner's PC, in a throwaway copy of the project with a scratch database and placeholder replies: steps 1, 3, 8 to 15 printed what this guide says. Step 16: `git add published` staged exactly the two files, `git commit` worked, `git push` was run as a dry run only. Step 18 was run later that day on the published answers and wrote 50 cards. Not run: a push by you, and the two PowerShell forms.*
