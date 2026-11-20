@@ -68,5 +68,6 @@ python -m live_genesis.cli archive-chatbot-ask --max-usd 0.02           # PAID: 
 15. Other sessions (cloud, Codex) also push to `main`: fetch and re-merge before every push; one worktree per agent.
 
 ## Where things stand
+Starting without the earlier conversation? Read `docs/COMPACT.md` first: one page on what this is, what is live, the owner's decisions and what is open.
 The owner's monthly round, step by step: `docs/MONTHLY-ROUND.md` (keep its commands verified).
 `docs/SESSION-STATE.md` (state and next steps), `docs/PLAN-CHATBOT-COMPARISON.md` (the owner's decisions for the chat-app track), `docs/ANSWERS-OVER-TIME.md` (rules and settings), `docs/SECURITY.md`.
