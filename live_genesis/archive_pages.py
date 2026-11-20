@@ -1200,6 +1200,9 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
                         + "".join(f'<label for="grp-{n}"><span class="g-name">{esc(group["name"])}</span>'
                                   f'<span class="g-count">{size} asked</span></label>'
                                   for n, (group, size) in enumerate(zip(chat.groups, sizes), 1)) + '</div>\n')
+        if chat.apps:
+            # One plain text link to the answerers and their "just for fun" answering styles on "How it works".
+            body.append(f'  <p class="meet"><a href="chatbots.html#answerers">{esc(MEET)}</a></p>\n')
         body += ['  <div class="qs">\n', *[_row(_chat_board(view, question_id), f"c/{question_id}.html") for question_id in shown],
                  '  </div>\n', '</section>\n']
         body.append('<p class="list-note muted">Every app gets the exact same words. '
@@ -1519,6 +1522,56 @@ def render_question(payload: dict, question_id: str, versions: dict[str, str] | 
 
 
 CHATBOTS_DESCRIPTION = "How it works: the same words for every app, a fresh chat each time, and every reply kept."
+MEET = "Meet the answerers"        # the front page's one text link to the answerers and their answering styles
+
+
+def _styles(view: _View) -> dict[str, tuple[dict, list[tuple[dict, dict]]]]:
+    """The "just for fun" answering style of every AI answerer (chat app or model; never the Human column):
+    `profiles.profile` over the texts of ALL its shown answers, oldest first (a refused, skipped or hidden
+    reply is not shown, so it is not counted). Worked out at render time from the payload and kept nowhere:
+    no data file, export or data attribute carries it. Per column key: the profile and, answer by answer,
+    the board and cell it came from."""
+    from . import profiles   # lazy: only the "How it works" page reads it
+    boards = [_chat_board(view, q["id"]) for q in view.chat_questions]
+    out = {}
+    for column in view.chat.columns:
+        if column["kind"] == "human":
+            continue
+        shown = sorted(((cell["collected"], board["id"], board, cell) for board in boards
+                        for (key, _), cell in board["cells"].items() if key == column["key"] and cell["shown"]),
+                       key=lambda item: item[:2])
+        out[column["key"]] = (profiles.profile([cell["text"] for *_, cell in shown]), [(board, cell) for *_, board, cell in shown])
+    return out
+
+
+def _style(found: tuple[dict, list[tuple[dict, dict]]], sample: bool) -> str:
+    """One answerer's answering style inside its row of "How it works": our commentary, set apart from the
+    recorded facts above it and never dressed as an answer bubble. The meter is five plain boxes with a
+    text alternative, and its place is also said in words. An answer shown as "most in character" is a
+    whole recorded answer, word for word, with a link to its question."""
+    from . import profiles
+    style, answers = found
+    based = f'from {_plural(style["count"], ("sample " if sample else "") + "answer")} so far'
+    head = f'<span class="fun-kicker mono">{esc(profiles.KICKER)}</span>'
+    if style["step"] is None:
+        return (f'<div class="app-fun">{head}<strong class="fun-name fun-early">{esc(profiles.TOO_EARLY)}</strong>'
+                f'<span class="muted small">{esc(based[0].upper() + based[1:] + ". " + profiles.NEED)}</span></div>')
+    place = profiles.position(style["step"])
+    boxes = "".join(f'<span class="fun-box{" fun-on" if n == style["step"] else ""}"></span>' for n in range(1, len(profiles.STEPS) + 1))
+    meter = (f'<span class="fun-scale"><span class="fun-end">{esc(profiles.ENDS[0])}</span>'
+             f'<span class="fun-meter" role="img" aria-label="{esc("Step " + place)}">{boxes}</span>'
+             f'<span class="fun-end">{esc(profiles.ENDS[1])}</span></span>')
+    because = "; ".join(style["because"])
+    quote = ""
+    if style["pick"] is not None:
+        board, cell = answers[style["pick"]]
+        quote = (f'<span class="fun-quote small"><span class="muted">Most in character, on '
+                 f'<a href="c/{esc(board["id"])}.html">{esc(board["text"])}</a></span> '
+                 f'<span class="fun-words">{esc(cell["text"])}</span></span>')
+    return (f'<div class="app-fun">{head}<strong class="fun-name">{esc(style["name"])}</strong>{meter}'
+            f'<span class="muted small">{esc(place[0].upper() + place[1:])} · {esc(based)}</span>'
+            + (f'<span class="small">{esc("Because: " + because + ".")}</span>' if because else '')
+            + quote + '</div>')
 
 
 def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
@@ -1532,8 +1585,13 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
             + (" This is a sample site: the apps are made up and we wrote the replies." if chat.demo else ""))
     body = [_list_head(view.tag("chat") if chat.dates else NO_ANSWERS, "How this works.", esc(lede))]
     if chat.dates and chat.columns:
-        body.append('<section class="group">\n  <div class="group-head"><h2>How we asked each one</h2>'
+        from . import profiles   # lazy: the wording of the "just for fun" line
+        styles = _styles(view)
+        body.append('<section class="group" id="answerers">\n  <div class="group-head"><h2>How we asked each one</h2>'
                     '<span class="muted">The settings from the last time we asked.</span></div>\n')
+        if styles:
+            # Said once per page: the answering styles are our own commentary, counted from the answers, and a joke.
+            body.append(f'  <p class="fun-note">{esc(profiles.LABEL + (profiles.LABEL_SAMPLE if chat.demo else ""))}</p>\n')
         for thread in chat.threads:
             rows = []
             for column in thread["columns"]:
@@ -1555,7 +1613,7 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
                                 + '</div>'
                                 f'<div class="app-how"><span>model: {esc(_asked_model(chat.models[(key, dates[-1])]))}</span>'
                                 f'<span class="muted small">asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all'
-                                '</span></div></div>\n')
+                                f'</span></div>{_style(styles[key], chat.demo)}</div>\n')
                     continue
                 dates = [d for d in chat.dates if (key, d) in chat.conditions]
                 conditions = chat.conditions[(key, dates[-1])]
@@ -1567,7 +1625,7 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
                             f'{esc(" · " + SAMPLE_WORD if chat.demo else "")}</span>'
                             + (f'<span class="muted small">{esc(conditions["note"])}</span>' if conditions["note"] else '')
                             + (f'<span class="mono small">{esc(column["attribution"])}</span>' if column["attribution"] else '')
-                            + '</div></div>\n')
+                            + f'</div>{_style(styles[key], chat.demo)}</div>\n')
             if rows:
                 # A group's name appears only when there are several groups.
                 body.append((f'  <h3 class="apps-name">{esc(thread["name"])}</h3>\n' if len(chat.threads) > 1 else '')
