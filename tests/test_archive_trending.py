@@ -483,7 +483,7 @@ def test_trending_pages_for_the_demo(ready):
     assert re.search(r'aria-label="model-b: changed Oct 2026; asked 4 times"', listing)
     assert listing.count('<span class="sq sq-none"></span>') == 1                # the key only: no dashed squares before a question existed
     assert listing.count('<span class="sq ') == 3 + 3 * (6 + 4 + 2)
-    assert 'written by hand' in listing and 'one square each time we asked, oldest first' in listing
+    assert 'written by hand' in listing and 'One square each time we asked, oldest first:' in listing
     assert listing.count('<main') == 1 and listing.count('<h1') == 1
     # One trending question: the same layout plus topic and source.
     assert '<span class="q-id mono">T002</span><span class="chip chip-topic">chip stocks</span><span class="chip-note">added Jul 2026</span>' in t2

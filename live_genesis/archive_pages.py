@@ -877,13 +877,15 @@ def _timeline(board: dict, column: dict) -> str:
 
 
 def _key(view: _View, chat: bool) -> str:
-    """The one-line key to the timeline squares."""
-    return ('<p class="key"><span class="key-item"><span class="sq sq-same"></span>same as last time</span>'
+    """The one-line key to the timeline squares. It opens with what a square is, so that a square next to a word
+    is read as a mark and not as a box to tick."""
+    return ('<p class="key"><span class="key-note">One square each time we asked, oldest first:</span>'
+            '<span class="key-item"><span class="sq sq-same"></span>same as last time</span>'
             '<span class="key-item"><span class="sq sq-changed"></span>changed</span>'
             + ('<span class="key-item"><span class="sq sq-mixed"></span>mixed answers</span>' if view.multi and not chat else '')
             + '<span class="key-item"><span class="sq sq-none"></span>no answer</span>'
             + ('<span class="key-item"><span class="sq sq-same sq-cond"></span>asked a bit differently</span>' if chat else '')
-            + '<span class="key-note">one square each time we asked, oldest first</span></p>')
+            + '</p>')
 
 
 def _changed_tag(human: bool) -> str:
@@ -981,7 +983,7 @@ def _row(board: dict, href: str) -> str:
     number = '' if board["track"] == "chat" else f'<span class="q-id mono">{esc(board["id"])}</span>'
     share = _share(board, href, f'card/{board["id"]}.html')
     # The whole card opens the question: the heading's link is stretched over the card in the stylesheet
-    # (`.row-open::after`), so there is one link to tab to and no script.
+    # (`.row-open::after`) and carries the arrow that says so (`.row-open::before`). No script.
     return ('  <article class="row">\n'
             f'    <div class="row-head">{number}{hook}'
             f'<h3 class="row-q"><a class="row-open" href="{esc(href)}">{esc(board["text"])}</a></h3></div>\n'

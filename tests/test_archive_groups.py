@@ -561,3 +561,24 @@ def test_share_line_facebook_needs_the_public_address_and_the_other_two_open_the
         assert archive_pages.site_url() == '' and 'facebook' not in archive_pages._share(board, 'a', 'b').lower()
     # The model track is not published, so it gets no share line.
     assert archive_pages._share({**board, 'track': 'core'}, 'a', 'b') == ''
+
+
+def test_only_what_can_be_tapped_looks_like_a_pill():
+    """The front page's head: the honesty label and the three facts are text (no fill, no border, no rounded
+    pill), so they cannot be taken for the links of the top bar; a question's card says that it opens."""
+    css = (STATIC / 'archive.css').read_text(encoding='utf-8')
+
+    def rule(selector):
+        found = re.findall(r'^' + re.escape(selector) + r' \{([^}]*)\}', css, re.M)
+        assert len(found) == 1, selector
+        return found[0]
+    for selector in ('.tag', '.tag-dark', '.steps', '.steps li', '.key', '.key-item', '.key-note'):
+        for pill in ('background', 'border', 'box-shadow', 'padding: 0.'):
+            assert pill not in rule(selector), (selector, pill)
+    assert 'border-radius: 999px' in rule('.bar nav a') and 'border: 1px solid' in rule('.bar nav a')      # a real link keeps its pill
+    assert 'border-radius: 999px' in rule('.group-strip label, .month-strip label')                        # and so do the switches
+    # The card: the heading's link covers it and draws an arrowhead; the link under the bubbles has one too.
+    assert 'position: absolute' in rule('.row-open::after') and 'border-width: 3px 3px 0 0' in rule('.row-open::before')
+    assert 'border-width: 2px 2px 0 0' in rule('.row-more a::after')
+    # The key says what a square is before it shows one, on a phone too.
+    assert '.key-note { display: none; }' not in css
