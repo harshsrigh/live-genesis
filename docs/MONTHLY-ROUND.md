@@ -173,7 +173,7 @@ python -m live_genesis.cli archive-chatbot-import chatbots-2026-12.json
 
 You should see `Done. Stored as hand-entered run` and a number. The replies are now in your database and nowhere else. This step cannot be undone or repeated: a stored reply is never replaced.
 
-The very first time, it also tells you the question list is now fixed. From then on you can add questions, but not change one.
+The very first time anything is stored, it also tells you the question list is now fixed. From then on you can add questions, but not change one. (On your real database that already happened on 19 November 2026, when the four local models were asked: the ten questions are fixed, and this message will not appear again.)
 
 ### Step 10. Look at it on your own PC
 
@@ -181,7 +181,7 @@ The very first time, it also tells you the question list is now fixed. From then
 python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000
 ```
 
-You should see `Uvicorn running on http://127.0.0.1:8000`. Open that address in your browser and read the front page, a question page and "How it works". Only you can see this.
+You should see `Uvicorn running on http://127.0.0.1:8000`. Open that address in your browser and read the front page, a question page and "How it works". Only you can see this. If it says the address is already in use, the pages are already running in another window: use that one, or put `8001` in place of `8000`.
 
 Press **Ctrl+C** in the WSL window to stop it.
 
@@ -206,6 +206,8 @@ python -m live_genesis.snapshot --export published --replace
 ### Step 12. Read every answer
 
 Open `published/archive.json` and read every reply in it. This is the one step no program can do for you: the automatic checks catch patterns (an email address, a link), not meaning.
+
+If models were asked the same questions by software (the "AI models" group), their replies are in this file too, under each model's own name. Read those as well; approving covers the whole file.
 
 You are looking for anything you would not want under an app's name or yours: something hateful, something about a real private person, something that reads as advice. Refused replies are not in this file; only the fact that there was one.
 
@@ -237,6 +239,14 @@ You should see `Static snapshot written to ../site-preview (rendered from approv
 
 ### Step 16. Push
 
+First get the latest code, because others push to the project too:
+
+```bash
+git pull --ff-only
+```
+
+You should see `Already up to date.` or a list of updated files. If it changed anything, run step 14 again before going on.
+
 ```bash
 git add published
 ```
@@ -249,7 +259,7 @@ git commit -m "Chat-app round, December 2026"
 git push
 ```
 
-Only the `published` folder goes up. Never add a database, your sheet or `.env`. (These three commands were not run when this guide was checked: pushing is yours alone.)
+Only the `published` folder goes up. Never add a database, your sheet or `.env`, and never type `git add .`: your sheet and any reply text files sit in this folder too. If `git push` is refused because someone pushed in the meantime, run `git pull --no-rebase`, then `git push` again.
 
 ### Step 17. Check the live pages
 
@@ -260,6 +270,8 @@ Wait a few minutes, then open <https://harshsrigh.github.io/live-genesis/>. Chec
 ```bash
 node scripts/capture-cards.mjs --site ../site-preview --out ../cards --set chat
 ```
+
+This step needs Node and Playwright, which are not installed in WSL on this PC yet; without them it says `node: command not found` and nothing is harmed.
 
 You should see one line per card and, at the end, `card(s) written to ../cards at 1080 x 1920.` Posting them is by hand too: `docs/SOCIAL-POSTS.md`.
 
@@ -296,3 +308,5 @@ export LIVE_DB=~/live-genesis/live.db
 ---
 
 *Checked on 19 November 2026 against a scratch database with placeholder replies: `backup`, `archive-status`, `archive-chatbot-template` (`--out`, `--date`), `archive-chatbot-import` (`--dry-run`, `--allow-old`, plain), the local pages, `snapshot` (`--export`, `--replace`, `--approve --i-have-read-it`, `--check`, `--from-data`) and `capture-cards.mjs` (`--site`, `--out`, `--set chat`). Not run: the `git` commands of step 16 and the two PowerShell forms named at the top.*
+
+*Checked again on 19 November 2026 in WSL on the owner's PC, in a throwaway copy of the project with a scratch database and placeholder replies: steps 1, 3, 8 to 15 printed what this guide says. Step 16: `git add published` staged exactly the two files, `git commit` worked, `git push` was run as a dry run only. Not run: step 17, step 18 (no Node here), a real push, and the two PowerShell forms.*
