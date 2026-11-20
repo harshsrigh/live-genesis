@@ -1,0 +1,30 @@
+{
+ "schema": "live-genesis-published/5",
+ "contents": "archive",
+ "file": "archive.json",
+ "exported_at": "2026-11-20T03:45:07+00:00",
+ "archive": {
+  "file": "archive.json",
+  "chatbots": {
+   "runs": 1,
+   "answers": 40,
+   "apps": [
+    "phi4-mini",
+    "gemma3-4b",
+    "granite42-3b",
+    "qwen35-4b"
+   ],
+   "human_answers": 0,
+   "questions": 10,
+   "models": [
+    "phi4-mini",
+    "gemma3-4b",
+    "granite42-3b",
+    "qwen35-4b"
+   ]
+  },
+  "sha256": "c4641a2ac0f87b6fab03d6a5264955c5094f301602bf5900cfad74aefbd1df19"
+ },
+ "reviewed": true,
+ "reviewed_at": "2026-11-20T03:53:01+00:00"
+}
