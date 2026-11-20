@@ -294,7 +294,8 @@ def test_a_group_added_later_starts_as_new_columns_from_its_first_month(chat, tm
     assert re.findall(r'<h3 class="thread-name">([^<]+)</h3>', older) == ['AI chat apps', 'Human']       # not asked then: no empty thread
     assert older.count('<article class="acard') == 4 and newest.count('<article class="acard') == 6
     assert page.count('>not asked</td>') == 2                                             # the table says so, once per new column
-    assert 'aria-label="Sample bot D: no change; asked once"' in archive_pages.render_index(payload)
+    front = archive_pages.render_index(payload)
+    assert front.count('>Sample bot D</span>') == 4 and 'class="sq ' not in front and 'mini-when' not in front      # a bubble per question, no squares
 
 
 # ---- share cards: at most four bubbles, more answerers on further cards ------------------------------------------
@@ -582,3 +583,6 @@ def test_only_what_can_be_tapped_looks_like_a_pill():
     assert 'border-width: 2px 2px 0 0' in rule('.row-more a::after')
     # The key says what a square is before it shows one, on a phone too.
     assert '.key-note { display: none; }' not in css
+    # On a list "Changed" and "From <month>" are words at the right of a bubble's top line, not pills.
+    assert 'background: none' in rule('.mini .tag-changed, .mini.kind-human .tag-changed')
+    assert 'background' not in rule('.mini-when') and 'border' not in rule('.mini-when')

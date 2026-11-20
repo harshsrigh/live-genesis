@@ -699,9 +699,9 @@ def test_demo_uses_made_up_names_only_and_is_marked_as_a_sample_for_people_and_m
     assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<a href="models.html">Models</a>' in front
     assert front.count('<h3 class="row-q"><a class="row-open" href="c/C00') == 6 and front.count('class="mini-text"') == 24      # every answerer's newest answer inline
     assert '<span class="row-hook">Hot dog: sandwich or not?</span>' in front and 'Human (sample)' in front
-    assert 'aria-label="Chat app A: changed Oct 2026; asked a bit differently Oct 2026; asked 4 times"' in front
-    assert 'aria-label="Human (sample): different answer Nov 2026; asked 3 times"' in front        # people did not "change"
-    assert 'aria-label="Chat app B: no change; no answer Oct 2026; asked 4 times"' in front
+    # No row of squares in a bubble and no key to them (owner, 20 November 2026): a change is said in words.
+    assert 'class="sq ' not in front and 'class="timeline"' not in front and 'class="key"' not in front and 'One square' not in front
+    assert '<span class="tag-changed mono">Different answer this month</span>' in front             # people did not "change"
     # One sample label per page, not per card; made-up names; no notice about real companies.
     for text in (front, page, method, card, one, person):
         assert visible(text).count('Sample we wrote, not a real AI answer') == 1
@@ -763,9 +763,12 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<h2>The latest answers</h2>' in front
     assert 'Same question. Three AI apps. One human.' in visible(front) and front.count('<span class="hl') == 3
     assert front.count('<h3 class="row-q"><a class="row-open" href="c/C00') == 4 and front.count('class="mini-text"') == 16
-    assert 'aria-label="ChatGPT: changed Nov 2026; asked a bit differently Nov 2026; asked 2 times"' in front
-    assert 'aria-label="Human: different answer Nov 2026; asked 2 times"' in front and 'aria-label="Grok: no change; no answer Nov 2026; asked 2 times"' in front
-    assert '<span class="sq sq-changed sq-cond"></span>' in front and visible(front).count(archive_pages.LEFT_OUT) == 1      # once, in the footer
+    # No squares and no key: "Changed" in words, and an answer that is not from the newest month says its month.
+    assert 'class="sq ' not in front and 'class="timeline"' not in front and 'class="key"' not in front and 'role="img"' not in front
+    assert front.count('<span class="tag-changed mono">Changed</span>') == 2 and front.count('<span class="tag-changed mono">Different answer this month</span>') == 1
+    assert front.count('<span class="mini-when">From <time datetime="2026-10-10">Oct 2026</time></span>') == 2       # no answer in November (Grok's C004 among them)
+    assert 'Asked a bit differently' not in front and 'PLACEHOLDER refusal words.' not in front
+    assert visible(front).count(archive_pages.LEFT_OUT) == 1                                                         # once, in the footer
     assert archive_pages.LEFT_OUT == 'When an app refuses or dodges, we leave it out.'
     assert '<span class="q-id' not in front and '>C001<' not in front                         # a question leads with its hook, not its id
     assert '<span class="tag tag-dark mono">AI-generated · may be wrong</span>' in front
