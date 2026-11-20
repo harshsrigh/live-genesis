@@ -673,7 +673,7 @@ def test_pages_for_the_demo_archive(ready):
             assert 'READ-ONLY ARCHIVE' not in page and 'Read-only. No payments. Just answers.' in page
     # The model list: every core question with each model's newest answer inline and a timeline that says WHEN it changed.
     assert 'The same questions, straight to the models.' in models and 'How we keep track' in models
-    assert 'It does not say which answer is right.' in models and 'one square each time we asked, oldest first' in models
+    assert 'It does not say which answer is right.' in models and 'One square each time we asked, oldest first:' in models
     assert models.count('class="timeline"') == 60 and models.count('role="img"') == 60
     assert models.count('<h3 class="row-q"><a class="row-open" href="q/') == 20 and models.count('class="mini-text"') == 60
     assert 'aria-label="model-a: changed Aug 2026 and Nov 2026; asked 8 times"' in models

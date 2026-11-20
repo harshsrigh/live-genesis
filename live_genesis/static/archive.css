@@ -80,8 +80,11 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .wrap { max-width: 1280px; margin: 0 auto; padding: 0 var(--gutter); }
 .wrap-foot { padding-bottom: 3rem; }
 .display { font-family: var(--display); font-weight: 800; }
-.tag { align-self: flex-start; display: inline-block; padding: 0.2rem 0.7rem; border-radius: 999px; font-size: 0.75rem; font-weight: 600; line-height: 1.5; }
-.tag-dark { background: var(--chip); color: var(--ink); }
+/* The honesty label is information, not a control: plain small capitals behind a short rule, no pill. Only what
+   can be tapped (the links in the top bar, the switches) has a pill's fill and border. */
+.tag { align-self: flex-start; display: inline-flex; gap: 0.5rem; align-items: center; font-size: 0.75rem; font-weight: 700; line-height: 1.5; letter-spacing: 0.06em; text-transform: uppercase; }
+.tag::before { content: ""; flex: none; width: 1rem; height: 2px; background: currentColor; }
+.tag-dark { color: var(--ink-soft); }
 .lede { font-size: 1.0625rem; line-height: 1.45; color: var(--muted); }
 
 /* ---- list pages: a short head that reads like the top of a thread, then the questions ---- */
@@ -89,10 +92,13 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .list-head h1 { font-size: clamp(2rem, 4.4vw, 3.25rem); line-height: 1.02; letter-spacing: -0.035em; }
 .hl { display: inline-block; margin-right: 0.25em; }
 .hl-last { color: var(--accent); margin-right: 0; }
-.steps { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.4rem; }
-.steps li { font-size: 0.75rem; font-weight: 600; padding: 0.25rem 0.7rem; border: 1px solid var(--line); border-radius: 999px; background: var(--pane); }
+/* Three facts, as text with a tick each: nothing here can be tapped, so nothing here is a pill. */
+.steps { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 0.1rem 1.1rem; font-size: 0.8125rem; font-weight: 600; color: var(--ink-soft); }
+.steps li { display: inline-flex; gap: 0.5rem; align-items: baseline; }
+.steps li::before { content: ""; flex: none; width: 0.3rem; height: 0.6rem; border: solid var(--accent); border-width: 0 2px 2px 0; transform: translateY(-1px) rotate(45deg); }
 .key { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: center; font-size: 0.8125rem; color: var(--muted); }
 .key-item { display: inline-flex; gap: 0.4rem; align-items: center; }
+.key-note { flex: 0 1 auto; }
 
 /* ---- the timeline: one square per check. Each kind reads without colour: filled pale with an edge,
    filled dark, pale with a thick ring, dashed and empty. ---- */
@@ -123,7 +129,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .group-head .muted { font-size: 0.875rem; }
 .qs { display: grid; gap: 1.25rem; grid-template-columns: minmax(0, 1fr); align-items: stretch; }
 .row { min-width: 0; background: var(--pane); border: 1px solid var(--line); border-radius: 22px; box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column; }
-.row-head { padding: 0.8rem 1rem 0.75rem; border-bottom: 1px solid var(--line); background: var(--pane-soft); display: flex; flex-wrap: wrap; gap: 0.1rem 0.6rem; align-items: baseline; }
+.row-head { padding: 0.8rem 2.75rem 0.75rem 1rem; border-bottom: 1px solid var(--line); background: var(--pane-soft); display: flex; flex-wrap: wrap; gap: 0.1rem 0.6rem; align-items: baseline; }
 .q-id { flex: none; font-size: 0.75rem; font-weight: 700; color: var(--ink); }
 .row-hook { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
 .row-q { flex: 1 1 100%; font-family: var(--display); font-weight: 700; font-size: 1.375rem; line-height: 1.15; letter-spacing: -0.02em; overflow-wrap: anywhere; }
@@ -131,6 +137,8 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 /* The whole card is the link: the heading's link covers it. One tab stop; the outline is drawn on the card. */
 .row { position: relative; }
 .row-open::after { content: ""; position: absolute; z-index: 1; top: 0; right: 0; bottom: 0; left: 0; border-radius: inherit; }
+/* The cue that the card opens, where there is no hover either: an arrowhead at the right of the heading. */
+.row-open::before { content: ""; position: absolute; top: 1.35rem; right: 1.25rem; width: 0.7rem; height: 0.7rem; border: solid var(--accent); border-width: 3px 3px 0 0; border-radius: 1px; transform: rotate(45deg); }
 .row:hover { border-color: var(--ink); }
 .row:has(.row-open:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
 .row-open:focus-visible { outline: none; }
@@ -149,7 +157,8 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .mini-none .bubble { background: var(--pane); border: 1.5px dashed var(--dash); }
 .mini-none .mini-name { color: var(--ink-soft); }
 .mini-none .mini-text { font-size: 0.875rem; }
-.row-more { margin-top: auto; padding: 0.2rem 1rem 0.9rem; font-size: 0.8125rem; font-weight: 600; text-align: center; }
+.row-more { margin-top: auto; padding: 0.2rem 1rem 0.9rem; font-size: 0.875rem; font-weight: 700; text-align: center; }
+.row-more a::after { content: ""; display: inline-block; width: 0.4rem; height: 0.4rem; margin-left: 0.45rem; border: solid currentColor; border-width: 2px 2px 0 0; transform: translateY(-1px) rotate(45deg); }
 .row-none { padding: 0.9rem 1rem; }
 /* The share line sits above the card's stretched link, so its own links can be followed. */
 .row-more, .row-share { position: relative; z-index: 2; }
@@ -358,7 +367,8 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 @media (max-width: 379px) {
   .ans.clamp { -webkit-line-clamp: 6; line-clamp: 6; }
   .q-hero .q-id { display: none; }
-  .q-hero .tag { padding: 0.15rem 0.5rem; }
+  .tag { letter-spacing: 0.02em; text-wrap: balance; }
+  .tag::before { display: none; }
 }
 @media (min-width: 700px) {
   .card-links-one { display: none; }
@@ -446,7 +456,8 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .display-q.q-long { font-size: 1.25rem; line-height: 1.1; letter-spacing: -0.02em; }
   .group-head .key { margin-left: 0; }
   .q-hero .tag { font-family: var(--body); }
-  .key-note { display: none; }
+  .key { font-size: 0.75rem; gap: 0.2rem 0.9rem; }
+  .key-note { flex: 1 1 100%; }
   .method { padding: 1.5rem 1.25rem; }
   /* A phone: the bubbles take the full width of the pane; the side of the mark tells who is who. */
   .cards { padding: 0.6rem 0.5rem; gap: 0.5rem; border-radius: 18px; }
@@ -476,6 +487,8 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .bubble, .row, .bar nav a, .month-strip label, .group-strip label { transition: transform 150ms, background-color 150ms, border-color 150ms, color 150ms; }
   .acard:hover .bubble, .mini:hover .bubble { transform: translateY(-1px); }
   .row:hover { border-color: var(--dash); }
+  .row-open::before { transition: right 150ms; }
+  .row:hover .row-open::before { right: 1rem; }
 }
 
 /* Forced colours (Windows high contrast): every square, mark and bubble keeps an edge, and the kinds stay apart. */
