@@ -478,7 +478,7 @@ def test_trending_pages_for_the_demo(ready):
     # The list: newest first, each model's newest answer inline, timelines that start late.
     assert listing.index('t/T003.html') < listing.index('t/T002.html') < listing.index('t/T001.html')
     assert listing.count('class="timeline"') == 9 and listing.count('class="mini-text"') == 9
-    assert '<h3 class="row-q"><a href="t/T002.html">What is Nvidia&#x27;s share price today?</a></h3>' in listing
+    assert '<h3 class="row-q"><a class="row-open" href="t/T002.html">What is Nvidia&#x27;s share price today?</a></h3>' in listing
     assert 'aria-label="model-a: no change; asked 4 times"' in listing and 'aria-label="model-a: no change; asked 2 times"' in listing
     assert re.search(r'aria-label="model-b: changed Oct 2026; asked 4 times"', listing)
     assert listing.count('<span class="sq sq-none"></span>') == 1                # the key only: no dashed squares before a question existed

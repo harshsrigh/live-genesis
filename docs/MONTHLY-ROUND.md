@@ -263,7 +263,7 @@ Only the `published` folder goes up. Never add a database, your sheet or `.env`,
 
 ### Step 17. Check the live pages
 
-Wait a few minutes, then open <https://harshsrigh.github.io/live-genesis/>. Check the front page, one question page and "How it works". The month should be the new one, and the sample label should be gone from the main pages (the samples live on under "Sample site").
+Wait a few minutes, then open <https://harshsrigh.github.io/live-genesis/>. Check the front page, one question page and "How it works". The month should be the new one, and there should be no sample label anywhere (once real answers are published, the sample site is no longer part of the site).
 
 ### Step 18. Make the share cards
 

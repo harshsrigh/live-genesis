@@ -674,7 +674,7 @@ def test_pages_for_the_demo_archive(ready):
     assert 'The same questions, straight to the models.' in models and 'How we keep track' in models
     assert 'It does not say which answer is right.' in models and 'one square each time we asked, oldest first' in models
     assert models.count('class="timeline"') == 60 and models.count('role="img"') == 60
-    assert models.count('<h3 class="row-q"><a href="q/') == 20 and models.count('class="mini-text"') == 60
+    assert models.count('<h3 class="row-q"><a class="row-open" href="q/') == 20 and models.count('class="mini-text"') == 60
     assert 'aria-label="model-a: changed Aug 2026 and Nov 2026; asked 8 times"' in models
     assert 'aria-label="model-c: changed Jun 2026; no answer Sep 2026; asked 8 times"' in models
     assert 'aria-label="model-a: no change; asked 8 times"' in models

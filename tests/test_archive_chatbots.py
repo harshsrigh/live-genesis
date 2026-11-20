@@ -697,7 +697,7 @@ def test_demo_uses_made_up_names_only_and_is_marked_as_a_sample_for_people_and_m
     assert ('<h1 class="display"><span class="hl">Same question.</span> <span class="hl">Three AI apps.</span> '
             '<span class="hl hl-last">One human.</span></h1>') in front
     assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<a href="models.html">Models</a>' in front
-    assert front.count('<h3 class="row-q"><a href="c/C00') == 6 and front.count('class="mini-text"') == 24      # every answerer's newest answer inline
+    assert front.count('<h3 class="row-q"><a class="row-open" href="c/C00') == 6 and front.count('class="mini-text"') == 24      # every answerer's newest answer inline
     assert '<span class="row-hook">Hot dog: sandwich or not?</span>' in front and 'Human (sample)' in front
     assert 'aria-label="Chat app A: changed Oct 2026; asked a bit differently Oct 2026; asked 4 times"' in front
     assert 'aria-label="Human (sample): different answer Nov 2026; asked 3 times"' in front        # people did not "change"
@@ -762,7 +762,7 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
     # The front page: the chat-app questions with everyone's newest answer.
     assert '<a href="index.html" aria-current="page">Chat apps</a>' in front and '<h2>The latest answers</h2>' in front
     assert 'Same question. Three AI apps. One human.' in visible(front) and front.count('<span class="hl') == 3
-    assert front.count('<h3 class="row-q"><a href="c/C00') == 4 and front.count('class="mini-text"') == 16
+    assert front.count('<h3 class="row-q"><a class="row-open" href="c/C00') == 4 and front.count('class="mini-text"') == 16
     assert 'aria-label="ChatGPT: changed Nov 2026; asked a bit differently Nov 2026; asked 2 times"' in front
     assert 'aria-label="Human: different answer Nov 2026; asked 2 times"' in front and 'aria-label="Grok: no change; no answer Nov 2026; asked 2 times"' in front
     assert '<span class="sq sq-changed sq-cond"></span>' in front and visible(front).count(archive_pages.LEFT_OUT) == 1      # once, in the footer
@@ -852,13 +852,13 @@ def test_the_front_page_is_the_chat_app_comparison_only_once_a_chat_app_run_exis
     front = pages['index.html']
     # No chat-app run (the state of the published data today): the front page is useful as it is, with no empty shell.
     assert 'chatbots' not in payload and '<a href="index.html" aria-current="page">Questions</a>' in front
-    assert 'Simple questions, asked again every month.' in front and front.count('<h3 class="row-q"><a href="q/') == 20
+    assert 'Simple questions, asked again every month.' in front and front.count('<h3 class="row-q"><a class="row-open" href="q/') == 20
     assert 'Seven.' in front and 'Chat app' not in front and 'Human' not in front and 'c/C0' not in front
     assert not any(name.startswith('c/') or name.startswith('card/C') for name in pages)
     assert 'We haven&#x27;t asked anyone yet. The first answers are on their way.' in pages['chatbots.html']
     for name in REAL_NAMES + ('Copilot',):
         assert all(name not in page for key, page in pages.items() if key != 'data/README.txt'), name
-    assert pages['models.html'].count('<h3 class="row-q"><a href="q/') == 20
+    assert pages['models.html'].count('<h3 class="row-q"><a class="row-open" href="q/') == 20
     assert archive_pages.FIRST_PAGE == 'index.html' and 'url=archive/index.html' in archive_pages.render_home()
     # With one hand-entered run the same database's front page becomes the comparison; the models keep their own page.
     config_file(tmp_path, monkeypatch)
@@ -866,7 +866,7 @@ def test_the_front_page_is_the_chat_app_comparison_only_once_a_chat_app_run_exis
     chatbots.import_collection(filled(tmp_path))
     after = archive_pages.render_site(archive.public_payload())
     assert 'Same question. Three AI apps. One human.' in visible(after['index.html']) and 'q/Q01.html' not in after['index.html']
-    assert after['models.html'].count('<h3 class="row-q"><a href="q/') == 20 and '<a href="models.html">Models</a>' in after['index.html']
+    assert after['models.html'].count('<h3 class="row-q"><a class="row-open" href="q/') == 20 and '<a href="models.html">Models</a>' in after['index.html']
 
 
 def test_chat_cards_three_apps_and_human_in_the_safe_box(chat, tmp_path):
@@ -1188,7 +1188,7 @@ def test_machine_readable_labels_on_recorded_model_answers(ready, monkeypatch):
     assert 'base_url' not in json.dumps(records) and 'fake-key' not in json.dumps(records)
     # The front page without a chat-app run: every question with each model's newest answer, no empty chat-app shell.
     front = pages['index.html']
-    assert front.count('<h3 class="row-q"><a href="q/') == 20 and front.count('class="mini-text"') == 40
+    assert front.count('<h3 class="row-q"><a class="row-open" href="q/') == 20 and front.count('class="mini-text"') == 40
     assert 'AI-generated · we asked it ourselves · may be wrong' in front and 'Sample' not in front and 'Chat app' not in front
     assert '<a href="index.html" aria-current="page">Questions</a>' in front and not any(name.startswith('c/') for name in pages)
     # Two checks fell in one month: the periods are told by their day, not twice by the month.

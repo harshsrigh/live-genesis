@@ -5,7 +5,7 @@
 #   - No published/ folder: the SCRIPTED-DEMO snapshot is the whole site (the exporter refuses
 #     anything that is not scripted demo data).
 #   - published/ present: it must be intact and approved (python -m live_genesis.snapshot --check).
-#     Then the reviewed data is rendered at the site root and the scripted demo under demo/.
+#     Then the reviewed data is the whole site; the scripted sample is not built beside it.
 #     If the check fails, the job fails and NOTHING is published; the site stays as it was.
 # See docs/ANSWERS-OVER-TIME.md. Deleting published/ returns the site to the demo.
 name: Tests and demo snapshot
@@ -60,13 +60,16 @@ jobs:
           export LIVE_DB="$RUNNER_TEMP/demo.db"
           python -m live_genesis.cli demo-archive
       - name: Export static snapshot
+        env:
+          # The public address, for the "Share on Facebook" links only. Every other link is relative.
+          LIVE_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
         run: |
           if [ "${HAVE_PUBLISHED:-}" = "1" ]; then
-            # Root: rendered from the reviewed JSON, no database. demo/: the scripted demo.
+            # Rendered from the reviewed JSON, no database. Once real answers are published the scripted
+            # sample is not part of the site (owner's decision, 20 Nov 2026): no demo/ folder, no link to one.
             # The public site holds the chat-app comparison and nothing of the model track.
-            python -m live_genesis.snapshot "$RUNNER_TEMP/site" --from-data published --sibling demo/ --archive-only
-            python -m live_genesis.snapshot "$RUNNER_TEMP/site/demo" --sibling ../ --archive-only
-            echo "SNAPSHOT_KIND=reviewed recorded data at the root, scripted demo under demo/" >> "$GITHUB_ENV"
+            python -m live_genesis.snapshot "$RUNNER_TEMP/site" --from-data published --archive-only
+            echo "SNAPSHOT_KIND=reviewed recorded data only" >> "$GITHUB_ENV"
           else
             python -m live_genesis.snapshot "$RUNNER_TEMP/site" --archive-only
             echo "SNAPSHOT_KIND=scripted demo data only" >> "$GITHUB_ENV"

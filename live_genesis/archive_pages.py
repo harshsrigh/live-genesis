@@ -66,8 +66,10 @@ import hashlib
 import html
 import json
 import math
+import os
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 from . import archive
 from . import web  # CONTENT_SECURITY_POLICY is read at call time (web imports this module for its routes)
@@ -206,7 +208,7 @@ def _marks(names: list[str]) -> list[str]:
             return choice
     out: list[str] = []
     for position, word in enumerate(words, 1):
-        options = (word[0][0].upper(), word[-1][0].upper(), word[0][:2].capitalize(), f"{word[0][0].upper()}{position}")
+        options = (word[0][0].upper(), word[0][:2].capitalize(), word[-1][0].upper(), f"{word[0][0].upper()}{position}")
         out.append(next(option for option in options if option not in out))
     return out
 
@@ -217,7 +219,8 @@ def _dress(columns: list[dict]) -> None:
     never the name's meaning, never a brand's colour. The Human column has its own look (dark bubble,
     outlined mark, on the right) and takes no colour of the palette."""
     apps = [column for column in columns if column["kind"] != "human"]
-    for slot, (column, mark) in enumerate(zip(apps, _marks([column["name"] for column in apps]))):
+    # The initial comes from the answerer's own name, not from the maker shown after it.
+    for slot, (column, mark) in enumerate(zip(apps, _marks([column.get("base") or column["name"] for column in apps]))):
         column.update(who=f" who-{slot % PALETTE + 1}", shape=SHAPES[slot // PALETTE % len(SHAPES)], mark=mark)
     for column in columns:
         if column["kind"] == "human":
@@ -243,7 +246,8 @@ class _Chat:
         self.human = block["human"]
         self.labels = [app["label"] for app in self.apps]
         # An app entry with `kind` is a model answerer (asked by software): a column of the kind "model", never "chat-app".
-        self.columns = [{"key": app["label"], "name": app["name"], "kind": app.get("kind", "chat-app"), "maker": app["maker"],
+        self.columns = [{"key": app["label"], "name": shown_name(app), "base": shown_name({**app, "maker": ""}),
+                         "kind": app.get("kind", "chat-app"), "maker": app["maker"],
                          "attribution": app.get("attribution", ""), "group": app["group"]} for app in self.apps]
         if self.human:
             self.columns.append({"key": HUMAN, "name": self.human["name"], "kind": "human", "maker": "", "attribution": "",
@@ -344,6 +348,21 @@ def conditions_line(conditions: dict) -> str:
 # What a chat-app-only payload (archive_chatbots.site_payload) lacks, as empty values for _View.
 _NO_MODELS = {"questions": [], "groups": [], "locked": False, "locked_at": None, "runs": [], "answerers": [], "answers": [],
               "trending": {"questions": [], "locked": False}}
+
+
+
+def shown_name(app: dict) -> str:
+    """The name a page shows for an answerer. A model asked by software is shown with its maker, as in
+    "Gemma 3 4B (Google)" (owner's decision, 20 Nov 2026): a trailing "(local)" in the recorded name is
+    not shown, and where the model ran stays in the details behind each answer. An app's name is unchanged.
+    Display only: the recorded name in the payload is never rewritten."""
+    name = app["name"]
+    if app.get("kind") != "model":
+        return name
+    if name.endswith(" (local)"):
+        name = name[: -len(" (local)")]
+    maker = app.get("maker") or ""
+    return f"{name} ({maker})" if maker and maker.lower() not in name.lower() else name
 
 
 class _View:
@@ -907,6 +926,36 @@ def _mini(board: dict, column: dict) -> str:
             f'<span class="mini-text">{esc(cell["text"])}</span></div></div></li>')
 
 
+
+SITE_URL_VARIABLE = "LIVE_SITE_URL"
+_SITE_URL = re.compile(r"https://[a-z0-9.-]+(?:/[A-Za-z0-9._~/-]*)?")
+
+
+def site_url() -> str:
+    """The public address of the site's root folder (LIVE_SITE_URL, for example the GitHub Pages address), or ""
+    when it is not set or not a plain https address. Only the share links need it: every other link is relative."""
+    raw = os.getenv(SITE_URL_VARIABLE, "").strip()
+    return raw.rstrip("/") + "/" if _SITE_URL.fullmatch(raw) else ""
+
+
+def _share(board: dict, page: str, card: str) -> str:
+    """The share line of a chat-app question: a plain link to Facebook's share page (only when the site's public
+    address is known; nothing is sent to Facebook unless the visitor follows it) and, for Instagram and TikTok,
+    which take pictures and not links, the portrait share card to save and post. Text links only: no logo, no
+    script, no button from another site. `page` and `card` are relative to the page the line is on."""
+    if board["track"] != "chat":
+        return ""
+    links = []
+    base = site_url()
+    if base:
+        target = quote(f"{base}archive/c/{board['id']}.html", safe="")
+        links.append(f'<a rel="noopener noreferrer" href="https://www.facebook.com/sharer/sharer.php?u={target}" '
+                     f'aria-label="Share on Facebook: {esc(board["text"])}">Facebook</a>')
+    for name in ("Instagram", "TikTok"):
+        links.append(f'<a href="{esc(card)}" aria-label="Open the share card to save and post on {name}: {esc(board["text"])}">{name}</a>')
+    return f'<p class="row-share small"><span class="muted">Share:</span>{"".join(links)}</p>'
+
+
 def _row(board: dict, href: str) -> str:
     """One question on a list page, as a thread in a pane: the question as a heading with a link, then every
     answerer's newest answer as a bubble. With several answerer groups each group is its own list (the
@@ -928,11 +977,15 @@ def _row(board: dict, href: str) -> str:
     # A chat-app question leads with its hook, not its id: the id stays in the link, the data attributes and the
     # page's "The exact words we used" block.
     number = '' if board["track"] == "chat" else f'<span class="q-id mono">{esc(board["id"])}</span>'
+    share = _share(board, href, f'card/{board["id"]}.html')
+    # The whole card opens the question: the heading's link is stretched over the card in the stylesheet
+    # (`.row-open::after`), so there is one link to tab to and no script.
     return ('  <article class="row">\n'
             f'    <div class="row-head">{number}{hook}'
-            f'<h3 class="row-q"><a href="{esc(href)}">{esc(board["text"])}</a></h3></div>\n'
+            f'<h3 class="row-q"><a class="row-open" href="{esc(href)}">{esc(board["text"])}</a></h3></div>\n'
             f'    {body}\n'
             f'    <p class="row-more"><a href="{esc(href)}" aria-label="See every month of: {esc(board["text"])}">See every month</a></p>\n'
+            + (f'    {share}\n' if share else '') +
             '  </article>\n')
 
 
@@ -1322,7 +1375,8 @@ def _sources(board: dict) -> str:
         series = _series(board, column["key"])
         if not series:
             continue
-        who = column["name"] + (f" · {column['maker']}" if column["maker"] else "") + (f" · {column['meta']}" if column.get("meta") else "")
+        who = (column["name"] + (f" · {column['maker']}" if column["maker"] and column["kind"] != "model" else "")
+               + (f" · {column['meta']}" if column.get("meta") else ""))
         items = "".join(f'<li><span class="mono">{esc(period["label"])}</span> {esc(" · ".join(cell["facts"]) or "nothing noted")}</li>'
                         for period, cell in reversed(series))
         out.append(f'<div class="src"><strong>{esc(who)}</strong><ul>{items}</ul></div>')
@@ -1362,7 +1416,8 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
                             for suffix, (_panels, _kicker, name) in _chat_cards(board).items()
                             if _panels or not suffix)
             body.append((f'<p class="under muted">{esc(line)}</p>\n' if line else '')
-                        + f'<p class="card-links small"><span class="muted">Share cards:</span>{cards}</p>\n')
+                        + f'<p class="card-links small"><span class="muted">Share cards:</span>{cards}</p>\n'
+                        + (_share(board, f"{question_id}.html", f"../card/{question_id}.html") + "\n"))
         else:
             body.append(f'<p class="card-links card-links-one small"><a href="../card/{esc(question_id)}.html">Share card</a></p>\n')
         body.append(_table(board))
@@ -1446,7 +1501,7 @@ def render_chatbots(payload: dict, versions: dict[str, str] | None = None, *, st
                 if column["kind"] == "model":
                     dates = [d for d in chat.dates if (key, d) in chat.models]
                     rows.append(f'  <div class="app-row{column["who"]}">{_av(column)}<div class="app-name"><strong>' + esc(column["name"]) + '</strong>'
-                                + (f'<span class="muted small">{esc(column["maker"])}</span>' if column["maker"] else '') + '</div>'
+                                + '</div>'
                                 f'<div class="app-how"><span>model: {esc(_asked_model(chat.models[(key, dates[-1])]))}</span>'
                                 f'<span class="muted small">asked {esc(full_date(dates[-1]))} · {esc(_plural(len(dates), "time"))} in all'
                                 '</span></div></div>\n')

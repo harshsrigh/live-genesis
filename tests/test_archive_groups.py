@@ -530,3 +530,34 @@ def test_docs_describe_groups_the_look_and_the_card_names():
     # No document, test or source names a real airline or phone company as a future group: such names are the owner's to add.
     note = json.loads((REPO / 'live_genesis' / 'archive_chatbots.json').read_text(encoding='utf-8'))['note']
     assert 'groups' in note and 'same questions' in note
+
+
+def test_a_model_is_shown_with_its_maker_and_never_as_local():
+    """Owner's decision, 20 Nov 2026. Display only: the recorded name is untouched."""
+    from live_genesis import archive_pages
+    model = {'name': 'Gemma 3 4B (local)', 'maker': 'Google', 'kind': 'model'}
+    assert archive_pages.shown_name(model) == 'Gemma 3 4B (Google)' and model['name'] == 'Gemma 3 4B (local)'
+    assert archive_pages.shown_name({'name': 'Phi-4 mini', 'maker': 'Microsoft', 'kind': 'model'}) == 'Phi-4 mini (Microsoft)'
+    assert archive_pages.shown_name({'name': 'Qwen by Alibaba (local)', 'maker': 'Alibaba', 'kind': 'model'}) == 'Qwen by Alibaba'
+    assert archive_pages.shown_name({'name': 'Loose model (local)', 'maker': '', 'kind': 'model'}) == 'Loose model'
+    # An app keeps its name exactly, with or without a kind.
+    assert archive_pages.shown_name({'name': 'Chat app A (local)', 'maker': 'Maker'}) == 'Chat app A (local)'
+
+
+def test_share_line_facebook_needs_the_public_address_and_the_other_two_open_the_card(monkeypatch):
+    from live_genesis import archive_pages
+    board = {'track': 'chat', 'id': 'C001', 'text': 'Is a hot dog a <sandwich>?'}
+    monkeypatch.delenv('LIVE_SITE_URL', raising=False)
+    line = archive_pages._share(board, 'c/C001.html', 'card/C001.html')
+    assert 'facebook' not in line.lower() and line.count('href="card/C001.html"') == 2 and 'Instagram' in line and 'TikTok' in line
+    assert '<sandwich>' not in line and '<script' not in line and '<img' not in line and '<button' not in line
+    monkeypatch.setenv('LIVE_SITE_URL', 'https://example.github.io/site')
+    line = archive_pages._share(board, 'c/C001.html', 'card/C001.html')
+    assert ('href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fexample.github.io%2Fsite%2Farchive%2Fc%2FC001.html"' in line
+            and 'rel="noopener noreferrer"' in line)
+    # Anything that is not a plain https address is ignored, never put into a page.
+    for bad in ('http://example.org/', 'https://user:pw@example.org/', 'https://example.org/?x=1', 'javascript:alert(1)', 'https://example.org/"><b>'):
+        monkeypatch.setenv('LIVE_SITE_URL', bad)
+        assert archive_pages.site_url() == '' and 'facebook' not in archive_pages._share(board, 'a', 'b').lower()
+    # The model track is not published, so it gets no share line.
+    assert archive_pages._share({**board, 'track': 'core'}, 'a', 'b') == ''

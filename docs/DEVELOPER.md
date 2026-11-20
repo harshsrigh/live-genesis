@@ -86,7 +86,7 @@ Read-only: GET and HEAD only, the database opened with SQLite `mode=ro`, no prov
 The public site is built by `.github/workflows/snapshot.yml` on every push to `main`: tests, then the scripted demo archive, then the site, pushed to `gh-pages`.
 
 - No `published/` folder: the scripted demo is the whole site.
-- `published/` present: it must pass `python -m live_genesis.snapshot --check`; then the reviewed data is the site root and the demo is under `demo/`. If the check fails, nothing is published.
+- `published/` present: it must pass `python -m live_genesis.snapshot --check`; then the reviewed data is the whole site; the scripted sample is not built beside it (owner's decision, 20 Nov 2026). If the check fails, nothing is published.
 
 The owner's path for a hand-collected round (only the owner runs the export and the approval):
 ```bash

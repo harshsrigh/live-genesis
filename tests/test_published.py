@@ -119,7 +119,10 @@ def workflow_problems(text):
     if pushes != [len(steps) - 1]:
         problems.append('the publish step must be the single last step')
     builds = ''.join(step['run'] for step in steps)
-    for needed in ('--from-data published --sibling demo/', '"$RUNNER_TEMP/site/demo" --sibling ../', 'if [ "${HAVE_PUBLISHED:-}" = "1" ]; then'):
+    # Owner decision, 20 Nov 2026: once real answers are published, the scripted sample is not on the site.
+    if '--sibling' in builds or 'site/demo' in builds:
+        problems.append('the scripted sample must not be built beside published answers')
+    for needed in ('--from-data published --archive-only', 'if [ "${HAVE_PUBLISHED:-}" = "1" ]; then'):
         if needed not in builds:
             problems.append(f'missing: {needed}')
     # Owner decision, 13 Nov 2026: every published variant is Answers Over Time alone. Since the agent society was
@@ -130,7 +133,7 @@ def workflow_problems(text):
     if 'python -m live_genesis.cli demo-archive' not in builds:
         problems.append('the scripted demo archive is not built')
     built = [line for line in builds.splitlines() if 'live_genesis.snapshot "$RUNNER_TEMP' in line]
-    if len(built) != 3 or not all(line.endswith(' --archive-only') for line in built):
+    if len(built) != 2 or not all(line.endswith(' --archive-only') for line in built):
         problems.append('every site build must use --archive-only')
     if 'runner.temp' in text:
         problems.append('runner.temp is not allowed in job-level env')
@@ -163,8 +166,9 @@ MUTATIONS = {
     'check moved after the build': mutate('          python -m live_genesis.snapshot "$RUNNER_TEMP/site" --archive-only\n',
                                          '          python -m live_genesis.snapshot "$RUNNER_TEMP/site" --archive-only\n          ' + CHECK_LINE + '\n'),
     'demo-only site built without the flag': mutate('"$RUNNER_TEMP/site" --archive-only\n', '"$RUNNER_TEMP/site"\n'),
-    'reviewed root built without the flag': mutate('--sibling demo/ --archive-only\n', '--sibling demo/\n'),
-    'demo folder built without the flag': mutate('--sibling ../ --archive-only\n', '--sibling ../\n'),
+    'reviewed root built without the flag': mutate('--from-data published --archive-only\n', '--from-data published\n'),
+    'sample site built beside the published answers': mutate('--from-data published --archive-only\n',
+                                                              '--from-data published --sibling demo/ --archive-only\n'),
     'check only under a narrower condition': mutate('if [ -e published ]; then', 'if [ -f published/APPROVED ]; then'),
     'job-level continue-on-error': mutate('    needs: test\n', '    needs: test\n    continue-on-error: true\n'),
 }

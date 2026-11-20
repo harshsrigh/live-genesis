@@ -128,6 +128,12 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .row-hook { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
 .row-q { flex: 1 1 100%; font-family: var(--display); font-weight: 700; font-size: 1.375rem; line-height: 1.15; letter-spacing: -0.02em; overflow-wrap: anywhere; }
 .row-q a { text-decoration: none; }
+/* The whole card is the link: the heading's link covers it. One tab stop; the outline is drawn on the card. */
+.row { position: relative; }
+.row-open::after { content: ""; position: absolute; z-index: 1; top: 0; right: 0; bottom: 0; left: 0; border-radius: inherit; }
+.row:hover { border-color: var(--ink); }
+.row:has(.row-open:focus-visible) { outline: 3px solid var(--accent); outline-offset: 2px; }
+.row-open:focus-visible { outline: none; }
 .row-q a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .minis { list-style: none; margin: 0; padding: 0.8rem 0.75rem 0; display: flex; flex-direction: column; gap: 0.6rem; }
 .minis:last-of-type { padding-bottom: 0.9rem; }
@@ -145,6 +151,11 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .mini-none .mini-text { font-size: 0.875rem; }
 .row-more { margin-top: auto; padding: 0.2rem 1rem 0.9rem; font-size: 0.8125rem; font-weight: 600; text-align: center; }
 .row-none { padding: 0.9rem 1rem; }
+/* The share line sits above the card's stretched link, so its own links can be followed. */
+.row-more, .row-share { position: relative; z-index: 2; }
+.row-share { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.1rem 0.9rem; align-items: baseline; padding: 0 1rem 0.8rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
+.row-share a { font-weight: 600; }
+.under + .card-links + .row-share, .card-links + .row-share { justify-content: flex-start; border-top: 0; padding: 0.25rem 0 0; }
 .list-note { margin: 0 0 2rem; font-size: 0.875rem; }
 
 /* ---- the group switch on a list page (only when there is more than one group): radio inputs and labels.
@@ -422,7 +433,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .bar-in { height: auto; min-height: 52px; flex-wrap: wrap; gap: 0.25rem 0.75rem; padding-top: 0.6rem; padding-bottom: 0.4rem; }
   .bar nav { flex: 1 1 100%; flex-wrap: wrap; gap: 0.4rem; overflow: visible; white-space: normal; padding: 0; margin-right: 0; }
   .bar nav a { min-height: 2.75rem; display: inline-flex; align-items: center; padding: 0.4rem 1rem; }
-  .more, .card-links a, .row-more a { min-height: 2.75rem; display: inline-flex; align-items: center; }
+  .more, .card-links a, .row-more a, .row-share a { min-height: 2.75rem; display: inline-flex; align-items: center; }
   .hist summary, .more-info summary { min-height: 2.75rem; padding: 0.65rem 0; }
   .wordmark { font-size: 1rem; gap: 0.4rem; }
   .list-head { padding: 1.1rem 0 0.9rem; align-items: center; text-align: center; }

@@ -725,7 +725,7 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
         assert shown in page, shown
     sources = page.split('<summary>The details behind each answer</summary>')[1]
     # In the place an app shows "the app showed: ...": the model the service reported, plainly. No method label.
-    assert '<strong>Sample model L · Made-up maker L</strong><ul><li><span class="mono">Nov 2026</span> model: sample-local:1b-r2 · run locally · ' \
+    assert '<strong>Sample model L (Made-up maker L)</strong><ul><li><span class="mono">Nov 2026</span> model: sample-local:1b-r2 · run locally · ' \
            'a different model name than before</li><li><span class="mono">Oct 2026</span> model: sample-local:1b-r · run locally</li></ul>' in sources
     assert '<strong>Sample model M</strong><ul><li><span class="mono">Nov 2026</span> model: gpt-test-mini-r</li>' in sources
     assert 'the app showed: PLACEHOLDER model · free account' in sources                 # an app's line is what it was
@@ -742,7 +742,7 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
         assert 'Read-only. No payments. Just answers.' in text
         assert '<span class="tag tag-dark mono">AI-generated · may be wrong</span>' in text
     # How it works: a model answerer's row says which model, when, how often; never an app's conditions.
-    assert '<strong>Sample model L</strong><span class="muted small">Made-up maker L</span></div><div class="app-how"><span>model: sample-local:1b-r2</span>' \
+    assert '<strong>Sample model L (Made-up maker L)</strong></div><div class="app-how"><span>model: sample-local:1b-r2</span>' \
            '<span class="muted small">asked 14 Nov 2026 · 2 times in all</span>' in how
     assert '<strong>Sample model M</strong></div><div class="app-how"><span>model: gpt-test-mini-r</span>' in how
     assert re.findall(r'<h3 class="apps-name">([^<]+)</h3>', how)[:2] == ['AI chat apps', 'AI models']
