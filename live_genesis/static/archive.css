@@ -218,6 +218,20 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .app-row:last-child { border-bottom: 0; }
 .app-name { flex: 1 1 10rem; display: flex; flex-direction: column; gap: 0.1rem; font-size: 1.0625rem; }
 .app-how { flex: 3 1 26rem; min-width: 0; display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.9375rem; overflow-wrap: anywhere; }
+/* The "just for fun" answering style in an answerer's row: our commentary, so plain text under a dashed line and never
+   a bubble. The meter is five boxes; the chosen one is filled AND taller, and its place is also written out. */
+.fun-note { margin: 0 0 0.75rem; max-width: 46rem; font-size: 0.875rem; color: var(--ink-soft); }
+.meet { margin: 0 0 0.75rem; font-size: 0.9375rem; font-weight: 600; }
+.app-fun { flex: 1 1 100%; min-width: 0; margin-left: 3rem; padding-top: 0.6rem; border-top: 1px dashed var(--line); display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 1rem; overflow-wrap: anywhere; }
+.app-fun > .small, .fun-kicker { flex: 1 1 100%; }
+.fun-kicker { font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.fun-name { font-family: var(--display); font-size: 1.375rem; font-weight: 800; line-height: 1.1; letter-spacing: -0.02em; color: var(--hue, var(--ink)); }
+.fun-early { color: var(--ink-soft); }
+.fun-scale { display: inline-flex; align-items: center; gap: 0.5rem; font-size: 0.8125rem; font-weight: 600; color: var(--ink-soft); }
+.fun-meter { display: inline-flex; align-items: center; gap: 0.25rem; }
+.fun-box { width: 1.25rem; height: 0.5rem; border-radius: 3px; border: 1px solid var(--dash); background: var(--pane); }
+.fun-on { height: 1.125rem; border-color: var(--hue, var(--ink)); background: var(--hue, var(--ink)); }
+.fun-words { display: block; margin-top: 0.15rem; padding-left: 0.75rem; border-left: 3px solid var(--line); color: var(--ink-soft); }
 .aside { margin: 1rem 0 2rem; font-size: 0.875rem; color: var(--ink-soft); display: flex; gap: 0.6rem; align-items: baseline; }
 .aside-mark { flex: none; font-size: 0.75rem; font-weight: 700; color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0 0.4rem; text-transform: uppercase; }
 .trend-none { padding: 1.5rem 0; }
@@ -448,7 +462,9 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .bar-in { height: auto; min-height: 52px; flex-wrap: wrap; gap: 0.25rem 0.75rem; padding-top: 0.6rem; padding-bottom: 0.4rem; }
   .bar nav { flex: 1 1 100%; flex-wrap: wrap; gap: 0.4rem; overflow: visible; white-space: normal; padding: 0; margin-right: 0; }
   .bar nav a { min-height: 2.75rem; display: inline-flex; align-items: center; padding: 0.4rem 1rem; }
-  .more, .card-links a, .row-more a, .row-share a { min-height: 2.75rem; display: inline-flex; align-items: center; }
+  .more, .card-links a, .row-more a, .row-share a, .meet a { min-height: 2.75rem; display: inline-flex; align-items: center; }
+  .meet { margin: 0; text-align: center; }
+  .app-fun { margin-left: 0; }
   .hist summary, .more-info summary { min-height: 2.75rem; padding: 0.65rem 0; }
   .wordmark { font-size: 1rem; gap: 0.4rem; }
   .list-head { padding: 1.1rem 0 0.9rem; align-items: center; text-align: center; }
@@ -506,6 +522,8 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
   .is-changed .bubble { border-width: 3px; }
   .before { border: 1px dashed CanvasText; }
   .month-strip label, .group-strip label { border: 1px solid CanvasText; }
+  .fun-box { border: 1px solid CanvasText; background: Canvas; forced-color-adjust: none; }
+  .fun-on { background: CanvasText; }
 }
 
 /* ---- share card (card/<ID>.html ...) ----
