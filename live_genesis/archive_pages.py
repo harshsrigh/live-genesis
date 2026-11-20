@@ -779,7 +779,8 @@ def _meta(view: _View, base: str, *, board: dict | None = None, track: str = "mo
                 f'  <meta name="aot:prompt" content="{esc(board["prompt"])}" />\n',
                 f'  <meta name="aot:collected-latest" content="{esc(max(shown) if shown else "")}" />\n',
                 f'  <meta name="aot:answerers" content="{esc(",".join(column["key"] for column in board["columns"]))}" />\n',
-                f'  <link rel="alternate" type="application/json" href="{base}data/{esc(board["id"])}.json" />\n']
+                f'  <link rel="alternate" type="application/json" href="{base}data/{esc(board["id"])}.json" />\n',
+                _preview(board)]
     else:
         out.append(f'  <link rel="alternate" type="application/x-ndjson" href="{base}data/answers.jsonl" />\n')
     return "".join(out)
@@ -942,6 +943,36 @@ def site_url() -> str:
     return raw.rstrip("/") + "/" if _SITE_URL.fullmatch(raw) else ""
 
 
+CARD_IMAGES_VARIABLE = "LIVE_CARD_IMAGES"
+
+
+def card_images() -> bool:
+    """True when the build also makes a PNG picture of every share card beside its page (`card/<ID>.png`,
+    written by scripts/capture-cards.mjs in the publishing workflow). Set LIVE_CARD_IMAGES=YES only there:
+    a page must not link to a picture that was not made."""
+    return os.getenv(CARD_IMAGES_VARIABLE, "").strip().upper() == "YES"
+
+
+def _preview(board: dict) -> str:
+    """Link-preview tags for a chat-app question page (the Open Graph names that Facebook and others read):
+    the question as the title, one line of description, and, when the site's public address is known, the
+    page's address and the picture of its share card. No tag points anywhere but this site."""
+    if board["track"] != "chat":
+        return ""
+    out = ['  <meta property="og:type" content="article" />\n',
+           '  <meta property="og:site_name" content="Answers Over Time" />\n',
+           f'  <meta property="og:title" content="{esc(board["text"])}" />\n',
+           '  <meta property="og:description" content="Same question, different answers. See who said what, month by month." />\n']
+    base = site_url()
+    if base:
+        out.append(f'  <meta property="og:url" content="{esc(base)}archive/c/{esc(board["id"])}.html" />\n')
+        if card_images():
+            out += [f'  <meta property="og:image" content="{esc(base)}archive/card/{esc(board["id"])}.png" />\n',
+                    '  <meta property="og:image:width" content="1080" />\n',
+                    '  <meta property="og:image:height" content="1920" />\n']
+    return "".join(out)
+
+
 def _share(board: dict, page: str, card: str) -> str:
     """The share line of a chat-app question: a plain link to Facebook's share page (only when the site's public
     address is known; nothing is sent to Facebook unless the visitor follows it) and, for Instagram and TikTok,
@@ -955,8 +986,13 @@ def _share(board: dict, page: str, card: str) -> str:
         target = quote(f"{base}archive/c/{board['id']}.html", safe="")
         links.append(f'<a rel="noopener noreferrer" href="https://www.facebook.com/sharer/sharer.php?u={target}" '
                      f'aria-label="Share on Facebook: {esc(board["text"])}">Facebook</a>')
+    # Instagram and TikTok have no web address for sharing: they take a picture from the phone. When the build
+    # made a picture of each card (LIVE_CARD_IMAGES=YES), the link opens that picture, to save or share from
+    # there; otherwise it opens the card page.
+    picture = card[:-len(".html")] + ".png" if card_images() and card.endswith(".html") else card
+    what = "Open the picture to save and post on" if picture != card else "Open the share card to save and post on"
     for name in ("Instagram", "TikTok"):
-        links.append(f'<a href="{esc(card)}" aria-label="Open the share card to save and post on {name}: {esc(board["text"])}">{name}</a>')
+        links.append(f'<a href="{esc(picture)}" aria-label="{what} {name}: {esc(board["text"])}">{name}</a>')
     return f'<p class="row-share small"><span class="muted">Share:</span>{"".join(links)}</p>'
 
 

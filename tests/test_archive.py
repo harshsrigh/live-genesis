@@ -581,7 +581,8 @@ ALLOWED_TAGS = {'html', 'head', 'meta', 'title', 'link', 'body', 'div', 'span', 
                 'table', 'caption', 'thead', 'tbody', 'tr', 'th', 'td', 'time', 'ol', 'ul', 'li'}
 ALLOWED_ATTRS = {'lang', 'charset', 'name', 'content', 'http-equiv', 'rel', 'type', 'href', 'class', 'src', 'alt', 'width', 'height',
                  'aria-label', 'aria-current', 'aria-hidden', 'role', 'id', 'for', 'checked', 'reversed', 'scope', 'datetime',
-                 'itemscope', 'itemtype', 'itemprop'}
+                 'itemscope', 'itemtype', 'itemprop',
+                 'property'}   # Open Graph link-preview tags (<meta property="og:...">): text and this site's own addresses only
 DATA_ATTRS = {'data-question-id', 'data-answerer', 'data-answerer-kind', 'data-maker', 'data-version', 'data-collected', 'data-method',
               'data-provenance', 'data-human-form', 'data-state', 'data-previous-collected', 'data-truncated-display', 'data-lang',
               'data-label'}

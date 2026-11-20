@@ -582,3 +582,38 @@ def test_only_what_can_be_tapped_looks_like_a_pill():
     assert 'border-width: 2px 2px 0 0' in rule('.row-more a::after')
     # The key says what a square is before it shows one, on a phone too.
     assert '.key-note { display: none; }' not in css
+
+
+def test_instagram_and_tiktok_open_the_picture_only_when_the_build_makes_one_and_previews_stay_on_this_site(monkeypatch):
+    """Owner's decision, 20 Nov 2026: the publishing workflow makes a PNG of every share card; the two links open it."""
+    from live_genesis import archive_pages
+    board = {'track': 'chat', 'id': 'C001', 'text': 'Is a hot dog a "sandwich"?'}
+    monkeypatch.delenv('LIVE_SITE_URL', raising=False)
+    monkeypatch.delenv('LIVE_CARD_IMAGES', raising=False)
+    assert archive_pages._share(board, 'c/C001.html', 'card/C001.html').count('href="card/C001.html"') == 2
+    tags = archive_pages._preview(board)
+    assert '<meta property="og:title" content="Is a hot dog a &quot;sandwich&quot;?" />' in tags and 'og:image' not in tags and 'og:url' not in tags
+    monkeypatch.setenv('LIVE_CARD_IMAGES', 'YES')
+    line = archive_pages._share(board, 'c/C001.html', '../card/C001.html')
+    assert line.count('href="../card/C001.png"') == 2 and 'Open the picture to save and post on Instagram' in line and '.html"' not in line
+    assert 'og:image' not in archive_pages._preview(board)                # no public address, no absolute picture address
+    monkeypatch.setenv('LIVE_SITE_URL', 'https://example.github.io/site/')
+    tags = archive_pages._preview(board)
+    assert '<meta property="og:url" content="https://example.github.io/site/archive/c/C001.html" />' in tags
+    assert '<meta property="og:image" content="https://example.github.io/site/archive/card/C001.png" />' in tags
+    assert set(re.findall(r'content="(https?://[^"/]+)', tags)) == {'https://example.github.io'}       # nothing points off the site
+    assert archive_pages._preview({**board, 'track': 'core'}) == ''
+    for off in ('no', '1', 'true', ''):
+        monkeypatch.setenv('LIVE_CARD_IMAGES', off)
+        assert not archive_pages.card_images()
+
+
+def test_the_workflow_makes_the_pictures_it_links_to_before_publishing():
+    text = (REPO / '.github' / 'workflows' / 'snapshot.yml').read_text(encoding='utf-8')
+    assert 'LIVE_CARD_IMAGES: "YES"' in text
+    make, publish = text.index('scripts/capture-cards.mjs'), text.index('- name: Publish to gh-pages')
+    assert text.index('LIVE_CARD_IMAGES') < make < publish
+    assert '--out "$RUNNER_TEMP/site/archive/card" --set chat' in text
+    step = text[text.index('- name: Make a picture of every share card'):publish]
+    assert re.search(r'playwright@\d+\.\d+\.\d+\b', step) and '--ignore-scripts' in step        # a pinned tool, no install scripts
+    assert 'continue-on-error' not in step and '|| true' not in step                             # a failure publishes nothing

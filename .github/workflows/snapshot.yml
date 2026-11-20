@@ -63,6 +63,8 @@ jobs:
         env:
           # The public address, for the "Share on Facebook" links only. Every other link is relative.
           LIVE_SITE_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/
+          # The pages link to a picture of each share card (card/<ID>.png); the next step makes them.
+          LIVE_CARD_IMAGES: "YES"
         run: |
           if [ "${HAVE_PUBLISHED:-}" = "1" ]; then
             # Rendered from the reviewed JSON, no database. Once real answers are published the scripted
@@ -74,6 +76,16 @@ jobs:
             python -m live_genesis.snapshot "$RUNNER_TEMP/site" --archive-only
             echo "SNAPSHOT_KIND=scripted demo data only" >> "$GITHUB_ENV"
           fi
+      - name: Make a picture of every share card (for Instagram, TikTok and link previews)
+        # A pinned browser tool, used only to photograph the pages built above. It reads the site folder and
+        # nothing else, calls no model and opens no other site. If it fails, nothing is published.
+        run: |
+          mkdir "$RUNNER_TEMP/camera" && cd "$RUNNER_TEMP/camera"
+          npm install --no-save --ignore-scripts --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+          NODE_PATH="$RUNNER_TEMP/camera/node_modules" node "$GITHUB_WORKSPACE/scripts/capture-cards.mjs" \
+            --site "$RUNNER_TEMP/site" --out "$RUNNER_TEMP/site/archive/card" --set chat
+          ls "$RUNNER_TEMP/site/archive/card"/*.png | wc -l
       - name: Publish to gh-pages
         run: |
           cd "$RUNNER_TEMP/site"
