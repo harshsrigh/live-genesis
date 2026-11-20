@@ -11,6 +11,7 @@ import argparse
 import getpass
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 from . import archive, controls, core, openrouter_setup as setup, providers
@@ -140,7 +141,8 @@ def run(args, *, ask=input, secret=getpass.getpass) -> int:
         os.environ['LIVE_DB'] = str(choose_database(args.db))
         print(f'Database (outside git): {os.environ["LIVE_DB"]}')
         print('No model is called at launch. Only the public model catalog is read, with no key.')
-        core.init_db()
+        if not args.preview_only:
+            core.init_db()                             # a preview creates and changes no database file
         catalog = json.loads(Path(args.catalog).read_text(encoding='utf-8')) if args.catalog else setup.catalog()
         available = setup.free_models(catalog)
         models = pick_models(available, ask)
@@ -149,7 +151,11 @@ def run(args, *, ask=input, secret=getpass.getpass) -> int:
         load_key(secret, preview_only=args.preview_only)
         apply_settings(models, available, samples)
         if args.preview_only:
-            show_plan(track, samples) if _locked(track) else print('Preview needs the lock; run without --preview-only to lock.')
+            if _locked_readonly(track):
+                show_plan(track, samples)
+            else:
+                print('No plan to show yet: this database does not exist or its question list is not locked. '
+                      'Run without --preview-only to create and lock it.')
             print('Preview only: nothing was called or recorded.')
             return 0
         ensure_locked(track, ask)
@@ -166,6 +172,10 @@ def run(args, *, ask=input, secret=getpass.getpass) -> int:
     except Stop as stop:
         print(stop)
         return 1
+    except EOFError:
+        # The window was closed or no input is attached: a question got no answer.
+        print('\nNo answer was given (the input ended). Nothing was called.')
+        return 1
     except (archive.ArchiveRefused, controls.ConfigError, providers.ProviderConfigError, ValueError, OSError) as err:
         print(f'Stopped: {err}')
         return 1
@@ -175,9 +185,14 @@ def run(args, *, ask=input, secret=getpass.getpass) -> int:
             os.environ.pop(KEY_VAR, None)
 
 
-def _locked(track: str) -> bool:
-    with core.connect() as cx:
-        return bool(archive._locked(cx, track))
+def _locked_readonly(track: str) -> bool:
+    """Whether the list is locked, asked without creating or changing the file (SQLite mode=ro). A missing file,
+    or one made by an older version without the table, counts as not locked."""
+    try:
+        with core.connect(readonly=True) as cx:
+            return bool(archive._locked(cx, track))
+    except (core.DatabaseUnavailable, sqlite3.Error):
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:

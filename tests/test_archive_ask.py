@@ -751,7 +751,7 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
     notice = 'not affiliated with, sponsored by or endorsed by OpenAI, Google, xAI or Made-up maker L; product names belong to their owners.'
     for text in (front, page, how):
         assert notice in text and 'These answers are AI-generated and shown exactly as they came. They can be wrong' in text
-        assert 'Read-only. No payments. Just answers.' in text
+        assert 'Read-only. No payments. Just answers.' not in text                 # owner's decision, 20 Nov 2026
         assert '<span class="tag tag-dark mono">AI-generated · may be wrong</span>' in text
     # How it works: a model answerer's row says which model, when, how often; never an app's conditions.
     assert '<strong>Sample model L (Made-up maker L)</strong></div><div class="app-how"><span>model: sample-local:1b-r2</span>' \

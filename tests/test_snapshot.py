@@ -154,8 +154,8 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
         assert not RULE_WORDING.search(visible_text(html)), name
     # The honesty labels stay.
     front = pages['archive/index.html']
-    assert 'Sample we wrote, not a real AI answer' in front and 'Read-only. No payments. Just answers.' in front
-    assert 'Everything here is a sample we wrote to show how the site works. No AI and no person was asked.' in front and 'No payments' in front
+    assert 'Sample we wrote, not a real AI answer' in front and 'Read-only. No payments. Just answers.' not in front
+    assert 'Everything here is a sample we wrote to show how the site works. No AI and no person was asked.' in front and 'No payments' not in front
     assert 'Everything here is a sample we wrote to show how the site works.' in pages['archive/c/C001.html'] and 'Sample we wrote, not a real AI answer' in pages['archive/c/C001.html']
     for name in ('archive/c/C001.html', 'archive/chatbots.html', 'archive/card/C001.html', 'archive/card/C001-human.html'):
         assert 'Sample we wrote, not a real AI answer' in pages[name], name
@@ -192,7 +192,7 @@ def test_archive_only_root_page_leads_to_the_archive_without_script(isolated_db,
     assert body_of(home).count('<a href="archive/index.html">') == 1             # for a browser that does not follow the refresh
     assert '<script' not in home and 'data-overview' not in home and 'onload' not in home
     assert sorted(set(addresses(home))) == sorted({'archive/index.html', *re.findall(r'"(static/archive[^"]+)"', home)})
-    assert 'Read-only · a saved copy' in home and 'Nothing here can be changed.' in home and 'No payments' in home
+    assert 'Read-only · a saved copy' in home and 'Nothing here can be changed.' in home and 'No payments' not in home
     assert not re.search(r'human|resident', visible_text(home), re.I) and not RULE_WORDING.search(visible_text(home))
     assert (out / 'archive' / 'index.html').is_file()                            # the existing archive address is unchanged
 
@@ -258,7 +258,7 @@ def test_archive_only_with_no_chat_app_run_says_so_and_never_lists_the_models(is
     assert_every_address_resolves(out)
     front = (out / 'archive' / 'index.html').read_text(encoding='utf-8')
     assert 'No answers yet' in front and 'We haven&#x27;t asked anyone yet.' in front and '<a href="chatbots.html">Here is how it works</a>' in front
-    assert 'Read-only.' in front and 'No payments' in front and '<script' not in front and 'style="' not in front
+    assert 'Read-only.' not in front and 'No payments' not in front and '<script' not in front and 'style="' not in front
     assert (out / 'archive' / 'data' / 'answers.jsonl').read_text(encoding='utf-8') == ''
     # The same empty payload in the local web app still shows the model lists: only the standalone archive leaves them out.
     assert 'Simple questions, asked again every month.' in archive_pages.render_index(archive.public_payload(readonly=True))
