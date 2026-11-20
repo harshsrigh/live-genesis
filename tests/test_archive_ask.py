@@ -727,7 +727,10 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
     assert re.findall(r'class="thread-name[^"]*"[^>]*>([^<]+)<', page)[:2] == ['AI chat apps', 'AI models']
     for shown in ('Sample model L', 'Sample model M', 'PLACEHOLDER model reply, new.', 'PLACEHOLDER model reply gpt-test-mini 1.'):
         assert shown in page, shown
-    sources = page.split('<summary>The details behind each answer</summary>')[1]
+    for gone in ('The exact words we used', 'The details behind each answer'):   # not on the public site (owner, 20 Nov 2026)
+        assert gone not in page, gone
+    # The local app keeps the block; the public site does not.
+    sources = archive_pages.render_site(site_data)['c/C001.html'].split('<summary>The details behind each answer</summary>')[1]
     # In the place an app shows "the app showed: ...": the model the service reported, plainly. No method label.
     assert '<strong>Sample model L (Made-up maker L)</strong><ul><li><span class="mono">Nov 2026</span> model: sample-local:1b-r2 · run locally · ' \
            'a different model name than before</li><li><span class="mono">Oct 2026</span> model: sample-local:1b-r · run locally</li></ul>' in sources
@@ -752,7 +755,7 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
     assert re.findall(r'<h3 class="apps-name">([^<]+)</h3>', how)[:2] == ['AI chat apps', 'AI models']
     # Cards: one per model answerer and one for the group, with the same foot as an app's card.
     for name in ('card/C001-local-one.html', 'card/C001-api-one.html', 'card/C001-ai-models.html'):
-        assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in site[name] and 'read-only · no payments' in site[name], name
+        assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in site[name] and 'no payments' not in site[name], name
     assert 'PLACEHOLDER model reply, new.' in site['card/C001-ai-models.html'] and 'Sample model M' in site['card/C001-ai-models.html']
     assert 'PLACEHOLDER model reply' not in site['card/C001.html']                        # the first card is the apps' group
     # The data files: the record of such an answer carries its model, provenance and no method.
@@ -820,7 +823,7 @@ def test_asked_answers_go_through_the_reviewed_export_and_the_built_site_says_no
     for name, text in texts.items():
         found = [phrase for phrase in FORBIDDEN + SECRETS if phrase.lower() in text.lower()]
         assert not found, (name, found)
-    assert 'model: sample-local:1b-r2' in texts['archive/c/C001.html'] and 'Five AIs in two groups.' in visible(texts['archive/index.html'])
+    assert 'model: sample-local:1b-r2' not in texts['archive/c/C001.html'] and 'sample-local:1b-r2' in texts['archive/data/C001.json'] and 'Five AIs in two groups.' in visible(texts['archive/index.html'])
     records = [json.loads(line) for line in texts['archive/data/answers.jsonl'].splitlines()]
     assert {r['provenance'] for r in records} == {'ai-generated', 'human-written'} and {r['answerer_kind'] for r in records} == {'chat-app', 'model', 'human'}
     assert all('method' not in r for r in records)

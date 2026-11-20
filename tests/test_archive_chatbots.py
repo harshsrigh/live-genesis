@@ -755,7 +755,7 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
         assert_page_is_safe(page)
         assert page.count('<div') == page.count('</div>') and page.count('<span') == page.count('</span>'), name
         assert page.count('<main') == 1 and page.count('<h1') == 1 and '<script' not in page, name
-        assert 'no payments' in page.lower() and not re.search(r'\bround', page, re.I)
+        assert ('no payments' in page.lower()) is (not name.startswith('card/')) and not re.search(r'\bround', page, re.I), name
         assert not re.search(r'<img(?![^>]*archive-mark\.svg)', page)                         # the archive's own mark is the only image: no logo
         assert 'scripted' not in page.lower() and 'Sample we wrote' not in page, name         # real data never carries the sample label
     front, page, method = pages['index.html'], pages['c/C001.html'], pages['chatbots.html']
@@ -878,8 +878,8 @@ def test_chat_cards_three_apps_and_human_in_the_safe_box(chat, tmp_path):
         assert_page_is_safe(card)
         assert '<main id="main" class="card card-safe' in card and 'data-provenance="recorded"' in card and card.count('<h1') == 1
         assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in card
-        assert card.index('class="card-honest') < card.index('<footer class="card-foot')      # inside the safe box, above the small print
-        assert 'read-only · no payments' in card and 'Nov 2026' in card                      # a date on every card
+        assert card.index('class="card-honest') < card.index('</div></main>')      # inside the safe box
+        assert 'read-only' not in card and 'no payments' not in card and 'Nov 2026' in card                      # a date on every card
         assert '<a class="card-brand" href="../c/C001.html">' in card and 'Copilot' not in card
         assert '<p class="card-hook">Hot dog: sandwich or not?</p>' in card
     assert four.count('<section class="card-panel') == 4 and '<div class="card-panels n-4">' in four and 'card card-safe card-four' in four
@@ -1252,7 +1252,7 @@ def test_hand_entered_answers_go_through_the_reviewed_export(chat, tmp_path, mon
     assert not names & {'archive/models.html', 'archive/trending.html'} and not any(name.startswith(('archive/q/', 'archive/t/')) for name in names)
     assert sorted(p.name for p in out.iterdir()) == ['MANIFEST.json', 'archive.json']        # building a site writes nothing into published/
     page = (site / 'archive' / 'c' / 'C001.html').read_text(encoding='utf-8')
-    assert 'PLACEHOLDER reply 1 of chatgpt.' in page and 'screenshot kept' in page and 'scripted' not in page.lower()
+    assert 'PLACEHOLDER reply 1 of chatgpt.' in page and 'screenshot kept' not in page and 'scripted' not in page.lower()
     assert json.loads((site / 'archive' / 'data' / 'C001.json').read_text(encoding='utf-8'))['answers'][0]['text'] == 'PLACEHOLDER reply 1 of chatgpt.'
 
 
@@ -1589,14 +1589,17 @@ def test_a_real_site_does_not_say_how_replies_were_collected_and_keeps_its_other
         assert front.count(kept) == page.count(kept) == 1, kept                               # each thing is said once
     for gone in ('Part of LIVE Genesis', 'Read-only archive.', 'Refusals and non-answers'):  # the compliance-notice wording
         assert gone not in front + page + how, gone
-    assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in card and 'read-only · no payments' in card
+    assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in card and 'no payments' not in card
     assert 'Written with Grok' in card and 'Written with Grok' in page and 'Nov 2026' in card
-    block = page.split('<summary>The details behind each answer</summary>')[1]
+    for gone in ('The exact words we used', 'The details behind each answer'):   # not on the public site (owner, 20 Nov 2026)
+        assert gone not in page, gone
+    # The local app keeps the block; the public site does not.
+    block = archive_pages.render_site(chatbots.site_payload(archive.public_payload()))['c/C001.html'].split('<summary>The details behind each answer</summary>')[1]
     for kept in ('the app showed: PLACEHOLDER model · free account · temporary chat · memory off · search on · US · web',
                  'Written by people · from: PLACEHOLDER thread · 12 replies read · quoted', '<strong>Written by people</strong>: <em>quoted</em>',
                  '<em>summed up</em> means we boiled several replies down to one line. No names, ever.'):
         assert kept in block, kept
-    assert 'A fresh chat every time. That first line is why the replies are so short.' in page
+    assert 'A fresh chat every time. That first line is why the replies are so short.' not in page   # it sat in a block the public site no longer has
     assert 'We ask again every month and keep every reply. Tap a question to see who changed their answer.' in front
     # A human answer always says it was written by people and whether it is quoted or summed up, in plain words.
     assert '<span class="tag-form mono">quoted</span>' in page and '<span class="tag-form mono">summed up</span>' in texts['archive/c/C002.html']
@@ -1630,8 +1633,7 @@ def test_the_sample_site_does_not_say_how_replies_were_collected_and_still_says_
             assert texts[name].count(kept) == 1, (name, kept)
     assert 'This is a sample site: the apps are made up and we wrote the replies.' in texts['archive/chatbots.html']
     assert 'sample we wrote · no person was asked' in texts['archive/chatbots.html']
-    assert ('<strong>Sample</strong>: we wrote these answers and their dates ourselves to show how the page works. No AI and no person was asked.'
-            in texts['archive/c/C001.html'])
+    assert 'The details behind each answer' not in texts['archive/c/C001.html']       # not on a public build (owner, 20 Nov 2026)
     assert 'No AI and no person was asked.' in texts['archive/data/README.txt'] and 'NOT a real answer' in texts['archive/data/README.txt']
     lines = [json.loads(line) for line in texts['archive/data/answers.jsonl'].splitlines()]
     assert lines and {line['provenance'] for line in lines} == {'scripted-sample'}

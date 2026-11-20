@@ -524,9 +524,9 @@ def test_share_card_shows_the_latest_answers_and_one_change(ready):
     assert '<p class="card-answer">I have no clock, so I cannot know. My training suggests 2026 or later.</p>' in card
     assert '<span class="card-label">model-c</span><span class="card-when">Nov 2026</span>' in card
     assert "I don&#x27;t have access to the current date." in card                     # model-c's latest, not its first
-    assert '<p class="card-honest mono">Sample we wrote, not a real AI answer</p>' in card and 'no payments' in card
+    assert '<p class="card-honest mono">Sample we wrote, not a real AI answer</p>' in card and 'no payments' not in card
     assert 'AI-generated' not in card
-    assert card.index('class="card-honest') < card.index('</div>\n  <footer class="card-foot')   # the honesty line is inside the safe box
+    assert card.index('class="card-honest') < card.index('</div></main>')   # the honesty line is inside the safe box
     plain = archive_pages.render_card(payload, 'Q02')
     assert 'card-panel-changed' not in plain and plain.count('<section class="card-panel who-') == 3
     trend = archive_pages.render_card(payload, 'T002')

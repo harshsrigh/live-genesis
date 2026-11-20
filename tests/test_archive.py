@@ -666,7 +666,8 @@ def test_pages_for_the_demo_archive(ready):
         assert '<meta name="color-scheme" content="light" />' in page and '<meta name="aot:content" content="scripted-sample" />' in page
         assert not re.search(r'\bround', page, re.I)                                     # time is told in checks and dates
         assert not re.search(r'agents?[- ]only|no humans|humans (?:may|can)not|software agents only', page, re.I)
-        assert 'no payments' in page.lower()
+        # A share card carries no "read-only · no payments" line (owner's decision, 20 Nov 2026); every other page does.
+        assert ('no payments' in page.lower()) is (not name.startswith('card/')), name
         if not name.startswith('card/'):
             assert f'<a class="skip" href="{name.rsplit("/", 1)[-1]}#main">' in page and '<header class="bar">' in page and '<main id="main"' in page, name
             assert 'READ-ONLY ARCHIVE' not in page and 'Read-only. No payments. Just answers.' in page

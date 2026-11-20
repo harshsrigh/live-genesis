@@ -1438,14 +1438,19 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
     if any(cell["state"] == "mixed" for cell in board["cells"].values()):
         explain.append("<strong>Mixed answers</strong>: we asked several times in one go and the tries did not all agree, then or the "
                        "time before. You see the answer most tries gave; it is not counted as a change.")
+    # Owner's decision, 20 Nov 2026: the public site (standalone) does not carry the two blocks "The exact words
+    # we used" and "The details behind each answer". They stay in the local app, and the same facts stay in the
+    # public data files (`data/<ID>.json`).
+    behind = ('' if standalone else
+              f'  <details><summary>The exact words we used</summary><pre class="prompt mono">{esc(board["prompt"])}</pre>'
+              f'<p class="muted small">{esc(board["prompt_note"])} This is question {esc(question_id)} on our list.</p></details>\n'
+              '  <details><summary>The details behind each answer</summary>'
+              + "".join(f'<p class="small">{line}</p>' for line in explain)
+              + f'<div class="srcs">{_sources(board)}</div>'
+              f'<p class="small"><a href="../data/{esc(question_id)}.json">The same answers as a data file</a></p></details>\n')
     body.append('<section class="more-info">\n'
                 f'  <details><summary>Why we ask this</summary><p>{esc(board["why"])}</p></details>\n'
-                f'  <details><summary>The exact words we used</summary><pre class="prompt mono">{esc(board["prompt"])}</pre>'
-                f'<p class="muted small">{esc(board["prompt_note"])} This is question {esc(question_id)} on our list.</p></details>\n'
-                '  <details><summary>The details behind each answer</summary>'
-                + "".join(f'<p class="small">{line}</p>' for line in explain)
-                + f'<div class="srcs">{_sources(board)}</div>'
-                f'<p class="small"><a href="../data/{esc(question_id)}.json">The same answers as a data file</a></p></details>\n'
+                + behind +
                 '</section>\n')
     back = {"chat": '<a class="back" href="../index.html">Back to all the questions</a>',
             "trending": '<a class="back" href="../trending.html">All trending questions</a>',
@@ -1640,13 +1645,13 @@ def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], 
     honesty = view.tag(track)
     if not sample and track == "chat":
         honesty = CHAT_CARD_FOOT
-    # The id comes last: it is for finding the page again, not for reading.
-    small = ("Same question every month · read-only · no payments" + (f" · {part}" if part else "")
-             + (f" · {CARD_FULL}" if cut else "") + f" · {question_id}")
+    # Owner's decision, 20 Nov 2026: a card carries no "read-only · no payments · id" line. What stays below the
+    # safe box is only what a reader needs: which card of a set this is, and that a long answer goes on.
+    small = " · ".join(([part] if part else []) + ([CARD_FULL] if cut else []))
     out.append('  </div>\n'
                f'  <p class="card-honest mono">{esc(honesty)}</p>\n'
                '  </div>\n'
-               f'  <footer class="card-foot mono"><span>{esc(small)}</span>{extra}</footer>\n'
+               + (f'  <footer class="card-foot mono"><span>{esc(small)}</span>{extra}</footer>\n' if small or extra else '') +
                '</div></main>\n</body>\n</html>\n')
     return "".join(out)
 

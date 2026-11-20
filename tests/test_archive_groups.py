@@ -314,7 +314,7 @@ def test_cards_hold_at_most_four_bubbles_and_paginate_instead_of_shrinking(chat,
     for number, card in enumerate((first, second, third), 1):
         assert_page_is_safe(card)
         assert card.count('<section class="card-panel') <= archive_pages.CARD_APPS == 4 and card.count('<h1') == 1
-        assert f'read-only · no payments · card {number} of 3' in card and '<main id="main" class="card card-safe' in card
+        assert f'<span>card {number} of 3' in card and 'no payments' not in card and '<main id="main" class="card card-safe' in card
         assert '<p class="card-honest mono">AI-generated · not affiliated · may be wrong</p>' in card
     assert archive_pages.render_card(payload, 'C001') == first == archive_pages.render_chatbot_card(payload, 'C001')
     # The same bubble classes as a card of three or four: the answers keep their size, whatever the number of answerers.
