@@ -39,6 +39,7 @@ python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000   # local pa
 | `archive.py` | Model track: question files, locks, plan, dry run, paid run, answers, payload, demo |
 | `archive_chatbots.py` | Chat-app track: configuration (apps in answerer groups), template, import, the published block |
 | `archive_pages.py` | Pages, share cards and data files from a payload; no script |
+| `profiles.py` | The "just for fun" answering style per AI answerer: a pure count over its shown answers; display only |
 | `trends.py` | `archive-trends`: candidates for trending questions; writes nothing |
 | `snapshot.py` | The site build and the reviewed export |
 | `web.py`, `app.py` | The read-only local web app |
@@ -112,6 +113,7 @@ Share cards: `node scripts/capture-cards.mjs --site SITE-FOLDER --out OUT` write
 | `test_archive.py`, `test_archive_trending.py`, `test_archive_endpoints.py`, `test_archive_samples.py` | The model track: locks, plan, run, failure rules, pages, payload and publication rules, older databases |
 | `test_archive_chatbots.py` | The chat-app track end to end |
 | `test_snapshot.py`, `test_snapshot_archive_only.py`, `test_published.py` | The site build, the reviewed export and its checks, the workflow |
+| `test_profiles.py` | The answering-style count, its wording and its place on "How it works" |
 | `test_trends.py` | `archive-trends` |
 | `test_budget.py`, `test_controls.py` | Reservations, gates, reconcile, audit log, limiter, an old database, backup, the CLI command list |
 | `test_providers.py`, `test_output_limit.py`, `test_open_items.py` | Provider settings, adapters, no redirect followed, the request limit |
