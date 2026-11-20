@@ -85,6 +85,39 @@ def test_preview_needs_no_key_and_calls_and_records_nothing(desk, monkeypatch, c
     assert 'OPENROUTER_API_KEY' not in os.environ and rows('SELECT COUNT(*) n FROM archive_runs')[0]['n'] == 0
 
 
+def test_preview_creates_no_database_file(desk, monkeypatch, capsys):
+    catalog, db = desk
+    seen = fake_sdk(monkeypatch)
+    code, out, secrets = drive(monkeypatch, capsys, catalog, db, ['1', '1', ''], '--preview-only')
+    assert code == 0 and secrets == [] and seen == []
+    assert not db.exists() and list(db.parent.glob(db.name + '*')) == []    # no file, no -wal or -shm beside it
+    assert 'No plan to show yet' in out and 'Preview only: nothing was called or recorded.' in out
+    # An existing database is read, never changed: unlocked stays unlocked, byte for byte.
+    os.environ['LIVE_DB'] = str(db)
+    launcher.core.init_db()
+    before = db.read_bytes()
+    code, out, _ = drive(monkeypatch, capsys, catalog, db, ['1', '1', ''], '--preview-only')
+    assert code == 0 and 'No plan to show yet' in out and db.read_bytes() == before
+
+
+@pytest.mark.parametrize('flags', [(), ('--preview-only',)])
+@pytest.mark.parametrize('answers', [[], ['1'], ['1', '1']])
+def test_input_that_ends_stops_cleanly_without_a_traceback(desk, monkeypatch, capsys, answers, flags):
+    catalog, db = desk
+    seen = fake_sdk(monkeypatch)
+    typed = iter(answers)
+
+    def ask(prompt):
+        try:
+            return next(typed)
+        except StopIteration:
+            raise EOFError from None                                        # what input() raises when nothing is attached
+    args = launcher.argparse.Namespace(db=str(db), catalog=str(catalog), preview_only=bool(flags))
+    code = launcher.run(args, ask=ask, secret=lambda prompt: KEY)
+    assert code == 1 and seen == [] and 'Nothing was called' in capsys.readouterr().out
+    assert 'LIVE_ALLOW_PAID_CALLS' not in os.environ
+
+
 @pytest.mark.parametrize('answers', [['3'], ['0'], ['x'], ['1,1'], ['1,2,2'], ['1', 'x'], ['1', '9'], ['1', '1', 'sideways']])
 def test_invalid_choices_stop_before_any_key_or_call(desk, monkeypatch, capsys, answers):
     catalog, db = desk
