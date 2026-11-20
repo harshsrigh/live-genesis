@@ -569,6 +569,10 @@ def test_an_asked_reply_is_judged_like_an_imported_one_and_a_withheld_reply_is_s
     record = json.loads(site['data/C001.json'])['answers'][0]
     assert (record['answerer'], record['state'], record['shown'], record['text']) == ('local-one', 'hidden', False, None)
     assert snapshot._scan(chatbots.site_payload(payload)) == []
+    # Only models answered here, so the top bar says "AI models" on every page, never "Chat apps".
+    bars = [text.split('<nav aria-label="Archive navigation">')[1].split('</nav>')[0] for name, text in site.items()
+            if name.endswith('.html') and '<nav aria-label="Archive navigation">' in text]
+    assert bars and all('>AI models</a>' in bar and 'Chat apps' not in bar for bar in bars)
 
 
 # ---- upgrade: a database made by the version before model answerers ------------------------------------------
@@ -719,6 +723,7 @@ def test_pages_show_two_groups_a_switch_the_model_fact_and_no_word_about_how(ask
     corner = {name: re.findall(r'<span class="card-kicker">([^<]+)</span>', text) for name, text in site.items() if name.startswith('card/C001')}
     assert corner['card/C001-local-one.html'] == corner['card/C001-api-one.html'] == corner['card/C001-ai-models.html'] == ['AI models']
     assert corner['card/C001.html'] == corner['card/C001-chatgpt.html'] == corner['card/C001-human.html'] == ['Chatbots']
+    assert '<a href="index.html" aria-current="page">Chat apps</a>' in front    # apps and models together: the bar keeps its word
     # The front page: a neutral count, a group switch with both groups, the models in their own group.
     assert 'Same question. Five AIs in two groups. One human.' in visible(front)
     assert front.count('class="g-radio"') == 2 and 'AI chat apps and AI models. We ask again every month and keep every reply.' in visible(front)

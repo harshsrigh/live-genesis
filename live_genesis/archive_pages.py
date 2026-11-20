@@ -797,7 +797,9 @@ def _bar(view: _View, up: str, base: str, versions: dict[str, str], current: str
                 f'{"Main archive" if view.demo else "Sample site"}</a>\n')
     else:
         last = ""
-    links = [("front", f"{base}index.html", "Chat apps" if chat else "Questions")]
+    # A site whose AI answerers are all models asked by software says so: a model is never called a chat app.
+    only_models = {column["kind"] for column in view.chat.columns if column["kind"] != "human"} == {"model"}
+    links = [("front", f"{base}index.html", ("AI models" if only_models else "Chat apps") if chat else "Questions")]
     if not standalone:   # a standalone archive is the chat-app track only: it has no model page to link
         links += [("trending", f"{base}trending.html", "Trending"), ("models", f"{base}models.html", "Models")]
     links.append(("chatbots", f"{base}chatbots.html", "How it works") if chat or standalone
