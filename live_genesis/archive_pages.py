@@ -113,7 +113,48 @@ CHAT_ID = re.compile(r"C[0-9]{3}")
 DATA_NAME = re.compile(r"(?:Q[0-9]{2}|T[0-9]{3}|C[0-9]{3})\.json|answers\.jsonl|README\.txt")
 CHAT_CARD_FOOT = "AI-generated · not affiliated · may be wrong"
 CARD_FULL = "full answer on the site"
-CARD_CLAMP_CHARS = {1: 160, 2: 115, 3: 100, 4: 110}   # panels on a card -> characters that surely fit its clamp
+# Whether an answer is cut on the 9:16 picture is worked out here, because a page carries no script: the text is
+# wrapped as the browser would wrap it, using the bundled Inter's advance widths (weight 500, in em, measured in
+# Chromium on 20 Nov 2026) and the room an answer has on a card of 1-4 panels (line width in em, lines of its clamp;
+# both follow from archive.css and were measured the same way). An unknown character counts as wide and 1% of each
+# line is held back, so the estimate errs towards saying "cut".
+CARD_FIT = {1: (14.21, 7), 2: (17.71, 4), 3: (19.74, 3), 4: (22.28, 3)}
+CARD_FIT_SLACK = 0.99
+CARD_WIDE = 1.25
+_W = dict(zip(
+    " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+    (0.265, 0.305, 0.495, 0.64, 0.645, 0.995, 0.655, 0.315, 0.37, 0.37, 0.655, 0.67, 0.305, 0.46, 0.305, 0.37,
+     0.645, 0.415, 0.615, 0.625, 0.655, 0.605, 0.63, 0.57, 0.63, 0.63, 0.305, 0.315, 0.67, 0.67, 0.67, 0.525, 0.98,
+     0.71, 0.655, 0.735, 0.72, 0.605, 0.59, 0.75, 0.745, 0.275, 0.575, 0.69, 0.565, 0.915, 0.755, 0.765, 0.64, 0.77,
+     0.65, 0.645, 0.655, 0.74, 0.71, 1.005, 0.7, 0.695, 0.64, 0.37, 0.37, 0.37, 0.475, 0.505, 0.335,
+     0.57, 0.62, 0.575, 0.62, 0.585, 0.38, 0.62, 0.6, 0.25, 0.25, 0.56, 0.25, 0.89, 0.6, 0.605, 0.62, 0.62, 0.4, 0.54,
+     0.355, 0.6, 0.585, 0.83, 0.555, 0.585, 0.56, 0.44, 0.345, 0.44, 0.67)))
+_W.update({"’": 0.275, "‘": 0.275, "–": 0.5, "—": 1.0})
+
+
+def card_lines(text: str, width: float) -> int:
+    """How many lines `text` takes in a card bubble `width` em wide: words are placed greedily, a line break in
+    the text starts a new line (the bubble keeps them), and a word wider than a line takes the lines it needs."""
+    room = width * CARD_FIT_SLACK
+    lines = 0
+    for paragraph in text.split("\n"):
+        used, lines = 0.0, lines + 1
+        for word in paragraph.split():
+            size = sum(_W.get(char, CARD_WIDE) for char in word)
+            if used and used + _W[" "] + size <= room:
+                used += _W[" "] + size
+                continue
+            if used:
+                lines += 1
+            lines += int(size // room) if size > room else 0
+            used = size % room if size > room else size
+    return lines
+
+
+def card_cut(text: str, panels: int) -> bool:
+    """True when the picture of a card with this many panels may not show all of `text`."""
+    width, clamp = CARD_FIT[min(max(panels, 1), 4)]
+    return card_lines(text, width) > clamp
 # Server-side thresholds for the "More" control: longer than the first is clamped on a phone, than the second also on
 # a tablet, than the third everywhere. Chosen so that a shorter text always fits the clamp of that width.
 CLAMP_PHONE, CLAMP_TABLET, CLAMP_DESKTOP = 140, 240, 300
@@ -1654,9 +1695,8 @@ def _card_page(view: _View, board: dict, panels: list[tuple[dict, dict, dict]], 
     `part` ("card 2 of 3") goes to the small print."""
     sample = board["demo"]
     question_id = board["id"]
-    limit = CARD_CLAMP_CHARS[min(max(len(panels), 1), 4)]
     earlier = one or _card_room(board, panels)
-    cut = any(len(cell["text"]) > limit for _column, _period, cell in panels)
+    cut = any(card_cut(cell["text"], len(panels)) for _column, _period, cell in panels)
     out = [_head(title, "../../", versions, board["text"], _meta(view, "../", board=board, track=track)).replace(
                "<body>", '<body class="card-page">'),
            f'<main id="main" class="card card-safe{" card-four" if len(panels) > 3 else ""}" data-question-id="{esc(question_id)}" '

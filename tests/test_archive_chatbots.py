@@ -894,6 +894,22 @@ def test_chat_cards_three_apps_and_human_in_the_safe_box(chat, tmp_path):
     assert four.count('Written with Grok · Nov 2026') == 1 == one.count('Written with Grok')
     # The long reply is clamped on the picture, so the card says where the whole text is. The text itself is never cut.
     assert LONG in four and 'full answer on the site' in four and 'full answer on the site' not in person
+    # Whether a reply is cut is worked out from how it wraps, not from its length alone (no script on a page).
+    # These four replies were on a real four-panel card and all fitted its three lines in Chromium: no note for them.
+    fitting = ("Technically yes, but only if you count mustard as bread and ignore the fact that it's basically a sausage on a stick of regret. \U0001F32D\U0001F602",
+               "No, but if you really want to argue, a hot dog is basically a sandwich that’s been on a diet and refuses to wear pants.",
+               "OMG, it's a debate for the ages – basically, yes, but like, a very confused sandwich. \U0001F602",
+               "Nah, it's a hot dog, not a sandwich. But if you squish it, it's kinda like a sandwich! \U0001F61C")
+    assert not any(archive_pages.card_cut(text, 4) for text in fitting) and max(len(text) for text in fitting) > 110   # the old length rule called these cut
+    assert archive_pages.card_lines(fitting[0], archive_pages.CARD_FIT[4][0]) == 3
+    # One more word than fits, a wider letter, a line break or a narrower card: then it is cut, and the estimate says so.
+    assert archive_pages.card_cut(fitting[0] + ' Honestly, though, who is counting any more?', 4)
+    assert archive_pages.card_cut(fitting[0].upper(), 4) and archive_pages.card_cut(fitting[0].replace(', ', ',\n'), 4)
+    assert archive_pages.card_cut(fitting[0], 3) and not archive_pages.card_cut(fitting[0], 1)
+    assert archive_pages.card_lines('one\ntwo\n\nfour', 20) == 4 and archive_pages.card_lines('', 20) == 1
+    assert archive_pages.card_lines('i' * 400, 20) > archive_pages.card_lines('i' * 40, 20) == 1     # a word wider than a line
+    # A character whose width is not known counts as wide, so the mistake can only be an unneeded note.
+    assert archive_pages.card_lines('中' * 30, 20) == 2 and archive_pages._W['m'] < archive_pages.CARD_WIDE
     assert one.count('<section class="card-panel') == 1 and '<div class="card-panels one">' in one and 'ChatGPT' not in one
     assert 'data-answerer-kind="human"' in person and 'data-human-form="quoted"' in person and 'data-provenance="human-written"' in person
     assert '<p class="card-before"><span class="mono">Before · Oct 2026</span> PLACEHOLDER first human C001.</p>' in person
