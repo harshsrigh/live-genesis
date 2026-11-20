@@ -94,7 +94,6 @@ HIDDEN_WORDS = "Hidden: broke our content rules"
 LEFT_OUT = "When an app refuses or dodges, we leave it out."   # said once per page, in the footer
 ASKED_DIFFERENTLY = "Asked a bit differently"     # an answer whose recorded settings differ from that app's time before
 DAY_NOTE = "A new answer can come from how we asked that day, not from the app changing its mind."
-READ_ONLY = "Read-only. No payments. Just answers."
 NO_ANSWERS = "No answers yet"
 # How a human answer is worded on a page. The data keeps the recorded values (quoted | summarised).
 FORM_WORDS = {"quoted": "quoted", "summarised": "summed up"}
@@ -835,7 +834,8 @@ def chat_disclaimer(makers: list[str]) -> str:
 
 def _foot(view: _View, track: str, shown_ids: list[str], back: str = "") -> str:
     """The honesty footer, once per page, each thing said once: what the answers are; on a chat-app page that
-    refusals and non-answers are left out (the only place a page says it); read-only and no payments."""
+    refusals and non-answers are left out (the only place a page says it). Owner's decision, 20 Nov 2026: no
+    "Read-only. No payments. Just answers." line on any page."""
     sample = view.chat.demo if track == "chat" else view.models_demo
     if sample:
         honesty = SAMPLE_FOOT
@@ -846,8 +846,7 @@ def _foot(view: _View, track: str, shown_ids: list[str], back: str = "") -> str:
         honesty = "These answers came from AI models. They can be wrong, so please don't take them as advice."
     lines = [LEFT_OUT] if track == "chat" else []
     return ('<footer class="foot">' + back + f'<span>{esc(honesty)}</span>'
-            + "".join(f'<span>{esc(line)}</span>' for line in lines)
-            + f'<span class="mono small">{READ_ONLY}</span></footer>\n')
+            + "".join(f'<span>{esc(line)}</span>' for line in lines) + '</footer>\n')
 
 
 def _square(cell: dict) -> str:
@@ -1053,8 +1052,7 @@ def render_home(versions: dict[str, str] | None = None) -> str:
             '  <h1 class="display">Answers Over Time</h1>\n'
             f'  <p class="lede"><a href="archive/{FIRST_PAGE}">See the answers</a></p>\n'
             '</div>\n</main>\n<div class="wrap wrap-foot">\n'
-            '<footer class="foot"><span>This is a saved copy of the site. Nothing here can be changed.</span>'
-            f'<span class="mono small">{READ_ONLY}</span></footer>\n'
+            '<footer class="foot"><span>This is a saved copy of the site. Nothing here can be changed.</span></footer>\n'
             '</div>\n</body>\n</html>\n')
 
 

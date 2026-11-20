@@ -755,7 +755,7 @@ def test_pages_show_hand_entered_replies_as_cards_with_before_history_and_notice
         assert_page_is_safe(page)
         assert page.count('<div') == page.count('</div>') and page.count('<span') == page.count('</span>'), name
         assert page.count('<main') == 1 and page.count('<h1') == 1 and '<script' not in page, name
-        assert ('no payments' in page.lower()) is (not name.startswith('card/')) and not re.search(r'\bround', page, re.I), name
+        assert 'no payments' not in page.lower() and not re.search(r'\bround', page, re.I), name
         assert not re.search(r'<img(?![^>]*archive-mark\.svg)', page)                         # the archive's own mark is the only image: no logo
         assert 'scripted' not in page.lower() and 'Sample we wrote' not in page, name         # real data never carries the sample label
     front, page, method = pages['index.html'], pages['c/C001.html'], pages['chatbots.html']
@@ -1584,7 +1584,7 @@ def test_a_real_site_does_not_say_how_replies_were_collected_and_keeps_its_other
     for kept in ('<span class="tag tag-dark mono">AI-generated · may be wrong</span>',
                  'These answers are AI-generated and shown exactly as they came. They can be wrong, so please don&#x27;t take them as advice.',
                  'not affiliated with, sponsored by or endorsed by OpenAI, Google or xAI; product names belong to their owners.',
-                 'Read-only. No payments. Just answers.', 'When an app refuses or dodges, we leave it out.'):
+                 'When an app refuses or dodges, we leave it out.'):
         assert kept in front and kept in page and kept in how, kept
         assert front.count(kept) == page.count(kept) == 1, kept                               # each thing is said once
     for gone in ('Part of LIVE Genesis', 'Read-only archive.', 'Refusals and non-answers'):  # the compliance-notice wording
@@ -1629,7 +1629,7 @@ def test_the_sample_site_does_not_say_how_replies_were_collected_and_still_says_
             assert '<meta name="aot:content" content="scripted-sample" />' in text, name
     for name in ('archive/index.html', 'archive/c/C001.html', 'archive/chatbots.html'):
         for kept in ('Everything here is a sample we wrote to show how the site works. No AI and no person was asked.',
-                     'Read-only. No payments. Just answers.', 'When an app refuses or dodges, we leave it out.'):
+                     'When an app refuses or dodges, we leave it out.'):
             assert texts[name].count(kept) == 1, (name, kept)
     assert 'This is a sample site: the apps are made up and we wrote the replies.' in texts['archive/chatbots.html']
     assert 'sample we wrote · no person was asked' in texts['archive/chatbots.html']

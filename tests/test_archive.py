@@ -667,10 +667,10 @@ def test_pages_for_the_demo_archive(ready):
         assert not re.search(r'\bround', page, re.I)                                     # time is told in checks and dates
         assert not re.search(r'agents?[- ]only|no humans|humans (?:may|can)not|software agents only', page, re.I)
         # A share card carries no "read-only · no payments" line (owner's decision, 20 Nov 2026); every other page does.
-        assert ('no payments' in page.lower()) is (not name.startswith('card/')), name
+        assert 'no payments' not in page.lower(), name                    # owner's decision, 20 Nov 2026: on no page
         if not name.startswith('card/'):
             assert f'<a class="skip" href="{name.rsplit("/", 1)[-1]}#main">' in page and '<header class="bar">' in page and '<main id="main"' in page, name
-            assert 'READ-ONLY ARCHIVE' not in page and 'Read-only. No payments. Just answers.' in page
+            assert 'READ-ONLY ARCHIVE' not in page and 'Read-only. No payments. Just answers.' not in page   # owner, 20 Nov 2026
     # The model list: every core question with each model's newest answer inline and a timeline that says WHEN it changed.
     assert 'The same questions, straight to the models.' in models and 'How we keep track' in models
     assert 'It does not say which answer is right.' in models and 'One square each time we asked, oldest first:' in models
