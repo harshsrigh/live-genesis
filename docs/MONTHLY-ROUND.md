@@ -52,6 +52,8 @@ python -m live_genesis.cli archive-chatbot-template --out chatbots-2026-12.json
 
 You should see `Template written to chatbots-2026-12.json. This is your sheet for the month.`
 
+The sheet holds every question on the list: thirteen since 20 November 2026 (C011 to C013 were added that day).
+
 The sheet carries today's date. If you will ask on another day, give that day:
 
 ```bash
@@ -159,7 +161,7 @@ DRY RUN: the file passed every check. Nothing was stored.
   human: 10 of 10 answers will show
 ```
 
-Do the numbers match what happened? Then go on.
+The second number is how many questions the sheet holds (thirteen today, so `13 of 13`; the example above is from the ten-question list). Do the numbers match what happened? Then go on.
 
 If instead it says the file `is not ready yet`, that is this check doing its job. It lists what to fix: the app, the question, and what to do. Fix the sheet, save it, run the same command again. As often as you like.
 
@@ -235,7 +237,7 @@ You should see `OK: export is intact and approved.`
 python -m live_genesis.snapshot ../site-preview --from-data published
 ```
 
-You should see `Static snapshot written to ../site-preview (rendered from approved data ...)`. That folder is the public site, built from the file you just read.
+You should see `Static snapshot written to ../site-preview (rendered from approved data ...)`. That folder is the public site, built from the file you just read. Two things differ from the live site, and both are expected: there is no Facebook link in the share line (it needs the site's public address), and the Instagram and TikTok links open the share-card page instead of a picture (the pictures are made when the site is published).
 
 ### Step 16. Push
 
@@ -263,7 +265,7 @@ Only the `published` folder goes up. Never add a database, your sheet or `.env`,
 
 ### Step 17. Check the live pages
 
-Wait a few minutes, then open <https://harshsrigh.github.io/live-genesis/>. Check the front page, one question page and "How it works". The month should be the new one, and there should be no sample label anywhere (once real answers are published, the sample site is no longer part of the site).
+Wait a few minutes, then open <https://harshsrigh.github.io/live-genesis/>. Check the front page, one question page and "How it works". The month should be the new one. There is no sample site and no "Sample site" link any more, and no small-print line at the foot of a page or a card. Under a question on the front page, tap **Instagram** in the share line: a picture of the share card should open (the site makes one for every card when it is published). If the site has not changed after ten minutes, the publishing step may have failed, and then nothing was published: ask for help.
 
 ### Step 18. Make the share cards
 
@@ -274,6 +276,8 @@ LD_LIBRARY_PATH=~/.local/opt/chromium-libs/usr/lib/x86_64-linux-gnu node scripts
 Node, Playwright, its browser and an emoji font were installed in WSL on this PC on 19 November 2026, all under your home folder. The first part of the line tells the browser where three system files it needs were put; on a machine where they are installed the usual way, leave that part out. If `node` is not found, open a new WSL window.
 
 You should see one line per card and, at the end, `card(s) written to ../cards at 1080 x 1920.` Posting them is by hand too: `docs/SOCIAL-POSTS.md`.
+
+This step is optional now: the live site already holds a picture of every card, next to its page (the Instagram and TikTok links open it). Do this step when you want all the pictures in one folder on your PC.
 
 ---
 
@@ -310,3 +314,5 @@ export LIVE_DB=~/live-genesis/live.db
 *Checked on 19 November 2026 against a scratch database with placeholder replies: `backup`, `archive-status`, `archive-chatbot-template` (`--out`, `--date`), `archive-chatbot-import` (`--dry-run`, `--allow-old`, plain), the local pages, `snapshot` (`--export`, `--replace`, `--approve --i-have-read-it`, `--check`, `--from-data`) and `capture-cards.mjs` (`--site`, `--out`, `--set chat`). Not run: the `git` commands of step 16 and the two PowerShell forms named at the top.*
 
 *Checked again on 19 November 2026 in WSL on the owner's PC, in a throwaway copy of the project with a scratch database and placeholder replies: steps 1, 3, 8 to 15 printed what this guide says. Step 16: `git add published` staged exactly the two files, `git commit` worked, `git push` was run as a dry run only. Step 18 was run later that day on the published answers and wrote 50 cards. Not run: a push by you, and the two PowerShell forms.*
+
+*Checked again on 21 November 2026 in WSL on the owner's PC, against the published answers: the step 3 command writes a sheet with thirteen questions per app; the step 14 and step 15 commands printed what this guide says; the live checks of step 17 (no sample site, no small-print line, a picture behind the Instagram link) were made on the live site on 20 November. Not run again: an import, the `git` commands and step 18.*

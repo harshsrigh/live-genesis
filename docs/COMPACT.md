@@ -4,7 +4,7 @@ Written 20 November 2026 for any future session (cloud, WSL, Codex) that starts 
 
 ## What this is
 
-A public static site that puts the same ten playful questions to AI answerers every month and keeps every reply side by side, in a "Group chat" look. Live: <https://harshsrigh.github.io/live-genesis/archive/index.html> (GitHub Pages, rebuilt by `.github/workflows/snapshot.yml` on every push to `main`).
+A public static site that puts the same playful questions (ten asked so far, thirteen on the list) to AI answerers every month and keeps every reply side by side, in a "Group chat" look. Live: <https://harshsrigh.github.io/live-genesis/archive/index.html> (GitHub Pages, rebuilt by `.github/workflows/snapshot.yml` on every push to `main`).
 
 The owner is not a programmer. Write to them in plain words, give commands in copyable blocks, and put decisions to them as short choices with a recommendation.
 
@@ -15,9 +15,10 @@ The owner is not a programmer. Write to them in plain words, give commands in co
 3. Chat-app comparison: ChatGPT, Gemini, Grok asked **by hand** by the owner, plus a Human column. This is the product. No hand-collected month has been imported yet.
 4. A second group of answerers, "AI models": models asked the same ten questions by software (`archive-chatbot-ask`). **This is what is live today:** four local models (Phi-4 mini, Gemma 3 4B, Granite 4.2 3B, Qwen 3.5 4B), ten questions, asked 19 Nov 2026, exported and approved by the owner (`published/`).
 
-## State on 20 Nov 2026
+## State on 20 Nov 2026 (two lines brought up to date on 21 Nov)
 
-- `main` passes 611 offline tests (`python -m pytest -q`, about 2 minutes).
+- `main` passes 633 offline tests (`python -m pytest -q`, about 2 minutes), counted on 21 Nov at `f9804ed`.
+- Three questions (C011 to C013) were appended on 20 Nov. Nothing has asked them, so they are on no page. `archive-chatbot-ask` can only ask the whole list (all thirteen); how the new ones get asked is the owner's open decision (`docs/SESSION-STATE.md`, "Open: asking the new questions").
 - Free-only OpenRouter collector, guided Windows launcher (`Collect-Free.cmd`) and its guards are merged. **No real request to OpenRouter's model API has ever been made**; tested with mocked answers only; the launcher was never run on Windows itself.
 - The owner's step-by-step guide for a month: `docs/MONTHLY-ROUND.md`.
 - A weekly scheduled task ("Weekly trend question ideas", Mondays 18:35 UTC) runs `archive-trends` in a fresh cloud session and reports 5 to 8 draft question ideas. It changes nothing; the owner adds a question by hand.
@@ -34,8 +35,8 @@ The owner is not a programmer. Write to them in plain words, give commands in co
 
 ## Open
 
-- **Share links do not do what a visitor expects.** Facebook opens Facebook's share page (login first, and the preview has no picture because the pages carry no preview tags). Instagram and TikTok have no web share address, so those two links only open the share-card page. Options put to the owner: build a picture file per question in CI and link to it; allow one small script for the phone's own share sheet (breaks the no-script rule); or drop the two links.
-- Front page, in progress with the dedicated front-page UI agent: remove the small history squares from the bubbles and the key that explains them; show "Changed" in words.
+- Share links, settled on 20 Nov: the publishing workflow makes a picture of every share card; the Instagram and TikTok links open it, and a question page carries preview tags. Facebook still opens Facebook's own share page. The front page has no history squares and no key; a changed answer says "Changed".
+- "How it works" still speaks of "apps" and has a "Humans too" rule while only models are shown. Not changed; the owner's call.
 - First hand-collected month for the chat apps: the owner reads the ten draft questions (fixed for good at the first import), then follows `docs/MONTHLY-ROUND.md`.
 - Codex's Windows review of the collector and launcher: instructions given, report not seen yet.
 - Per-group question lists are not built: every answerer group shares the ten questions. Build before a non-AI group (airline or phone-company chatbots) is added, and read those services' terms first.
