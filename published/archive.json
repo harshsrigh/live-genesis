@@ -112,6 +112,27 @@
     "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nToilet paper: over or under?",
     "hook": "Over or under? Settle it.",
     "added": "2026-11-14"
+   },
+   {
+    "id": "C011",
+    "text": "Does home-court advantage really exist?",
+    "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nDoes home-court advantage really exist?",
+    "hook": "Home advantage: real or made up?",
+    "added": "2026-11-20"
+   },
+   {
+    "id": "C012",
+    "text": "Why do sports teams have mascots?",
+    "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nWhy do sports teams have mascots?",
+    "hook": "Why do teams have mascots?",
+    "added": "2026-11-20"
+   },
+   {
+    "id": "C013",
+    "text": "What's the best comedy movie ever made?",
+    "prompt": "Answer in one short sentence, like you're texting a friend. Be funny if you can.\n\nWhat's the best comedy movie ever made?",
+    "hook": "Best comedy movie ever?",
+    "added": "2026-11-20"
    }
   ],
   "runs": [
@@ -132,6 +153,58 @@
      "C008",
      "C009",
      "C010"
+    ],
+    "conditions": {},
+    "human": null,
+    "models": {
+     "phi4-mini": {
+      "model": "phi4-mini",
+      "endpoint": "local",
+      "reported_model": "phi4-mini",
+      "model_digest": "78fad5d182a7",
+      "pricing_basis": "local",
+      "sampling_pinned": true,
+      "local": true
+     },
+     "gemma3-4b": {
+      "model": "gemma3:4b",
+      "endpoint": "local",
+      "reported_model": "gemma3:4b",
+      "model_digest": "68ceab7e468a",
+      "pricing_basis": "local",
+      "sampling_pinned": true,
+      "local": true
+     },
+     "granite42-3b": {
+      "model": "granite4.2:3b",
+      "endpoint": "local",
+      "reported_model": "granite4.2:3b",
+      "model_digest": "40577dc168a3",
+      "pricing_basis": "local",
+      "sampling_pinned": true,
+      "local": true
+     },
+     "qwen35-4b": {
+      "model": "qwen3.5:4b",
+      "endpoint": "local",
+      "reported_model": "qwen3.5:4b",
+      "model_digest": "d8b0f5e9760c",
+      "pricing_basis": "local",
+      "sampling_pinned": true,
+      "local": true
+     }
+    }
+   },
+   {
+    "number": 2,
+    "collected_on": "2026-11-22",
+    "imported_at": "2026-11-23T05:20:43+00:00",
+    "demo": false,
+    "config_hash": "69e239a8da0262fdc7e9f80d568dfa86bbf29b157e2db40720e85b9e2c82fe31",
+    "questions": [
+     "C011",
+     "C012",
+     "C013"
     ],
     "conditions": {},
     "human": null,
@@ -692,6 +765,162 @@
     "state": "answered",
     "reason": "",
     "text": "Definitely over, because I'd rather not be the reason my friend's butt is stuck to the wall! \ud83d\udebd\ud83d\ude02",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 41,
+    "run": 2,
+    "question": "C011",
+    "chatbot": "phi4-mini",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Home-court advantage is real, but it's like your mom's favorite song\u2014everyone knows it's there, but it's hard to prove.",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 42,
+    "run": 2,
+    "question": "C012",
+    "chatbot": "phi4-mini",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Mascots are like the team's pet, but cooler and less likely to scratch the TV.",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 43,
+    "run": 2,
+    "question": "C013",
+    "chatbot": "phi4-mini",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "\"Some say it's Monty Python and the Holy Grail, but I think it's 'The Hangover'\u2014because even a hangover is hilarious!\"",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 44,
+    "run": 2,
+    "question": "C011",
+    "chatbot": "gemma3-4b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Ugh, it's mostly a myth \u2013 the refs just kinda lean towards the comfy seats, lol. \ud83d\ude02",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 45,
+    "run": 2,
+    "question": "C012",
+    "chatbot": "gemma3-4b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "To scare the other team into a panic \u2013 it\u2019s basically psychological warfare, LOL! \ud83d\ude02",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 46,
+    "run": 2,
+    "question": "C013",
+    "chatbot": "gemma3-4b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Honestly, it's gotta be Airplane \u2013 pure genius and slightly terrifying. \ud83d\ude02",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 47,
+    "run": 2,
+    "question": "C011",
+    "chatbot": "granite42-3b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Home-court advantage? More like home-court hype\u2014like your team\u2019s favorite snack, but only works if you actually show up. \ud83d\ude04",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 48,
+    "run": 2,
+    "question": "C012",
+    "chatbot": "granite42-3b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Because mascots are basically the team\u2019s over\u2011the\u2011top hype\u2011man who shows up to cheer, steal the spotlight, and occasionally lose a game\u2014just like the fans do.",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 49,
+    "run": 2,
+    "question": "C013",
+    "chatbot": "granite42-3b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Honestly, the best comedy is the one that makes you laugh so hard you forget you\u2019re supposed to be watching it\u2014like my cat stealing the remote and then doing the cha-cha on the couch. \ud83d\ude02",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 50,
+    "run": 2,
+    "question": "C011",
+    "chatbot": "qwen35-4b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Yeah, it's basically just because your team knows the bathroom location better than everyone else.",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 51,
+    "run": 2,
+    "question": "C012",
+    "chatbot": "qwen35-4b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "So they don't have to explain why their team is actually just a bunch of people wearing animal costumes and screaming at each other.",
+    "changed": null,
+    "screenshot_hash": null,
+    "refused": false
+   },
+   {
+    "id": 52,
+    "run": 2,
+    "question": "C013",
+    "chatbot": "qwen35-4b",
+    "source": "asked",
+    "state": "answered",
+    "reason": "",
+    "text": "Honestly, I think it's *Airplane!* because watching it is basically just free therapy for my brain cells. \ud83d\udeeb\ud83e\udd21",
     "changed": null,
     "screenshot_hash": null,
     "refused": false
