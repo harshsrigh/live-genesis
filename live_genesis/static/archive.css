@@ -169,6 +169,10 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .row-more, .row-share { position: relative; z-index: 2; }
 .row-share { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.1rem 0.9rem; align-items: baseline; padding: 0 1rem 0.8rem; border-top: 1px solid var(--line); padding-top: 0.6rem; }
 .row-share a { font-weight: 600; }
+.share-hint { padding-top: 0.2rem; }
+.share-caption { padding-top: 0.4rem; }
+.share-caption summary { cursor: pointer; font-size: 0.8125rem; font-weight: 600; color: var(--ink-soft); }
+.caption { margin: 0.5rem 0 0.3rem; padding: 0.7rem 0.85rem; background: var(--pane); border: 1px solid var(--line); border-radius: 12px; font-family: inherit; font-size: 0.875rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
 .under + .card-links + .row-share, .card-links + .row-share { justify-content: flex-start; border-top: 0; padding: 0.25rem 0 0; }
 .list-note { margin: 0 0 2rem; font-size: 0.875rem; }
 

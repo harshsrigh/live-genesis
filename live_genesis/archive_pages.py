@@ -1021,11 +1021,49 @@ def _preview(board: dict) -> str:
     return "".join(out)
 
 
-def _share(board: dict, page: str, card: str) -> str:
-    """The share line of a chat-app question: a plain link to Facebook's share page (only when the site's public
-    address is known; nothing is sent to Facebook unless the visitor follows it) and, for Instagram and TikTok,
-    which take pictures and not links, the portrait share card to save and post. Text links only: no logo, no
-    script, no button from another site. `page` and `card` are relative to the page the line is on."""
+CAPTION_SAMPLE = "Sample only: we wrote these answers ourselves."
+SAVE_HINT = "Save the image, then upload it in Instagram or TikTok."
+SAVE_NOTE = "How saving works depends on your browser: if nothing is saved, open the picture and touch and hold it."
+
+
+def _collected(board: dict) -> list[str]:
+    """The dates on which the answers now shown for this question were collected, oldest first (the dates of
+    observation, never the date of an export)."""
+    return sorted({cell["collected"] for cell in board.get("cells", {}).values() if cell.get("shown") and cell.get("collected")})
+
+
+def card_file_name(board: dict) -> str:
+    """The name a saved card picture gets: answers-over-time-<question id>-<year>-<month of the newest answers>.png."""
+    dates = _collected(board)
+    return f"answers-over-time-{board['id']}" + (f"-{dates[-1][:7]}" if dates else "") + ".png"
+
+
+def caption(board: dict) -> str:
+    """A short caption for a post, from public data only: the question, when the shown replies were collected,
+    and the address of the question's page (when the site's public address is known). It says nothing about
+    an answer having changed, and a sample says that it is a sample."""
+    # Its own wording, so a sample page still carries its one sample label exactly once.
+    lines = ([CAPTION_SAMPLE] if board.get("demo") else []) + [board["text"]]
+    dates = _collected(board)
+    if dates:
+        lines.append("Replies collected: " + ", ".join(full_date(date) for date in dates))
+    base = site_url()
+    if base:
+        lines.append(f"See the answers over time: {base}archive/c/{board['id']}.html")
+    return "\n".join(lines)
+
+
+def _share(board: dict, page: str, card: str, *, full: bool = False) -> str:
+    """The share line of a chat-app question. No script, no button from another site, no logo; nothing here
+    posts anywhere, and nothing is sent to another site unless the visitor follows a link.
+
+    * Facebook: a plain link to its share page (only when the site's public address is known).
+    * Save card: when the build made a picture of each card (LIVE_CARD_IMAGES=YES), a link to that PNG with a
+      download name, and beside it a plain link that opens the same picture (to touch and hold, or where the
+      browser ignores the download hint). Without pictures, one link to the card page.
+    * `full` (the question's own page): the plain sentence on what to do with the picture, and a caption to
+      select and copy.
+    `page` and `card` are relative to the page the line is on."""
     if board["track"] != "chat":
         return ""
     links = []
@@ -1034,14 +1072,22 @@ def _share(board: dict, page: str, card: str) -> str:
         target = quote(f"{base}archive/c/{board['id']}.html", safe="")
         links.append(f'<a rel="noopener noreferrer" href="https://www.facebook.com/sharer/sharer.php?u={target}" '
                      f'aria-label="Share on Facebook: {esc(board["text"])}">Facebook</a>')
-    # Instagram and TikTok have no web address for sharing: they take a picture from the phone. When the build
-    # made a picture of each card (LIVE_CARD_IMAGES=YES), the link opens that picture, to save or share from
-    # there; otherwise it opens the card page.
-    picture = card[:-len(".html")] + ".png" if card_images() and card.endswith(".html") else card
-    what = "Open the picture to save and post on" if picture != card else "Open the share card to save and post on"
-    for name in ("Instagram", "TikTok"):
-        links.append(f'<a href="{esc(picture)}" aria-label="{what} {name}: {esc(board["text"])}">{name}</a>')
-    return f'<p class="row-share small"><span class="muted">Share:</span>{"".join(links)}</p>'
+    pictures = card_images() and card.endswith(".html")
+    if pictures:
+        picture = card[:-len(".html")] + ".png"
+        links.append(f'<a href="{esc(picture)}" download="{esc(card_file_name(board))}" '
+                     f'aria-label="Save the card as a picture: {esc(board["text"])}">Save card</a>')
+        links.append(f'<a href="{esc(picture)}" aria-label="Open the card picture: {esc(board["text"])}">Open picture</a>')
+    else:
+        links.append(f'<a href="{esc(card)}" aria-label="Open the share card: {esc(board["text"])}">Open card</a>')
+    line = f'<p class="row-share small"><span class="muted">Share:</span>{"".join(links)}</p>'
+    if not full:
+        return line
+    return (line
+            + (f'\n<p class="share-hint small muted">{esc(SAVE_HINT)} {esc(SAVE_NOTE)}</p>' if pictures else '')
+            + '\n<details class="share-caption"><summary>Caption to copy</summary>'
+              f'<pre class="caption">{esc(caption(board))}</pre>'
+              '<p class="small muted">Select the text above and copy it. It goes in your post beside the picture.</p></details>')
 
 
 def _row(board: dict, href: str) -> str:
@@ -1507,7 +1553,7 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
                             if _panels or not suffix)
             body.append((f'<p class="under muted">{esc(line)}</p>\n' if line else '')
                         + f'<p class="card-links small"><span class="muted">Share cards:</span>{cards}</p>\n'
-                        + (_share(board, f"{question_id}.html", f"../card/{question_id}.html") + "\n"))
+                        + (_share(board, f"{question_id}.html", f"../card/{question_id}.html", full=True) + "\n"))
         else:
             body.append(f'<p class="card-links card-links-one small"><a href="../card/{esc(question_id)}.html">Share card</a></p>\n')
         body.append(_table(board))

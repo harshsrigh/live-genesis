@@ -545,61 +545,51 @@ def test_a_model_is_shown_with_its_maker_and_never_as_local():
     assert archive_pages.shown_name({'name': 'Chat app A (local)', 'maker': 'Maker'}) == 'Chat app A (local)'
 
 
-def test_share_line_facebook_needs_the_public_address_and_the_other_two_open_the_card(monkeypatch):
-    from live_genesis import archive_pages
-    board = {'track': 'chat', 'id': 'C001', 'text': 'Is a hot dog a <sandwich>?'}
+def test_share_line_without_script_facebook_save_card_and_a_caption(monkeypatch):
+    """No script on any page (rule 9): saving is a plain link to the card's own PNG, the caption is text to select."""
+    board = {'track': 'chat', 'id': 'C001', 'text': 'Is a hot dog a <sandwich>?', 'demo': False,
+             'cells': {'a': {'shown': True, 'collected': '2026-11-19'}, 'b': {'shown': True, 'collected': '2026-11-19'},
+                       'c': {'shown': False, 'collected': '2026-12-03'}, 'd': {'shown': True, 'collected': '2026-10-02'}}}
     monkeypatch.delenv('LIVE_SITE_URL', raising=False)
+    monkeypatch.delenv('LIVE_CARD_IMAGES', raising=False)
+    # No pictures built, no public address: one link to the card page, no Facebook, nothing that promises a picture.
     line = archive_pages._share(board, 'c/C001.html', 'card/C001.html')
-    assert 'facebook' not in line.lower() and line.count('href="card/C001.html"') == 2 and 'Instagram' in line and 'TikTok' in line
-    assert '<sandwich>' not in line and '<script' not in line and '<img' not in line and '<button' not in line
-    monkeypatch.setenv('LIVE_SITE_URL', 'https://example.github.io/site')
-    line = archive_pages._share(board, 'c/C001.html', 'card/C001.html')
-    assert ('href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fexample.github.io%2Fsite%2Farchive%2Fc%2FC001.html"' in line
-            and 'rel="noopener noreferrer"' in line)
-    # Anything that is not a plain https address is ignored, never put into a page.
+    assert 'facebook' not in line.lower() and line.count('href="card/C001.html"') == 1 and 'download=' not in line and '.png' not in line
+    assert '<sandwich>' not in line and '<script' not in line and '<button' not in line and '<img' not in line
+    # Pictures built: a save link with a file name, and a plain link to the same picture for touch-and-hold.
+    monkeypatch.setenv('LIVE_CARD_IMAGES', 'YES')
+    line = archive_pages._share(board, 'c/C001.html', '../card/C001.html')
+    assert '<a href="../card/C001.png" download="answers-over-time-C001-2026-11.png"' in line and '>Save card</a>' in line
+    assert line.count('href="../card/C001.png"') == 2 and '>Open picture</a>' in line and 'card/C001.html' not in line
+    assert 'Instagram' not in line and 'TikTok' not in line and 'share-caption' not in line        # the short line names no platform
+    for word in ('Posted', 'posted', 'Post to', 'Share to Instagram', 'Share to TikTok'):          # nothing here posts anywhere
+        assert word not in archive_pages._share(board, 'C001.html', '../card/C001.html', full=True)
+    # The question's own page adds the plain sentence and a caption. The dates are those of the shown answers only.
+    monkeypatch.setenv('LIVE_SITE_URL', 'https://example.github.io/live-genesis/')
+    full = archive_pages._share(board, 'C001.html', '../card/C001.html', full=True)
+    assert 'Save the image, then upload it in Instagram or TikTok.' in full and 'depends on your browser' in full
+    assert archive_pages.caption(board) == ('Is a hot dog a <sandwich>?\nReplies collected: 2 Oct 2026, 19 Nov 2026\n'
+                                            'See the answers over time: https://example.github.io/live-genesis/archive/c/C001.html')
+    assert '<pre class="caption">Is a hot dog a &lt;sandwich&gt;?\nReplies collected: 2 Oct 2026, 19 Nov 2026\n' in full
+    assert 'sharer.php?u=https%3A%2F%2Fexample.github.io%2Flive-genesis%2Farchive%2Fc%2FC001.html' in full
+    assert 'chang' not in archive_pages.caption(board).lower()                                     # a caption never claims a change
+    # A sample says so in the caption; without a public address the caption has no address line.
+    monkeypatch.delenv('LIVE_SITE_URL')
+    assert archive_pages.caption({**board, 'demo': True}).split('\n')[0] == 'Sample only: we wrote these answers ourselves.'
+    assert 'http' not in archive_pages.caption(board)
     for bad in ('http://example.org/', 'https://user:pw@example.org/', 'https://example.org/?x=1', 'javascript:alert(1)', 'https://example.org/"><b>'):
         monkeypatch.setenv('LIVE_SITE_URL', bad)
-        assert archive_pages.site_url() == '' and 'facebook' not in archive_pages._share(board, 'a', 'b').lower()
-    # The model track is not published, so it gets no share line.
-    assert archive_pages._share({**board, 'track': 'core'}, 'a', 'b') == ''
+        assert archive_pages.site_url() == '' and 'facebook' not in archive_pages._share(board, 'a', 'b.html', full=True).lower()
+    assert archive_pages._share({**board, 'track': 'core'}, 'a', 'b.html', full=True) == ''          # the model track is not published
 
 
-def test_only_what_can_be_tapped_looks_like_a_pill():
-    """The front page's head: the honesty label and the three facts are text (no fill, no border, no rounded
-    pill), so they cannot be taken for the links of the top bar; a question's card says that it opens."""
-    css = (STATIC / 'archive.css').read_text(encoding='utf-8')
-
-    def rule(selector):
-        found = re.findall(r'^' + re.escape(selector) + r' \{([^}]*)\}', css, re.M)
-        assert len(found) == 1, selector
-        return found[0]
-    for selector in ('.tag', '.tag-dark', '.steps', '.steps li', '.key', '.key-item', '.key-note'):
-        for pill in ('background', 'border', 'box-shadow', 'padding: 0.'):
-            assert pill not in rule(selector), (selector, pill)
-    assert 'border-radius: 999px' in rule('.bar nav a') and 'border: 1px solid' in rule('.bar nav a')      # a real link keeps its pill
-    assert 'border-radius: 999px' in rule('.group-strip label, .month-strip label')                        # and so do the switches
-    # The card: the heading's link covers it and draws an arrowhead; the link under the bubbles has one too.
-    assert 'position: absolute' in rule('.row-open::after') and 'border-width: 3px 3px 0 0' in rule('.row-open::before')
-    assert 'border-width: 2px 2px 0 0' in rule('.row-more a::after')
-    # The key says what a square is before it shows one, on a phone too.
-    assert '.key-note { display: none; }' not in css
-    # On a list "Changed" and "From <month>" are words at the right of a bubble's top line, not pills.
-    assert 'background: none' in rule('.mini .tag-changed, .mini.kind-human .tag-changed')
-    assert 'background' not in rule('.mini-when') and 'border' not in rule('.mini-when')
-
-
-def test_instagram_and_tiktok_open_the_picture_only_when_the_build_makes_one_and_previews_stay_on_this_site(monkeypatch):
-    """Owner's decision, 20 Nov 2026: the publishing workflow makes a PNG of every share card; the two links open it."""
-    from live_genesis import archive_pages
+def test_preview_tags_point_only_at_this_site(monkeypatch):
     board = {'track': 'chat', 'id': 'C001', 'text': 'Is a hot dog a "sandwich"?'}
     monkeypatch.delenv('LIVE_SITE_URL', raising=False)
     monkeypatch.delenv('LIVE_CARD_IMAGES', raising=False)
-    assert archive_pages._share(board, 'c/C001.html', 'card/C001.html').count('href="card/C001.html"') == 2
     tags = archive_pages._preview(board)
     assert '<meta property="og:title" content="Is a hot dog a &quot;sandwich&quot;?" />' in tags and 'og:image' not in tags and 'og:url' not in tags
     monkeypatch.setenv('LIVE_CARD_IMAGES', 'YES')
-    line = archive_pages._share(board, 'c/C001.html', '../card/C001.html')
-    assert line.count('href="../card/C001.png"') == 2 and 'Open the picture to save and post on Instagram' in line and '.html"' not in line
     assert 'og:image' not in archive_pages._preview(board)                # no public address, no absolute picture address
     monkeypatch.setenv('LIVE_SITE_URL', 'https://example.github.io/site/')
     tags = archive_pages._preview(board)
