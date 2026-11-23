@@ -408,3 +408,7 @@ The rule above stands: a locked question never changes and is never removed, and
 What was done, outside the software, on the owner's PC: the real database was backed up; on a copy, the append-only triggers were dropped inside one transaction, the question and its 15 recorded answers (5 answer cells of 3 samples) were deleted, the eight later questions moved up one id (T005 to T012 became T004 to T011, in the answers too), the trending lock was recorded again as version 1 over the 11 remaining questions, and the triggers were put back; the copy was checked (question list against the file, hashes, counts, an export) and then replaced the real database. The operator audit log holds one line saying so. `archive_trending.json` was changed in the same commit, and the published export was replaced by a new one that the owner approved.
 
 What this did not do: the question and its answers remain in the git history of this repository (the first published export), in earlier backups on the owner's PC, and in any copy someone made of the site while it was public. Ids published before the removal (T005 to T012) now name different questions than they did for those few hours.
+
+## Sharing a card
+
+Save link, picture link, the caption and the decision that a share-menu button would need: `docs/SHARE-CARD.md`.
