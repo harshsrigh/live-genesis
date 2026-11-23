@@ -32,6 +32,7 @@ python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000   # local pa
 |---|---|
 | `core.py` | Database connection (`connect(readonly=...)`), `init_db`, usage rows, budget reservations, cumulative reconciliation |
 | `controls.py` | Budget gates, per-reservation reconcile, operator audit log, request limiter, backup |
+| `encrypted_backup.py` | `backup-encrypted --to DIR` (gpg-encrypted copy and a counts-only receipt) and `backup-check FILE.gpg`; gpg asks for the passphrase, no network, no restore command (`docs/BACKUP.md`) |
 | `config.py` | `.env` split: settings for all processes, provider keys for the two CLI commands that need them |
 | `providers.py` | Provider and endpoint settings; `check-provider`, `archive-check-endpoints` |
 | `engine.py` | The inference adapters (`infer`): OpenAI, Anthropic, OpenAI-compatible |
@@ -115,6 +116,7 @@ Share cards: `node scripts/capture-cards.mjs --site SITE-FOLDER --out OUT` write
 | `test_snapshot.py`, `test_snapshot_archive_only.py`, `test_published.py` | The site build, the reviewed export and its checks, the workflow |
 | `test_profiles.py` | The answering-style count, its wording and its place on "How it works" |
 | `test_trends.py` | `archive-trends` |
+| `test_encrypted_backup.py` | `backup-encrypted`, `backup-check`: names, the receipt, refusals, clean-up, no passphrase option; one round trip with the real gpg when it is installed |
 | `test_budget.py`, `test_controls.py` | Reservations, gates, reconcile, audit log, limiter, an old database, backup, the CLI command list |
 | `test_providers.py`, `test_output_limit.py`, `test_open_items.py` | Provider settings, adapters, no redirect followed, the request limit |
 | `test_guards.py`, `test_reaudit.py` | Content guards and the character rule |

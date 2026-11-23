@@ -21,6 +21,7 @@ The owner is not a programmer. Write to them in plain words, give commands in co
 - Three questions (C011 to C013) were appended on 20 Nov, asked on 22 Nov with `--questions` and published. Since 23 Nov they are marked `"list": "trending"` in `archive_chatbots.json` (a display attribute only) and the site lists them under a "Trending" tab; `archive-chatbot-ask --list trending` asks only those, and from December one ask covers all thirteen (`docs/SESSION-STATE.md`, "Decided on 23 Nov").
 - Free-only OpenRouter collector, guided Windows launcher (`Collect-Free.cmd`) and its guards are merged. **No real request to OpenRouter's model API has ever been made**; tested with mocked answers only; the launcher was never run on Windows itself.
 - The owner's step-by-step guide for a month: `docs/MONTHLY-ROUND.md`.
+- Since 23 Nov: `cli backup-encrypted --to DIR` writes a gpg-encrypted copy of the database and a counts-only receipt into a folder the owner names (a cloud-synced one); `cli backup-check FILE.gpg` proves it opens. The passphrase is the owner's alone and gpg asks for it; the software makes no network request. Guide: `docs/BACKUP.md`. Not yet run on the owner's PC.
 - A weekly scheduled task ("Weekly trend question ideas", Mondays 18:35 UTC) runs `archive-trends` in a fresh cloud session and reports 5 to 8 draft question ideas. It changes nothing; the owner adds a question by hand.
 
 ## The owner's decisions that shape the pages

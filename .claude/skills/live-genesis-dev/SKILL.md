@@ -25,6 +25,7 @@ A public static site that puts the same questions to consumer chat apps (ChatGPT
 |---|---|
 | `core.py` | `connect` (read-only mode), `init_db`, usage rows, budget reservations, cumulative reconcile |
 | `controls.py` | Budget gates, per-reservation reconcile, operator audit log, request limiter, backup, hold constants |
+| `encrypted_backup.py` | `backup-encrypted --to DIR`, `backup-check FILE.gpg`; gpg asks for the passphrase (never pass, store or print one); no network; no restore command |
 | `config.py` | `.env` split: `LIVE_*` settings everywhere; provider keys only for `archive-run`, `archive-chatbot-ask`, `check-provider`, `archive-check-endpoints` |
 | `providers.py` | `openai`, `anthropic`, the single `openai-compatible` endpoint, named endpoints (`LIVE_ARCHIVE_ENDPOINTS`): base URL rules (https unless loopback, never stored or shown), key variable names, rates |
 | `engine.py` | `infer(...)`: the three adapters, no redirect, no retry; `Completion`; `REAL_INFER` |

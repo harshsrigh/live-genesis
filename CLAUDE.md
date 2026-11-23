@@ -12,6 +12,7 @@ The package and repository are still named `live_genesis` / `live-genesis`: the 
 ## Architecture map
 - `live_genesis/core.py` — SQLite connection (`connect`, read-only mode), `init_db`, spend accounting (`api_usage`), budget reservations (reserve → settle / release / unconfirmed), cumulative reconciliation.
 - `live_genesis/controls.py` — budget gates (spend limit, project budget, $1,000 gate), per-reservation `reconcile`, append-only operator audit log, the in-memory request limiter and client-address rule, `backup`, the shared hold constants.
+- `live_genesis/encrypted_backup.py` — `cli backup-encrypted --to DIR` (gpg-encrypted copy of the database plus a counts-only receipt, into a folder outside every git work tree) and `cli backup-check FILE.gpg [--compare-live]`. gpg asks for the passphrase itself: never add an option, variable or file for it. No network, no cloud credential, no restore command. See `docs/BACKUP.md`.
 - `live_genesis/config.py` — `.env` split: `LIVE_*` settings for every process, provider keys for `cli archive-run`, `cli archive-chatbot-ask` and `cli check-provider` only; `drop_provider_secrets` for the web process.
 - `live_genesis/providers.py` — provider settings: `openai`, `anthropic`, the single `openai-compatible` endpoint (https unless loopback), named archive endpoints (`LIVE_ARCHIVE_ENDPOINTS`), timeout; `cli check-provider`, `cli archive-check-endpoints`. No SDK import, no HTTP.
 - `live_genesis/openrouter_setup.py` — metadata-only free-model discovery and no-key PowerShell settings (`python -m live_genesis.openrouter_setup`); never calls a model or enables opt-in. `--check` says whether each configured model is still listed free. Free models only: an endpoint on OpenRouter (`providers.is_openrouter_host`) must be declared free and takes only an explicit `vendor/model:free` id (`providers.openrouter_free_model_ok`; no router alias), and `LIVE_COMPAT_BASE_URL` may not point there. `engine._chat` applies zero-price limits, disables provider fallback and raises `UnexpectedCharge` on a reported charge; `archive._paid_call` then records nothing, stops the run and leaves the hold unconfirmed. Model track only; see `docs/OPENROUTER-COLLECTOR.md`.
@@ -25,7 +26,7 @@ The package and repository are still named `live_genesis` / `live-genesis`: the 
 - `live_genesis/trends.py` — `cli archive-trends`: prints trending search terms as candidates; writes nothing.
 - `live_genesis/snapshot.py` — builds the public site (chat-app track only) and the reviewed export: `--export`, `--approve --i-have-read-it`, `--check`, `--from-data`. `--archive-only` is accepted and changes nothing.
 - `live_genesis/web.py` + `live_genesis/app.py` — the one local web app: read-only (GET/HEAD, SQLite `mode=ro`, no provider keys), serves the archive pages, model track included.
-- `live_genesis/cli.py` — operator commands: `init`, `reconcile`, `backup`, `check-provider`, `archive-check-endpoints`, `archive-lock`, `archive-plan`, `archive-dry-run`, `archive-run` (PAID), `archive-status`, `demo-archive`, `archive-chatbot-template`, `archive-chatbot-import`, `archive-chatbot-ask` (PAID), `archive-trends`.
+- `live_genesis/cli.py` — operator commands: `init`, `reconcile`, `backup`, `backup-encrypted`, `backup-check`, `check-provider`, `archive-check-endpoints`, `archive-lock`, `archive-plan`, `archive-dry-run`, `archive-run` (PAID), `archive-status`, `demo-archive`, `archive-chatbot-template`, `archive-chatbot-import`, `archive-chatbot-ask` (PAID), `archive-trends`.
 - `live_genesis/static/` — `archive.css`, the mark and icon, three bundled fonts with their licences.
 - `scripts/capture-cards.mjs` — share cards to PNG (the operator's own Playwright). `scripts/wsl-check.sh` — free setup check.
 - `tests/` — offline tests, no network. `docs/` — see `docs/DEVELOPER.md` first.
@@ -45,6 +46,8 @@ python -m live_genesis.cli archive-chatbot-ask --dry-run                # free: 
 python -m live_genesis.cli archive-chatbot-ask --list trending --dry-run   # free: plan for the trending questions only
 python -m live_genesis.cli reconcile            # free: local estimate vs. operator-entered provider spend
 python -m live_genesis.cli backup NEW-FILE      # free: copy the database before any upgrade
+python -m live_genesis.cli backup-encrypted --to DIR   # free: encrypted copy for a cloud-synced folder; gpg asks for the passphrase
+python -m live_genesis.cli backup-check FILE.gpg       # free: prove a backup opens; changes nothing
 python -m live_genesis.snapshot OUTDIR --archive-only                   # free: build the site (scripted-demo databases only)
 python -m uvicorn live_genesis.app:app --host 127.0.0.1 --port 8000     # free: read-only local pages
 # PAID. Only on the owner's explicit word, with a ceiling:
