@@ -1273,17 +1273,32 @@ def _model_answerers(config: dict, only: str | None) -> list[dict]:
     return models
 
 
-def ask_plan(only: str | None = None) -> dict:
+def _wanted_questions(config: dict, questions: str | None) -> list[dict]:
+    """The questions one ask holds: all of the configuration's, or (--questions) the named ids, in the list's
+    own order. An empty, unknown or repeated id is refused: a typing slip never asks the wrong thing."""
+    items = config["items"]
+    if questions is None:
+        return items
+    wanted = [name.strip() for name in questions.split(",") if name.strip()]
+    if not wanted or len(set(wanted)) != len(wanted) or any(name not in {q["id"] for q in items} for name in wanted):
+        raise _refused(f"--questions names an id that is not a question of {CONFIG_FILE.name}, or names one twice. "
+                       "Write ids as they are in the file, like C011,C012. Nothing was asked.")
+    return [q for q in items if q["id"] in wanted]
+
+
+def ask_plan(only: str | None = None, questions: str | None = None) -> dict:
     """Free; contacts nothing and stores nothing. What `cli archive-chatbot-ask` would do: the model answerers
     of the configuration (`only`, --models: a subset of their labels), each resolved through LIVE_ARCHIVE_MODELS
     and the endpoint settings exactly as `archive-run` resolves it (`archive.answerers`, `archive.resolve`),
-    the questions, the number of calls (one per model and question) and the worst-case estimate.
+    the questions (`questions`, --questions: a subset of their ids; `_wanted_questions`), the number of calls
+    (one per model and question) and the worst-case estimate.
     Raises ArchiveRefused / controls.ConfigError when a setting is unusable.
 
     Each entry of `models` is the resolved answerer with `label` = the chat-track label, `answerer` = the
     LIVE_ARCHIVE_MODELS label and `chat` = the configuration entry."""
     config = load_config()
     wanted = _model_answerers(config, only)
+    items = _wanted_questions(config, questions)
     configured = {answerer["label"]: answerer for answerer in archive.answerers()}
     missing = [f"{model['label']} (answerer {model['answerer']})" for model in wanted if model["answerer"] not in configured]
     if missing:
@@ -1293,9 +1308,9 @@ def ask_plan(only: str | None = None) -> dict:
     models = [{**answerer, "label": by_answerer[answerer["label"]]["label"], "answerer": answerer["label"],
                "chat": by_answerer[answerer["label"]]} for answerer in resolved]
     holds = {a["label"]: {q["id"]: archive.call_hold(q["prompt"], a["input_rate"], a["output_rate"], a["max_output_tokens"])
-                          for q in config["items"]} for a in models}
-    return {"config": config, "collected_on": today().isoformat(), "models": models, "questions": config["items"],
-            "calls": len(models) * len(config["items"]), "holds": holds, "spend_limit_usd": budget["spend_limit_usd"],
+                          for q in items} for a in models}
+    return {"config": config, "collected_on": today().isoformat(), "models": models, "questions": items,
+            "calls": len(models) * len(items), "holds": holds, "spend_limit_usd": budget["spend_limit_usd"],
             "worst_case_usd": math.fsum(value for per in holds.values() for value in per.values())}
 
 
@@ -1307,7 +1322,9 @@ def render_ask_plan(planned: dict) -> str:
              "Model answerers (label = endpoint:model, shown as), in the order they are asked:"]
     lines += [f"  {a['label']} = {a['endpoint']}:{a['model']}, shown as \"{a['chat']['name']}\", {basis[a['basis']]}, "
               f"output limit {a['max_output_tokens']} tokens" for a in planned["models"]]
-    lines.append(f"Questions ({len(planned['questions'])}), each asked once of each model with its exact prompt:")
+    listed = len(planned["config"]["items"])
+    count = str(len(planned["questions"])) if len(planned["questions"]) == listed else         f"{len(planned['questions'])} of the {listed} on the list, named with --questions"
+    lines.append(f"Questions ({count}), each asked once of each model with its exact prompt:")
     lines += [f"  {q['id']}  {q['text']}" for q in planned["questions"]]
     if any(a["basis"] == providers.BASIS_FREE for a in planned["models"]):
         lines.append("  " + archive.DECLARED_FREE_NOTE)
@@ -1316,15 +1333,18 @@ def render_ask_plan(planned: dict) -> str:
               "If a call fails: " + archive.FAILURE_RULE,
               "The PAID command, to be run only on the owner's explicit word (--max-usd and LIVE_ALLOW_PAID_CALLS=YES are "
               "required for every run, a free one included):",
-              f"  python -m live_genesis.cli archive-chatbot-ask --max-usd {controls.suggested_cap(planned['worst_case_usd'])}"]
+              f"  python -m live_genesis.cli archive-chatbot-ask --max-usd {controls.suggested_cap(planned['worst_case_usd'])}"
+              + ("" if len(planned["questions"]) == listed else " --questions " + ",".join(q["id"] for q in planned["questions"]))]
     return "\n".join(lines)
 
 
-def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0) -> dict:
+def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0, questions: str | None = None) -> dict:
     """`cli archive-chatbot-ask`: PAID when `engine.infer` is the real adapter. Run only on the owner's explicit
     instruction. Asks every model answerer of the configuration each chat-app question ONCE, with the question's
     exact prompt as the one user message (and the model track's fixed system line, `archive.SYSTEM_LINE`), and
-    stores the replies as one run of kind `asked` dated today.
+    stores the replies as one run of kind `asked` dated today. `questions` (--questions) keeps the run to the
+    named ids: the run records exactly the ids it asked, and only those are recorded as questions, so a
+    question nothing has asked is in no payload. The other gates are unchanged (one run per answerer and day).
 
     Refuses (ArchiveRefused / controls.ConfigError), before any provider request and before anything is
     stored, when: no model answerer is configured or one names an answerer LIVE_ARCHIVE_MODELS does not list;
@@ -1346,11 +1366,13 @@ def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0) 
     Returns counts, categories and reservation ids only: never the text of a reply."""
     from . import engine   # lazy: only this command needs the adapter
     _model_answerers(load_config(), only)
+    _wanted_questions(load_config(), questions)
     if os.getenv("LIVE_ALLOW_PAID_CALLS") != "YES":
         raise _refused("Explicit opt-in required for paid calls: set LIVE_ALLOW_PAID_CALLS=YES")
     if isinstance(max_usd, bool) or not isinstance(max_usd, (int, float)) or not math.isfinite(max_usd) or max_usd <= 0:
         raise _refused("--max-usd is required and must be a finite positive number. No paid call was made.")
-    planned = ask_plan(only)
+    planned = ask_plan(only, questions)
+    asked_ids = [q["id"] for q in planned["questions"]]
     config, models, day, worst = planned["config"], planned["models"], planned["collected_on"], planned["worst_case_usd"]
     archive._check_ready(models)
     if engine.infer is not engine.REAL_INFER:
@@ -1431,8 +1453,8 @@ def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0) 
                     cx.execute("BEGIN IMMEDIATE")
                     if run["id"] is None:
                         run["first"] = not (_has_run(cx, MANUAL) or _has_run(cx, ASKED))
-                        run["id"], run["number"] = _open_run(cx, ASKED, day, config["questions"], config["sha256"], "", stamp)
-                        run["new_questions"] = _record_questions(cx, run["id"], ASKED, config["items"])
+                        run["id"], run["number"] = _open_run(cx, ASKED, day, asked_ids, config["sha256"], "", stamp)
+                        run["new_questions"] = _record_questions(cx, run["id"], ASKED, planned["questions"])
                     if not state_of["recorded"]:
                         _store_model(cx, run["id"], answerer["chat"], answerer,
                                      archive._call_record(answerer, done["result"], done["latency_ms"], digest), config["groups"])
@@ -1474,9 +1496,10 @@ def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0) 
         with core.connect() as cx:
             outcomes = ", ".join(f"{a['label']} {progress[a['label']]['outcome']} {progress[a['label']]['recorded']}" for a in models)
             controls.audit(cx, f"archive-chatbot-ask {'run ' + str(run['number']) if run['id'] else '(nothing stored)'}: "
-                               f"collected {day}, {status}, {outcomes}, config sha256 {config['sha256'][:16]}")
+                               f"collected {day}, {status}, {outcomes}, config sha256 {config['sha256'][:16]}"
+                               + ("" if questions is None else f", questions {','.join(asked_ids)}"))
     return {"run": run["number"], "collected_on": day, "status": status, "stop_reason": reason,
-            "first_run": run["first"], "new_questions": run["new_questions"], "answers": counts,
+            "first_run": run["first"], "new_questions": run["new_questions"], "questions": asked_ids, "answers": counts,
             "estimated_usd": round(math.fsum(spent), 6), "max_usd": float(max_usd),
             "models": [{"chatbot": a["label"], "answerer": a["answerer"], "endpoint": a["endpoint"], "model": a["model"],
                         "pricing_basis": a["basis"], **progress[a["label"]]} for a in models]}
@@ -2066,6 +2089,7 @@ def add_parsers(sub) -> None:
     ask_p.add_argument("--max-usd", type=float, default=None, help="Required for a run: hard cap on this run's estimated USD; the worst case must fit under it before the first call")
     ask_p.add_argument("--dry-run", action="store_true", help="Print the plan (models, questions, calls, worst-case estimate); call nothing, store nothing")
     ask_p.add_argument("--models", help="Comma-separated labels of model answerers in archive_chatbots.json (default: all)")
+    ask_p.add_argument("--questions", help="Comma-separated question ids from archive_chatbots.json, like C011,C012 (default: all). For questions added since the last ask")
     ask_p.add_argument("--pause", type=float, default=0.0, help="Seconds to wait between calls (an endpoint's own _PAUSE_SECONDS applies when it is longer)")
 
 
@@ -2080,7 +2104,7 @@ def handle_command(args) -> None:
         print(f"When it is filled in, check it (this stores nothing): python -m live_genesis.cli archive-chatbot-import {target} --dry-run")
         return
     if args.command == "archive-chatbot-ask":
-        print(render_ask_plan(ask_plan(args.models)))
+        print(render_ask_plan(ask_plan(args.models, args.questions)))
         if args.dry_run:
             print("DRY RUN: nothing was called and nothing was stored.")
             return
@@ -2089,7 +2113,7 @@ def handle_command(args) -> None:
         print("PAID RUN: provider requests follow. A failed call is handled by the rule printed above (\"If a call fails\").")
         settings.load_provider_credentials()   # as for `cli archive-run`: the only moment .env provider keys enter the process
         os.environ["LIVE_COMPAT_JSON_MODE"] = "off"   # replies are plain sentences, not JSON objects
-        done = ask(max_usd=args.max_usd, only=args.models, pause_seconds=args.pause)
+        done = ask(max_usd=args.max_usd, only=args.models, pause_seconds=args.pause, questions=args.questions)
         print(json.dumps(done, indent=1))
         if done["status"] == "complete_with_gaps":
             print("RUN COMPLETE WITH GAPS:", done["stop_reason"])

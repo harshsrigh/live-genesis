@@ -1,6 +1,6 @@
 # Current state and how to continue (for whichever session picks this up)
 
-Updated 21 Nov 2026 by the session on the owner's PC (WSL), at commit `f9804ed`. Read `CLAUDE.md` first; `docs/COMPACT.md` is the one-page version of this file. This file only says where things stand, and for each statement whether it was checked on 21 November or carried over from an earlier note.
+Updated 21 Nov 2026 by the session on the owner's PC (WSL), at commit `f9804ed`; the section on the new questions on 22 Nov. Read `CLAUDE.md` first; `docs/COMPACT.md` is the one-page version of this file. This file only says where things stand, and for each statement whether it was checked on 21 November or carried over from an earlier note.
 
 ## In one paragraph
 The repository is **Answers Over Time** and nothing else. The public site shows one group of answerers today, "AI models": four local models that were asked the ten chat-app questions by software on 19 November 2026, exported and approved by the owner on 20 November. The chat apps (ChatGPT, Gemini, Grok) and the Human column are configured but have no replies yet: the first hand-collected month is still the owner's to do. Three more questions (C011 to C013) were added to the list on 20 November; nothing has asked them, so they are on no page. The model track (`archive-run`) stays in the code and is not published.
@@ -12,7 +12,7 @@ On the owner's PC, in `~/live-genesis` on `main` at `f9804ed`, after a fresh bac
 - **Real database, chat-app track** (`archive-status`, read-only): one run, number 1, kind `asked`, dated 2026-11-19, 40 answers (four models, ten questions), no Human answers. Recorded questions: C001 to C010. No hand-entered run.
 - **Real database, model track:** both question lists locked and matching their files (20 core, 11 trending); no run recorded.
 - **Configuration** (`live_genesis/archive_chatbots.json`): status `draft`, format /3, groups `ai-apps` (chatgpt, gemini, grok, Human) and `ai-models` (phi4-mini, gemma3-4b, granite42-3b, qwen35-4b), thirteen questions C001 to C013. `archive-status` reports no problem with the three appended questions: the list is add-only and nothing refused.
-- **`archive-chatbot-ask --dry-run`** (free, called nothing): it plans **all thirteen questions** for the four models, 52 calls, worst-case estimate $0.000000 (an estimate from token counts, not an invoice), suggested ceiling `--max-usd 0.01`. There is no option to ask only some questions (`--models` picks models, nothing picks questions). See "Open: asking the new questions".
+- **`archive-chatbot-ask --dry-run`** (free, called nothing): it plans **all thirteen questions** for the four models, 52 calls, worst-case estimate $0.000000 (an estimate from token counts, not an invoice), suggested ceiling `--max-usd 0.01`. (Since 22 Nov `--questions` keeps an ask to named ids.) See "Open: asking the new questions".
 - **`published/`:** `snapshot --check published` says intact and approved; exported 2026-11-20T03:45:07Z; one run, 40 answer rows, no Human rows.
 - **Local build as the workflow makes it** (`LIVE_SITE_URL=... snapshot OUT --from-data published --archive-only`, `LIVE_CARD_IMAGES` unset): front page, the C001 question page, the C001 share card and "How it works" were opened in a browser and read. They match the live site. No sample site is built beside it, no footer line, no history squares, models shown as "Name (Maker)", the answering styles show on "How it works", C011 to C013 appear nowhere. Without `LIVE_CARD_IMAGES` the Instagram and TikTok links open the card page and a question page has no preview picture tag; that is the expected local difference.
 - **Live site** (checked 20 Nov at `f9804ed`): CI green; nav "AI models · How it works"; "full answer on the site" only on the four cards where a reply is really cut (C002, C003, C006, C007); `card/C001.png` is served.
@@ -26,13 +26,15 @@ On the owner's PC, in `~/live-genesis` on `main` at `f9804ed`, after a fresh bac
 ## Open: asking the new questions
 C011 "Does home-court advantage really exist?", C012 "Why do sports teams have mascots?", C013 "What's the best comedy movie ever made?".
 
-The command as it is would ask all thirteen. For C001 to C010 that records a second November answer two days after the first, and the pages would compare the two. The choices for the owner:
+On 22 Nov the owner chose to have a `--questions` option built, and it is built: `archive-chatbot-ask --questions C011,C012,C013` asks only the named ids. The run records exactly those ids; C001 to C010 keep their answers of 19 Nov and are not asked again. An id that is not in the file, or named twice, is refused before anything is called. Tested offline with a stand-in (`tests/test_archive_ask.py`); not yet run against a real model.
 
-1. **Wait for the December ask.** All thirteen are asked together then; C011 to C013 simply start a month later. No code change.
-2. **Add a `--questions` option** (the smallest change: the plan and the run keep only the named ids, refuse an unknown id, and the run row records the ids it asked; a model's bubble for a question it was not asked that day keeps its earlier answer, which the pages already handle). Not built; needs the owner's go-ahead, then tests.
-3. **Ask all thirteen now** and accept a second November entry for the first ten.
+The free plan on the real database (22 Nov, called nothing): three questions, four models, **12 calls**, worst-case estimate $0.000000 (a local estimate, not an invoice), and the command it prints:
 
-Whichever it is, the run itself needs the owner's explicit word for that run, with `--max-usd`.
+```bash
+python -m live_genesis.cli archive-chatbot-ask --max-usd 0.01 --questions C011,C012,C013
+```
+
+That run needs the owner's explicit word for that run. After it: export with `--replace`, the owner reads every answer and approves, `--check`, push.
 
 ## Carried over, not checked on 21 Nov
 - From this session's earlier work (19 and 20 Nov): Node, Playwright, its browser and an emoji font are installed under the owner's home folder in WSL; `scripts/capture-cards.mjs` wrote 50 cards from the published answers. The launcher's two defects (a preview that created a database, a traceback when input ends) are fixed and tested offline.
@@ -48,7 +50,7 @@ Whichever it is, the run itself needs the owner's explicit word for that run, wi
 - Backups sit outside the repository, in the owner's home folder in WSL and in `~/live-genesis/backups/` (git-ignored). Latest: 21 Nov 2026, before the checks above.
 
 ## Next (the owner's moves)
-1. Decide how C011 to C013 get asked (the three choices above).
+1. Give the word, or not, for the ask of C011 to C013 (12 calls, above).
 2. The first hand-collected month for ChatGPT, Gemini, Grok and, if wanted, the Human column: `docs/MONTHLY-ROUND.md`, step by step. Read each app's terms first.
 3. After any new answers: export, read every reply, approve (only the owner), check, push.
 4. First post of a share card, by hand (`docs/SOCIAL-POSTS.md`).
