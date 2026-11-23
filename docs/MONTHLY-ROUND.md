@@ -177,6 +177,30 @@ You should see `Done. Stored as hand-entered run` and a number. The replies are 
 
 The very first time anything is stored, it also tells you the question list is now fixed. From then on you can add questions, but not change one. (On your real database that already happened on 19 November 2026, when the four local models were asked: the ten questions are fixed, and this message will not appear again.)
 
+### Step 9a. Send a locked copy to your cloud folder
+
+Your database is one file on this PC. Now that it holds this month's replies, put a locked copy where a broken PC cannot take it with it. `docs/BACKUP.md` explains the one-time setup (the folder, the passphrase); after that it is one line:
+
+```bash
+python -m live_genesis.cli backup-encrypted --to ~/cloud-backups
+```
+
+A small box asks for your passphrase, twice. You should then see `Encrypted backup saved:` with the file's name, its size, a reminder to keep the passphrase somewhere that is not this computer, and a line that starts with `python -m live_genesis.cli backup-check`.
+
+This does not replace step 1. The plain copy of step 1 is the quick way back if today's import went wrong; this one is for the day the PC itself is gone.
+
+### Step 9b. Prove the backup opens
+
+Copy the last line that step 9a printed and run it. It looks like this, with today's date and time in the name:
+
+```bash
+python -m live_genesis.cli backup-check ~/cloud-backups/answers-over-time-2026-12-03-090807.sqlite.gpg
+```
+
+The box asks for the passphrase once. You should see a short table with `found`, `matches the receipt`, `yes`, `ok` and `tables match the receipt`, and under it `This backup opens and holds what the receipt says.` A backup you have not opened is only a hope. Nothing in your database is changed by this check.
+
+If it says anything else, see "If something goes wrong" in `docs/BACKUP.md`, and do not delete any older backup.
+
 ### Step 10. Look at it on your own PC
 
 ```bash
@@ -309,7 +333,7 @@ python -m live_genesis.cli archive-chatbot-ask --dry-run
 python -m live_genesis.cli archive-chatbot-ask --max-usd 0.01
 ```
 
-The trending questions simply have one month fewer than the others. After any ask: steps 11 to 17 (export with `--replace`, read every answer, approve, check, push).
+The trending questions simply have one month fewer than the others. After any ask: steps 9a and 9b (the locked copy for your cloud folder, and the proof that it opens), then steps 11 to 17 (export with `--replace`, read every answer, approve, check, push).
 
 *Checked on 23 November 2026 against a scratch database with stand-in models: both `--dry-run` lines, the backup, and the build from `published/`. The two lines with `--max-usd` were not run: they call models.*
 
@@ -352,3 +376,5 @@ export LIVE_DB=~/live-genesis/live.db
 *Checked again on 21 November 2026 in WSL on the owner's PC, against the published answers: the step 3 command writes a sheet with thirteen questions per app; the step 14 and step 15 commands printed what this guide says; the live checks of step 17 (no sample site, no small-print line, a picture behind the Instagram link) were made on the live site on 20 November. Not run again: an import, the `git` commands and step 18.*
 
 *Checked again on 23 November 2026 (UTC) in WSL on the owner's PC, at commit `292f9f7`, in a throwaway copy of the project with a scratch database and placeholder replies: steps 1, 3 (`--out`, `--date`, the refusal to overwrite), 8, 9 (and the refusal of a second import), 10, 11 (plain, the refusal without `--replace`, `--replace`), 13, 14 and 15 printed what this guide says, with thirteen questions per app; step 16's `git add published` staged exactly the two files and `git push` was a dry run only; step 18 wrote 65 cards. The preview of step 15 shows "Open card"; the same data built the way the site is published shows "Facebook · Save card · Open picture" and the caption block. In "The models": the backup line and both `--dry-run` lines were run (the two dry runs against the real settings: 12 calls for the trending list, 52 for everything); the two lines with `--max-usd` were not run, because they call models. Not run: the two PowerShell forms, and a real push by you.*
+
+*Steps 9a and 9b were added on 23 November 2026 and checked that day in a cloud session (Linux, GnuPG 2.4.4), against a scratch database made with `demo-archive`, with a throwaway passphrase and `~/cloud-backups` as a short name for a scratch folder: `backup-encrypted --to ~/cloud-backups` and `backup-check` on the file it wrote printed what these steps say, the second also with a wrong passphrase (refused, nothing left behind). gpg's passphrase box was typed into through a simulated terminal. Not run: either step on the owner's PC, with a real cloud-synced folder under `/mnt/c`; the first real backup there is the first real check. Nothing else in this guide was run again for this change.*

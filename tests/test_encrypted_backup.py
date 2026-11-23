@@ -472,3 +472,22 @@ def test_real_gpg_round_trip_with_a_throwaway_passphrase(isolated_db,tmp_path,mo
     finally:
         subprocess.run(['gpgconf','--kill','gpg-agent'],capture_output=True,env=dict(os.environ,GNUPGHOME=str(home)))
         shutil.rmtree(home,ignore_errors=True)
+
+
+def test_the_guides_name_the_commands_and_no_way_to_hand_over_a_passphrase():
+    docs=config.ROOT/'docs'
+    backup=(docs/'BACKUP.md').read_text(encoding='utf-8')
+    monthly=(docs/'MONTHLY-ROUND.md').read_text(encoding='utf-8')
+    for guide in (backup,monthly):
+        assert 'python -m live_genesis.cli backup-encrypted --to ~/cloud-backups' in guide
+        assert 'python -m live_genesis.cli backup-check ~/cloud-backups/answers-over-time-' in guide
+        assert '--passphrase' not in guide and 'pinentry-mode' not in guide and '--batch' not in guide
+    assert monthly.index('### Step 9. Store it')<monthly.index('### Step 9a.')<monthly.index('### Step 9b.')<monthly.index('### Step 10.')
+    assert 'python -m live_genesis.cli backup ../backup-before-' in monthly  # the plain copy before upgrades stays
+    for words in (eb.KEEP_SAFE.split(':')[1].strip(),'sudo apt install gnupg','/mnt/c/Users','--compare-live','backup has more than live',
+                  'gpg --no-symkey-cache --output ~/answers-restored.sqlite --decrypt','There is no "restore" command',
+                  'What this does NOT protect against','Losing the passphrase','Not run:'):
+        assert words in backup, words
+    assert 'encrypted_backup' in (docs/'SECURITY.md').read_text(encoding='utf-8')
+    for name in ('ROADMAP.md','COMPACT.md'):
+        assert 'backup-encrypted' in (docs/name).read_text(encoding='utf-8'), name
