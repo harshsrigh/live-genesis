@@ -146,7 +146,8 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
     everything = ''.join((out / name).read_text(encoding='utf-8') for name in written if name.endswith(('.html', '.json')))
     assert '<script' not in everything and 'overview.json' not in everything and 'app.js' not in everything
     # The archive data is the chat-app block of the public payload under its own schema marker, and nothing else.
-    assert data == {'schema': archive_chatbots.SITE_SCHEMA, 'chatbots': json.loads(json.dumps(chat))}
+    # /4: two scripted questions are on the track's trending list (a site without one is still /2)
+    assert data == {'schema': archive_chatbots.SITE_SCHEMA_LISTS, 'chatbots': json.loads(json.dumps(chat))}
     assert (out / 'archive.json').read_bytes() == snapshot._encode(archive_chatbots.site_payload(payload))
     # No dead link, and no link out of the archive to a page above it.
     assert_every_address_resolves(out)
@@ -167,7 +168,7 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
     # The bar: the comparison and how it is made. No "Trending", no "Models".
     for name in ('archive/index.html', 'archive/chatbots.html', 'archive/c/C001.html'):
         nav = pages[name].split('<nav aria-label="Archive navigation">', 1)[1].split('</nav>', 1)[0]
-        assert re.findall(r'>([^<>]+)</a>', nav) == ['Chat apps', 'How it works'], name
+        assert re.findall(r'>([^<>]+)</a>', nav) == ['Chat apps', 'Trending', 'How it works'], name
     # The pages are what render_site makes for a standalone archive, from the whole payload or from the reduced one.
     alone = archive_pages.render_site(payload, standalone=True)
     assert alone == archive_pages.render_site(archive_chatbots.site_payload(payload), standalone=True)
@@ -178,7 +179,7 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
     usual = archive_pages.render_site(payload)
     assert {name[len('archive/'):] for name in MODEL_PAGES} <= set(usual) and set(alone) < set(usual)
     assert '<a href="trending.html">Trending</a>' in usual['index.html'] and '<a href="models.html">Models</a>' in usual['index.html']
-    assert 'Want the plain models instead?' in usual['index.html'] and usual['data/README.txt'] == archive_pages.README
+    assert 'Want the plain models instead?' in usual['index.html'] and usual['data/README.txt'] == archive_pages.README + archive_pages.README_LISTS
     for name in alone:
         if name.startswith('card/') or (name.startswith('data/C') and name.endswith('.json')):
             assert usual[name] == alone[name], name                        # a chat-app card and data file are the same everywhere
