@@ -609,8 +609,7 @@ def test_a_database_made_before_model_answerers_is_rebuilt_once_and_keeps_every_
     assert [len(before[t]) for t in chatbots.TABLE_NAMES] == [2, 6, 24, 4, 2, 8]
     core.init_db()
     core.init_db()                                                   # any number of times
-    gained = {'archive_chatbot_conditions': ('app',) + (None,) * 8, 'archive_chatbot_answers': (None,),
-              'archive_chatbot_questions': ('',)}                    # and, since question lists, '' (the main list) per question
+    gained = {'archive_chatbot_conditions': ('app',) + (None,) * 8, 'archive_chatbot_answers': (None,)}
     with core.connect() as cx:
         for table, expected in before.items():
             now = [tuple(r) for r in cx.execute(f'SELECT * FROM {table} ORDER BY rowid')]
@@ -989,3 +988,64 @@ def test_docs_name_the_command_as_paid_and_describe_the_model_group():
     for name in ('SECURITY.md', 'SESSION-STATE.md', 'ROADMAP.md', 'FREE-MODELS.md'):
         assert 'archive-chatbot-ask' in (REPO / 'docs' / name).read_text(encoding='utf-8'), name
     assert 'archive-chatbot-ask' in (REPO / '.claude' / 'skills' / 'live-genesis-dev' / 'SKILL.md').read_text(encoding='utf-8')
+
+
+def test_questions_keeps_an_ask_to_the_named_ids_and_an_unasked_question_is_nowhere(asking, tmp_path, monkeypatch, capsys):
+    """--questions: for questions added since the last ask. The run records exactly the ids it asked, a question
+    nothing has asked is in no payload, and a later run of other ids leaves the earlier answers as they are."""
+    calls = adapter(monkeypatch, AssertionError('nothing is called yet'))
+    for bad in ('C999', 'c001', 'C001,C001', ' , ', 'C001,nope'):
+        with pytest.raises(archive.ArchiveRefused, match='--questions names an id that is not a question'):
+            chatbots.ask_plan(questions=bad)
+        with pytest.raises(archive.ArchiveRefused, match='--questions names an id that is not a question'):
+            chatbots.ask(max_usd=1, questions=bad)
+    nothing_stored(calls)
+    planned = chatbots.ask_plan(questions='C002, C001')                              # the list's own order, whatever was typed
+    assert [q['id'] for q in planned['questions']] == ['C001', 'C002'] and planned['calls'] == 4
+    assert {label: sorted(holds) for label, holds in planned['holds'].items()} == {'local-one': ['C001', 'C002'], 'api-one': ['C001', 'C002']}
+    assert planned['worst_case_usd'] == pytest.approx(chatbots.ask_plan()['worst_case_usd'] / 2, rel=0.2)
+    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--dry-run', '--questions', 'C003,C004')
+    assert code == 0 and 'Questions (2 of the 4 on the list, named with --questions)' in out and 'C001  ' not in out
+    assert 'Calls: 4 (2 questions x 2 models).' in out and 'archive-chatbot-ask --max-usd 0.01 --questions C003,C004' in out
+    assert 'DRY RUN: nothing was called and nothing was stored.' in out
+    nothing_stored(calls)
+
+    calls = adapter(monkeypatch, lambda model, prompt, n: f'PLACEHOLDER first {model} {n}.')
+    first = chatbots.ask(max_usd=1, questions='C002,C001')
+    assert (first['run'], first['questions'], first['new_questions'], first['first_run']) == (1, ['C001', 'C002'], ['C001', 'C002'], True)
+    assert len(calls) == 4 and {call['prompt'].splitlines()[-1] for call in calls} == {
+        'Is a hot dog a sandwich?', 'Roast the other AI apps in one sentence.'}
+    assert [row['id'] for row in rows('SELECT id FROM archive_chatbot_questions ORDER BY position')] == ['C001', 'C002']
+    assert json.loads(rows('SELECT question_ids FROM archive_chatbot_runs')[0]['question_ids']) == ['C001', 'C002']
+    block = archive.public_payload()['chatbots']
+    assert [q['id'] for q in block['questions']] == ['C001', 'C002']
+    site = archive_pages.render_site(chatbots.site_payload(archive.public_payload()), standalone=True)
+    assert 'c/C002.html' in site and not [name for name in site if 'C003' in name or 'C004' in name]
+    assert 'Pineapple' not in ''.join(page for page in site.values() if isinstance(page, str))
+    # The same day again is refused as before, also for other questions: one run per answerer and day.
+    with pytest.raises(archive.ArchiveRefused, match='already has a run dated 2026-11-14'):
+        chatbots.ask(max_usd=1, questions='C003')
+    assert len(calls) == 4
+
+    monkeypatch.setattr(chatbots, 'today', lambda: datetime.date(2026, 11, 16))
+    calls = adapter(monkeypatch, lambda model, prompt, n: f'PLACEHOLDER later {model} {n}.')
+    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--max-usd', '0.01', '--questions', 'C003,C004')
+    assert code == 0 and len(calls) == 4 and 'Stored as run 2, collected 2026-11-16.' in out and 'first recorded run' not in out
+    stored = rows('SELECT r.number,a.question_id,a.changed FROM archive_chatbot_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id ORDER BY a.id')
+    assert sorted({(row['number'], row['question_id']) for row in stored}) == [(1, 'C001'), (1, 'C002'), (2, 'C003'), (2, 'C004')]
+    assert len(stored) == 8 and {row['changed'] for row in stored} == {None}          # every one is a first answer: nothing to compare
+    audit = [row['operation'] for row in rows('SELECT operation FROM operator_audit ORDER BY id')]
+    assert 'questions C001,C002' in audit[-2] and audit[-1].endswith('questions C003,C004')
+    payload = archive.public_payload()
+    assert archive.payload_problem(payload) is None
+    assert [(run['number'], run['questions']) for run in payload['chatbots']['runs']] == [(1, ['C001', 'C002']), (2, ['C003', 'C004'])]
+    data = chatbots.site_payload(payload)
+    assert chatbots.site_problem(data) is None
+    site = archive_pages.render_site(data, standalone=True)
+    front, old, new = visible(site['index.html']), visible(site['c/C001.html']), visible(site['c/C003.html'])
+    assert 'PLACEHOLDER first sample-local:1b 1.' in front and 'PLACEHOLDER later sample-local:1b 1.' in front
+    assert 'From ' not in front and 'Changed' not in front                               # nothing is marked old or changed
+    assert 'asked 14 Nov 2026' in old and 'PLACEHOLDER later' not in old and old.count('first answer') == 2
+    assert 'asked 16 Nov 2026' in new and 'PLACEHOLDER first' not in new and new.count('first answer') == 2
+    pages = ' '.join(page for page in site.values() if isinstance(page, str))
+    assert not [word for word in FORBIDDEN if word in pages]

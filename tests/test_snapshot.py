@@ -102,9 +102,7 @@ def assert_no_model_track(root):
             # (`trending-now.html`, tests/test_archive_lists.py) are a different page.
             assert 'trending.html' not in text and 'Model trends' not in text, name
     data = json.loads((root / 'archive.json').read_text(encoding='utf-8'))
-    lists = any('list' in question for question in data['chatbots']['questions'])
-    assert list(data) == ['schema', 'chatbots'] and not set(data) & set(MODEL_KEYS)
-    assert data['schema'] == ('live-genesis-chat-archive/4' if lists else 'live-genesis-chat-archive/2')
+    assert list(data) == ['schema', 'chatbots'] and data['schema'] == 'live-genesis-chat-archive/2' and not set(data) & set(MODEL_KEYS)
     assert list(data['chatbots']) == ['groups', 'apps', 'human', 'questions', 'runs', 'answers', 'human_answers']
     return data
 
@@ -141,13 +139,12 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
     assert lines and {line['answerer_kind'] for line in lines} == {'chat-app', 'human'}
     assert {line['question_id'] for line in lines} == set(CHAT_DEMO_IDS) and {line['provenance'] for line in lines} == {'scripted-sample'}
     readme = (out / 'archive' / 'data' / 'README.txt').read_text(encoding='utf-8')
-    assert readme == archive_pages.README_CHAT + archive_pages.README_LISTS != archive_pages.README and 'scripted-sample' in readme and 'typed-by-hand' not in readme and 'by hand' not in readme
+    assert readme == archive_pages.README_CHAT != archive_pages.README and 'scripted-sample' in readme and 'typed-by-hand' not in readme and 'by hand' not in readme
     assert 'chat-app | human' in readme and 'not affiliated' in readme and 'It may be wrong.' in readme
     everything = ''.join((out / name).read_text(encoding='utf-8') for name in written if name.endswith(('.html', '.json')))
     assert '<script' not in everything and 'overview.json' not in everything and 'app.js' not in everything
     # The archive data is the chat-app block of the public payload under its own schema marker, and nothing else.
-    # /4: two scripted questions are on the track's trending list (a site without one is still /2)
-    assert data == {'schema': archive_chatbots.SITE_SCHEMA_LISTS, 'chatbots': json.loads(json.dumps(chat))}
+    assert data == {'schema': archive_chatbots.SITE_SCHEMA, 'chatbots': json.loads(json.dumps(chat))}
     assert (out / 'archive.json').read_bytes() == snapshot._encode(archive_chatbots.site_payload(payload))
     # No dead link, and no link out of the archive to a page above it.
     assert_every_address_resolves(out)
@@ -179,7 +176,7 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
     usual = archive_pages.render_site(payload)
     assert {name[len('archive/'):] for name in MODEL_PAGES} <= set(usual) and set(alone) < set(usual)
     assert '<a href="trending.html">Trending</a>' in usual['index.html'] and '<a href="models.html">Models</a>' in usual['index.html']
-    assert 'Want the plain models instead?' in usual['index.html'] and usual['data/README.txt'] == archive_pages.README + archive_pages.README_LISTS
+    assert 'Want the plain models instead?' in usual['index.html'] and usual['data/README.txt'] == archive_pages.README
     for name in alone:
         if name.startswith('card/') or (name.startswith('data/C') and name.endswith('.json')):
             assert usual[name] == alone[name], name                        # a chat-app card and data file are the same everywhere

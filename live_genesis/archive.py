@@ -94,9 +94,6 @@ PAYLOAD_SCHEMA_CHATBOTS = "live-genesis-archive/6"
 # /7: the track's block also holds a model answerer (an app entry with `kind` "model", a run with `models`, answers of
 # source `asked`: archive_chatbots.ask). Written only then: a payload without one is still /6, byte for byte.
 PAYLOAD_SCHEMA_ASKED = "live-genesis-archive/7"
-# /8: a question of the track's block carries `list` ("trending": a question added along the way), with or without a
-# model answerer. Written only then: a payload whose chat-app questions are all on the main list is still /6 or /7.
-PAYLOAD_SCHEMA_LISTS = "live-genesis-archive/8"
 TRACKS = ("core", "trending")
 GROUP_COUNT = 4
 QUESTION_ID = re.compile(r"Q[0-9]{2}")
@@ -2061,7 +2058,7 @@ def payload_problem(data: object) -> str | None:
     for key, kind in _SHAPE.items():
         if not isinstance(data.get(key), kind):
             return f"key {key} is missing or has the wrong type"
-    if data["schema"] not in (PAYLOAD_SCHEMA, PAYLOAD_SCHEMA_CHATBOTS, PAYLOAD_SCHEMA_ASKED, PAYLOAD_SCHEMA_LISTS):
+    if data["schema"] not in (PAYLOAD_SCHEMA, PAYLOAD_SCHEMA_CHATBOTS, PAYLOAD_SCHEMA_ASKED):
         return "unknown schema"
     if (data["schema"] == PAYLOAD_SCHEMA) != ("chatbots" not in data):
         return "the schema marker does not fit the file (/6 exactly when it holds the chat-app track)"
@@ -2134,8 +2131,7 @@ def payload_problem(data: object) -> str | None:
         from . import archive_chatbots
         problem = archive_chatbots.block_problem(data["chatbots"], set(place))
         if problem is None and data["schema"] != archive_chatbots.payload_schema(data["chatbots"]):
-            return ("the schema marker does not fit the file (/8 exactly when a chat-app question names a list, else /7 "
-                    "exactly when the chat-app track holds a model answerer)")
+            return "the schema marker does not fit the file (/7 exactly when the chat-app track holds a model answerer)"
         return problem
     return None
 

@@ -246,7 +246,7 @@ def _chat_problem(answers: object) -> str | None:
     the chat-app track alone: the schema marker and the `chatbots` block, hand-entered replies only,
     the apps and questions of the checked-in configuration, closed keys."""
     if isinstance(answers, dict) and answers.get("schema") in (archive.PAYLOAD_SCHEMA, archive.PAYLOAD_SCHEMA_CHATBOTS,
-                                                               archive.PAYLOAD_SCHEMA_ASKED, archive.PAYLOAD_SCHEMA_LISTS):
+                                                               archive.PAYLOAD_SCHEMA_ASKED):
         return ("it holds the model track; an export of Answers Over Time only holds the chat-app track alone "
                 "(an export made by an earlier version must be exported and reviewed again)")
     return archive_chatbots.site_problem(answers) or archive_chatbots.export_problem(answers["chatbots"])

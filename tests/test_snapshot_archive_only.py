@@ -417,9 +417,7 @@ def test_archive_json_must_hold_exactly_the_chat_track_keys(ready, tmp_path, mon
     refused(lambda d: (d.clear(), d.update(whole)), 'it holds the model track; an export of Answers Over Time only holds the chat-app track alone')
     refused(lambda d: d.update(schema='live-genesis-archive/6'), 'it holds the model track')
     refused(lambda d: d.update(schema='live-genesis-archive/3'), 'it holds the model track')
-    refused(lambda d: d.update(schema='live-genesis-chat-archive/5'), 'archive.json is refused: unknown schema')
-    # /4 is the marker of a file in which a question names a list (a trending question), and of no other.
-    refused(lambda d: d.update(schema='live-genesis-chat-archive/4'), 'archive.json is refused: the schema marker does not fit the file')
+    refused(lambda d: d.update(schema='live-genesis-chat-archive/4'), 'archive.json is refused: unknown schema')
     # /3 is the marker of a file that holds a model answerer, and of no other.
     refused(lambda d: d.update(schema='live-genesis-chat-archive/3'), 'archive.json is refused: the schema marker does not fit the file')
     refused(lambda d: d.pop('schema'), 'archive.json is refused: unknown schema')

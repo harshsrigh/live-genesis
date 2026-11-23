@@ -685,7 +685,8 @@ def test_demo_uses_made_up_names_only_and_is_marked_as_a_sample_for_people_and_m
     assert len(block['answers']) + len(block['human_answers']) == done['chatbot_answers'] == 100
     assert [q['id'] for q in block['questions']] == [f'C00{n}' for n in range(1, 9)]
     # Two of them are scripted "trending" questions that join at the third date (tests/test_archive_lists.py).
-    assert [q.get('list') for q in block['questions']] == [None] * 6 + ['trending'] * 2
+    assert all(set(q) == set(chatbots.QUESTION_KEYS) for q in block['questions'])       # the mark is not in the payload
+    assert chatbots.question_lists(demo=True) == {'C007': 'trending', 'C008': 'trending'}
     assert all(q['prompt'] == f"{PREFIX}\n\n{q['text']}" and chatbots.political_term(q['text']) is None for q in block['questions'])
     pages = archive_pages.render_site(payload)
     for name, text in {**pages, 'payload': json.dumps(payload)}.items():      # every demo page and data file (a snapshot writes exactly these)

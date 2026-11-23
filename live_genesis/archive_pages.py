@@ -16,8 +16,9 @@ Pages (under `archive/`):
 * `c/C001.html` (a chat-app question), `q/Q01.html`, `t/T001.html` (a model question): one layout.
   This month's answers as cards; older months one tap away (radio inputs and labels, no script); a
   changed answer shows what it was before; each card has its history; a table shows what changed.
-* `trending-now.html`: the chat-app track's TRENDING questions (a question whose payload entry carries
-  `list` "trending": newer, picked from what people are searching for, added along the way), with the same
+* `trending-now.html`: the chat-app track's TRENDING questions (a question the checked-in configuration marks
+  `"list": "trending"`: newer, picked from what people are searching for, added along the way; the payload
+  does not carry the mark, `archive_chatbots.question_lists` is read when a page is built), with the same
   question cards as the front page. It exists, and the top bar links it as "Trending", only when at least
   one such question has a shown answer; the front page then lists the main questions only. Its name differs
   from `trending.html` on purpose: that one is the model track's list and is never part of the public site.
@@ -444,13 +445,13 @@ class _View:
             self.by_series.setdefault((answer["question"], answer["answerer"]), []).append(answer)
         self.run_date = {r["number"]: r["date"] for r in self.runs}
         self.chat = _Chat(payload)
-        # A chat-app question is on the pages from the first run that asked it: one that was recorded with the list
-        # and never asked (a run may ask only some questions) has no page, card or data file yet.
-        asked = {question_id for ids in self.chat.asked.values() for question_id in ids}
-        self.chat_questions = [q for q in self.chat.questions if q["id"] not in self.hidden and q["id"] in asked]
+        self.chat_questions = [q for q in self.chat.questions if q["id"] not in self.hidden]
         # The trending questions of the chat-app track, newest first, and whether the "Trending" tab exists: only
         # when one of them has an answer to show. Without the tab every question is listed on the front page.
-        self.chat_trending = sorted((q for q in self.chat_questions if q.get("list") == TRENDING),
+        # Which question is trending is not in the payload: the checked-in configuration says it (the scripted
+        # sample has its own list), so a file published before the mark existed needs no new export.
+        self.chat_lists = archive_chatbots.question_lists(self.chat.demo) if self.chat_questions else {}
+        self.chat_trending = sorted((q for q in self.chat_questions if self.chat_lists.get(q["id"]) == TRENDING),
                                     key=lambda q: q["added"], reverse=True)
         trend_ids = {q["id"] for q in self.chat_trending}
         self.trend_tab = any(key[0] in trend_ids and answer["state"] == "answered" and not answer.get("refused")
@@ -707,9 +708,9 @@ def _chat_board(view: _View, question_id: str) -> dict:
                     cell["facts"].append(FORM_WORDS[answer["manner"]])
                 previous = date
             cells[(key, date)] = cell
-    trending = question.get("list") == TRENDING
+    trending = view.chat_lists.get(question_id) == TRENDING
     return {"id": question_id, "text": question["text"], "prompt": question["prompt"], "hook": question["hook"],
-            "list": question.get("list"), "added": question["added"],
+            "list": view.chat_lists.get(question_id), "added": question["added"],
             "why": ("Lots of people were searching for this when we added it. We wanted to see who's funny about it, and "
                     "whether they're still funny next month." if trending and not sample else
                     "No deep reason. We wanted to see who's funny, and whether they're still funny next month."),
@@ -2080,11 +2081,6 @@ for _full, _short in _README_CHAT_MODELS:
     README_CHAT_MODELS = README_CHAT_MODELS.replace(_full, _short)
 
 
-# Added to the README of a site that has a chat-app question on the trending list, and only there.
-README_LISTS = ("\nIn a question's file, \"list\": \"trending\" marks a question that was added along the way (the\n"
-                "pages list those under \"Trending\"). A question without it was there from the start.\n")
-
-
 def _dump(node: object) -> str:
     return json.dumps(node, ensure_ascii=True, sort_keys=False, separators=(",", ":"))
 
@@ -2096,7 +2092,7 @@ def question_data(view: _View, question_id: str) -> dict:
                for period in board["periods"] for column in board["columns"] if (column["key"], period["key"]) in board["cells"]]
     return {"schema": DATA_SCHEMA, "content": SAMPLE if board["demo"] else "recorded", "notice": DATA_NOTICE,
             "question_id": question_id, "question": board["text"], "prompt": board["prompt"], "hook": board["hook"],
-            "track": board["track"], **({"list": board["list"]} if board.get("list") else {}),
+            "track": board["track"],
             "answerers": [{"answerer": column["key"], "name": column["name"], "kind": column["kind"], "maker": column["maker"]}
                           for column in board["columns"]],
             "answers": answers}
@@ -2115,8 +2111,7 @@ def render_data(payload: dict, *, chat_only: bool = False) -> dict[str, str]:
         lines += [_dump(answer) for answer in data["answers"]]
     out["data/answers.jsonl"] = "".join(line + "\n" for line in lines)
     models = any(column["kind"] == "model" for column in view.chat.columns)
-    out["data/README.txt"] = ((README_CHAT_MODELS if models else README_CHAT) if chat_only else README) \
-        + (README_LISTS if any(q.get("list") for q in view.chat_questions) else "")
+    out["data/README.txt"] = (README_CHAT_MODELS if models else README_CHAT) if chat_only else README
     return out
 
 

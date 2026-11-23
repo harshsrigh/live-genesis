@@ -659,8 +659,8 @@ def test_the_default_rendering_holds_trending_pages_and_cards_at_the_same_addres
                            + ['chatbots.html'] + [f'card/{q}{s}.html' for q in chat
                                                   for s in ('', '-chat-app-a', '-chat-app-b', '-chat-app-c', '-human')])
     # /5: the scripted archive also holds the scripted chat-app track
-    # /8: two of the scripted chat-app questions are on that track's own trending list
-    assert payload['schema'] == 'live-genesis-archive/8' and len(payload['trending']['questions']) == 3
+    # /5: the scripted archive also holds the scripted chat-app track
+    assert payload['schema'] == 'live-genesis-archive/6' and len(payload['trending']['questions']) == 3
     assert (out / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8') == archive_pages.render_card(payload, 'T001')
     assert (out / 'archive' / 'trending.html').read_text(encoding='utf-8') == archive_pages.render_trending(payload)
     for html in (out / 'archive').rglob('*.html'):                               # every relative address resolves inside the snapshot

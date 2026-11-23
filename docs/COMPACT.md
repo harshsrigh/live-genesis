@@ -18,7 +18,7 @@ The owner is not a programmer. Write to them in plain words, give commands in co
 ## State on 20 Nov 2026 (two lines brought up to date on 21 Nov)
 
 - `main` passes 633 offline tests (`python -m pytest -q`, about 2 minutes), counted on 21 Nov at `f9804ed`.
-- Three questions (C011 to C013) were appended on 20 Nov. Nothing has asked them, so they are on no page. `archive-chatbot-ask` can only ask the whole list (all thirteen); how the new ones get asked is the owner's open decision (`docs/SESSION-STATE.md`, "Open: asking the new questions").
+- Three questions (C011 to C013) were appended on 20 Nov, asked on 22 Nov with `--questions` and published. Since 23 Nov they are marked `"list": "trending"` in `archive_chatbots.json` (a display attribute only) and the site lists them under a "Trending" tab; `archive-chatbot-ask --list trending` asks only those, and from December one ask covers all thirteen (`docs/SESSION-STATE.md`, "Decided on 23 Nov").
 - Free-only OpenRouter collector, guided Windows launcher (`Collect-Free.cmd`) and its guards are merged. **No real request to OpenRouter's model API has ever been made**; tested with mocked answers only; the launcher was never run on Windows itself.
 - The owner's step-by-step guide for a month: `docs/MONTHLY-ROUND.md`.
 - A weekly scheduled task ("Weekly trend question ideas", Mondays 18:35 UTC) runs `archive-trends` in a fresh cloud session and reports 5 to 8 draft question ideas. It changes nothing; the owner adds a question by hand.

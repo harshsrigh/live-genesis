@@ -1,6 +1,8 @@
-"""Answers Over Time, the chat-app track's QUESTION LISTS (owner's decision of 23 November 2026): a question may be marked
-`"list": "trending"`, `cli archive-chatbot-ask --list trending` (or `--questions`) asks only some questions, and the site
-gets a "Trending" tab (`archive/trending-now.html`) that exists only when a trending question has an answer to show.
+"""Answers Over Time, the chat-app track's QUESTION LISTS (owner's decision of 23 November 2026): a question of
+`archive_chatbots.json` may be marked `"list": "trending"`, `cli archive-chatbot-ask --list trending` asks only those
+(it is `--questions` with that list's ids), and the site gets a "Trending" tab (`archive/trending-now.html`) that exists
+only when a trending question has an answer to show. The mark is a display attribute of the configuration: it is in no
+hash, table or payload, so a database or a published file made before it is what it was.
 
 Offline: `engine.infer` AND `engine.REAL_INFER` are replaced by a stand-in in every test that asks (tests/test_archive_ask.py
 `adapter`), so nothing here contacts a provider, and every "reply" is an obvious placeholder."""
@@ -8,25 +10,25 @@ import datetime
 import hashlib
 import json
 import re
-import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
 
-from live_genesis import archive, archive_chatbots as chatbots, archive_pages, config, core, engine, profiles, snapshot
+from live_genesis import archive, archive_chatbots as chatbots, archive_pages, config, core, engine, guards, profiles, snapshot
 from live_genesis.app import app
 from test_archive import REPO, assert_page_is_safe, ready, rows, run_cli  # noqa: F401
 from test_archive_ask import LOCAL, LOCAL_URL, MODELS, SECRETS, adapter, nothing_stored
 from test_archive_chatbots import (CONFIG, IDS, PREFIX, chat, config_file, filled, question, visible)  # noqa: F401
 
-V8_SCHEMA = REPO / 'tests' / 'fixtures' / 'archive_schema_v8.sql'
 API = {'label': 'api-one', 'kind': 'model', 'name': 'Sample model M', 'maker': 'Made-up maker M', 'answerer': 'mini', 'group': 'ai-models'}
 TREND = [dict(question(5, 'Is a made-up trend a real trend?', 'Made-up trend?'), added='2026-11-20', list='trending'),
          dict(question(6, 'Would a placeholder say yes to this?', 'Placeholder says?'), added='2026-11-20', list='trending')]
+UNMARKED = [{key: value for key, value in q.items() if key != 'list'} for q in TREND]
 TREND_IDS = ['C005', 'C006']
 NOV_19, NOV_24, DEC_1 = datetime.date(2026, 11, 19), datetime.date(2026, 11, 24), datetime.date(2026, 12, 1)
-# What the code before question lists recorded for the ten questions of 14 November 2026 (the owner's real database
-# holds exactly these): pinned here, so no change to the hash can go unnoticed.
+REAL_NAMES = ('ChatGPT', 'Gemini', 'Grok', 'Copilot', 'Claude', 'Phi-4', 'Gemma', 'Granite', 'Qwen')
+# What the code before question lists recorded for the thirteen questions (the owner's real database and the published
+# file hold exactly these): pinned here, so no change to a recorded hash can go unnoticed.
 RECORDED = {
     'C001': '3cba88e83617062619222b6790e774fb7ac9e4325b39204aca26343536bd7f51',
     'C002': '9f5ce6da927e340f20d781f1f78ec1bb3e615ca216defa5d747ffbf9a51d559a',
@@ -38,6 +40,9 @@ RECORDED = {
     'C008': '77312d93d836c6f78cb8721e588e7b5a5de01a1efe12516702b0114e503bde1e',
     'C009': 'b2d2a5776465ae543b576ed55828090575085e7a6a7900b388e523b48486c9dc',
     'C010': '302a0e42fdbac0fb615b9f16de139ce41295d7975497dae65154c62f5529cd6f',
+    'C011': 'ea2ed833fd92d636d739252de0fcfe1488fc54fb5257caee1d962cd26cbfa56f',
+    'C012': 'c18d964f23e1713d3c33cce97ecf380274787573fdc299fc2d33c50c6b44e7e2',
+    'C013': '26612619aaef99980c2e42489398e7cb2c55401e5b323e38d7a5f4b043885138',
 }
 
 
@@ -66,15 +71,15 @@ def reply(tag):
     return lambda model, prompt, n: f"PLACEHOLDER {tag} {model} to: {prompt.split(chr(10))[-1]}"
 
 
-def main_then_trending(tmp_path, monkeypatch):
-    """19 November: every question there is (the four main ones) is asked. Then two trending questions are added to the
-    configuration, and on 24 November only those are asked."""
+def main_then_trending(tmp_path, monkeypatch, added=TREND):
+    """19 November: every question there is (the four main ones) is asked. Then two questions are added to the
+    configuration, and on 24 November only those are asked: `--list trending` when they are marked."""
     adapter(monkeypatch, reply('first'))
     first = chatbots.ask(max_usd=1)
-    models_only(tmp_path, monkeypatch, trending=TREND)
+    models_only(tmp_path, monkeypatch, trending=added)
     monkeypatch.setattr(chatbots, 'today', lambda: NOV_24)
     calls = adapter(monkeypatch, reply('first'))
-    second = chatbots.ask(max_usd=1, question_list='trending')
+    second = chatbots.ask(max_usd=1, questions=chatbots.list_ids('trending') if added is TREND else 'C005,C006')
     return first, second, calls
 
 
@@ -92,36 +97,45 @@ def old_hash(item):
     return hashlib.sha256(json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode('ascii')).hexdigest()
 
 
-# ---- the configuration field and the recorded identity ---------------------------------------------------------
+# ---- the configuration field: a display attribute, outside every hash ----------------------------------------------
 
-def test_the_three_new_questions_are_marked_trending_and_the_ten_recorded_ones_hash_as_before():
+def test_the_three_new_questions_are_marked_trending_and_no_recorded_hash_changes(tmp_path, monkeypatch):
     raw = json.loads(CONFIG.read_text(encoding='utf-8'))
     loaded = chatbots.load_config()
     assert raw['format'] == 'live-genesis-chatbots/3'                                   # an optional field: the file format is the same
-    assert [q['id'] for q in raw['questions'] if q.get('list') == 'trending'] == ['C011', 'C012', 'C013']
-    assert all('list' not in q for q in raw['questions'][:10]) and all('list' not in q for q in loaded['items'][:10])
-    assert [chatbots.list_of(q) for q in loaded['items']] == ['main'] * 10 + ['trending'] * 3
-    assert chatbots.LISTS == ('trending',) and 'main' not in json.dumps(raw['questions'])
-    # A main question's recorded hash is what the version before worked out, to the byte; two are pinned as literals.
-    for item in loaded['items'][:10]:
-        assert set(item) == {'id', 'text', 'prompt', 'hook', 'added'} and chatbots.question_hash(item) == old_hash(item), item['id']
-    assert {i: chatbots.question_hash(loaded['prompts'][i]) for i in RECORDED} == RECORDED
-    # The list is part of a trending question's identity: it cannot be dropped or added later without the hash changing.
-    for item in loaded['items'][10:]:
-        assert item['list'] == 'trending' and item['added'] == '2026-11-20'
-        assert chatbots.question_hash(item) != old_hash(item) == chatbots.question_hash({k: v for k, v in item.items() if k != 'list'})
+    assert [q['id'] for q in raw['questions'] if 'list' in q] == ['C011', 'C012', 'C013'] and 'main' not in json.dumps(raw['questions'])
+    assert loaded['lists'] == {'C011': 'trending', 'C012': 'trending', 'C013': 'trending'} == chatbots.question_lists()
+    assert chatbots.LISTS == ('trending',) and chatbots.question_lists(demo=True) == {'C007': 'trending', 'C008': 'trending'}
+    # A question is the five fields it always was, marked or not, and its recorded hash is what the version before worked
+    # out, to the byte: the real database and the published file recorded all thirteen WITHOUT the mark.
+    assert chatbots.QUESTION_KEYS == ('id', 'text', 'prompt', 'hook', 'added')
+    for item in loaded['items']:
+        assert set(item) == set(chatbots.QUESTION_KEYS) and chatbots.question_hash(item) == old_hash(item), item['id']
+    assert {i: chatbots.question_hash(loaded['prompts'][i]) for i in RECORDED} == RECORDED and len(RECORDED) == 13
+    # Nor does the configuration hash a run records: the same file without the marks hashes the same.
+    for entry in raw['questions']:
+        entry.pop('list', None)
+    plain = tmp_path / 'unmarked.json'
+    plain.write_text(json.dumps(raw), encoding='utf-8')
+    assert chatbots.load_config(plain)['sha256'] == loaded['sha256'] and chatbots.load_config(plain)['lists'] == {}
+    assert chatbots.load_config(plain)['items'] == loaded['items']
     # The politics word check and the content guards apply to a trending question as to any other.
-    for item in loaded['items'][10:]:
+    for question_id in loaded['lists']:
+        item = loaded['prompts'][question_id]
         for text in (item['text'], item['hook']):
-            assert chatbots.political_term(text) is None and chatbots.guards.content_reason(text) is None
+            assert chatbots.political_term(text) is None and guards.content_reason(text) is None
+    # A configuration that cannot be read marks nothing: every question is then listed on the front page.
+    monkeypatch.setattr(chatbots, 'CONFIG_FILE', tmp_path / 'no-such.json')
+    assert chatbots.question_lists() == {}
 
 
 def test_a_list_must_be_trending_and_a_trending_question_passes_the_same_checks(chat, tmp_path, monkeypatch):
-    plain = chatbots.load_config()['sha256']
+    models_only(tmp_path, monkeypatch, models=(), trending=UNMARKED)
+    unmarked = chatbots.load_config()
     models_only(tmp_path, monkeypatch, models=(), trending=TREND)
     loaded = chatbots.load_config()
-    assert loaded['questions'] == IDS + TREND_IDS and [q.get('list') for q in loaded['items']] == [None] * 4 + ['trending'] * 2
-    assert loaded['sha256'] != plain
+    assert loaded['questions'] == IDS + TREND_IDS and loaded['lists'] == {'C005': 'trending', 'C006': 'trending'}
+    assert (loaded['sha256'], loaded['items']) == (unmarked['sha256'], unmarked['items']) and unmarked['lists'] == {}
     for bad, why in [(dict(list='main'), 'C005: list must be "trending", or left out for the main list'),
                      (dict(list='hot'), 'C005: list must be "trending"'), (dict(list=None), 'C005: list must be "trending"'),
                      (dict(list=['trending']), 'C005: list must be "trending"'),
@@ -131,221 +145,165 @@ def test_a_list_must_be_trending_and_a_trending_question_passes_the_same_checks(
         models_only(tmp_path, monkeypatch, models=(), trending=[{**TREND[0], **bad}])
         with pytest.raises(archive.ArchiveRefused, match=re.escape(why)):
             chatbots.load_config()
-    # Without a trending question the configuration, its hash and its items are what they were before lists.
-    models_only(tmp_path, monkeypatch, models=())
-    assert chatbots.load_config()['sha256'] == plain
 
 
-def test_a_recorded_question_never_moves_to_another_list(asking, tmp_path, monkeypatch):
-    main_then_trending(tmp_path, monkeypatch)
-    recorded = rows('SELECT id,list,sha256,first_run FROM archive_chatbot_questions ORDER BY position')
-    assert [(r['id'], r['list'], r['first_run']) for r in recorded] == [(i, '', 1) for i in IDS] + [(i, 'trending', 2) for i in TREND_IDS]
-    assert [r['sha256'] for r in recorded] == [chatbots.question_hash(q) for q in chatbots.load_config()['items']]
-    assert [r['sha256'] for r in recorded[:4]] == [old_hash(q) for q in chatbots.load_config()['items'][:4]]
-    with core.connect() as cx:
-        assert chatbots.questions_problem(cx, chatbots.load_config()) is None
-        with pytest.raises(sqlite3.IntegrityError):
-            cx.execute("INSERT INTO archive_chatbot_questions(id,position,kind,text,prompt,added,sha256,first_run,list) "
-                       "VALUES ('C009',9,'asked','t','p','2026-11-20','h',1,'hot')")
-        cx.rollback()
-    monkeypatch.setattr(chatbots, 'today', lambda: DEC_1)
-    calls = adapter(monkeypatch)
-    for moved, ids in (([dict(TREND[0], list=None), TREND[1]], 'C005'),                 # a trending question made a main one
-                       (None, 'C001')):                                                   # a main question made a trending one
-        def change(data, moved=moved):
-            data['chatbots'] = data['chatbots'] + [dict(LOCAL), dict(API)]
-            if moved is None:
-                data['questions'][0]['list'] = 'trending'
-                data['questions'] += [dict(q) for q in TREND]
-            else:
-                data['questions'] += [{k: v for k, v in q.items() if v is not None} for q in moved]
-        config_file(tmp_path, monkeypatch, edit=change)
-        with pytest.raises(archive.ArchiveRefused, match=f'{ids} was changed since it was first imported .text, prompt, hook, date or list.'):
-            chatbots.ask(max_usd=1)
-        with pytest.raises(archive.ArchiveRefused, match=f'{ids} was changed since it was first imported'):
-            chatbots.import_collection(filled(tmp_path, '2026-12-01', name=f'moved-{ids}.json'))
-    assert calls == [] and len(rows('SELECT * FROM archive_chatbot_runs')) == 2
+# ---- questions recorded before the mark existed --------------------------------------------------------------------
 
-
-# ---- a database made before lists ------------------------------------------------------------------------------
-
-def test_a_database_made_before_lists_gains_the_column_keeps_every_row_and_still_asks_and_exports(asking, tmp_path, monkeypatch):
-    old = V8_SCHEMA.read_text(encoding='utf-8')
-    assert "'asked'" in old and old.count('CREATE TABLE IF NOT EXISTS') == 6 and 'list TEXT' not in old
-    adapter(monkeypatch, reply('first'))
-    assert chatbots.ask(max_usd=1)['run'] == 1                                            # four main questions, two models
+def test_questions_recorded_without_the_mark_still_load_ask_and_export_and_then_show_as_trending(asking, tmp_path, monkeypatch):
+    # As main recorded C011 to C013: the questions are in the file WITHOUT a list, asked with --questions on a later date.
+    main_then_trending(tmp_path, monkeypatch, added=UNMARKED)
+    recorded = rows('SELECT * FROM archive_chatbot_questions ORDER BY position')
+    assert [r['id'] for r in recorded] == IDS + TREND_IDS and 'list' not in recorded[0]      # no column: the tables are what they were
     payload_before = json.dumps(archive.public_payload())
-    with core.connect() as cx:
-        saved = {t: [dict(r) for r in cx.execute(f'SELECT * FROM {t} ORDER BY rowid')] for t in chatbots.TABLE_NAMES}
-        # The same rows in a database as the version before made it: its tables, index and triggers (the fixture).
-        for name, kind in cx.execute("SELECT name,type FROM sqlite_master WHERE (name LIKE 'archive_chatbot_%' OR name LIKE 'archive_human_%') "
-                                     "AND type IN ('trigger','index') AND name NOT LIKE 'sqlite_%'").fetchall():
-            cx.execute(f'DROP {kind} {name}')
-        cx.commit()
-        cx.execute('PRAGMA foreign_keys=OFF')
-        for table in reversed(chatbots.TABLE_NAMES):
-            cx.execute(f'DROP TABLE {table}')
-        cx.execute('PRAGMA foreign_keys=ON')
-        cx.executescript(old)
-        assert 'list' not in {r[1] for r in cx.execute('PRAGMA table_info(archive_chatbot_questions)')}
-        for table in ('archive_chatbot_runs', 'archive_chatbot_questions', 'archive_chatbot_conditions', 'archive_chatbot_answers'):
-            columns = [r[1] for r in cx.execute(f'PRAGMA table_info({table})')]
-            for row in saved[table]:
-                cx.execute(f"INSERT INTO {table}({','.join(columns)}) VALUES ({','.join('?' * len(columns))})", [row[c] for c in columns])
-        tables = chatbots.TABLE_NAMES + ('operator_audit', 'budget_reservations', 'api_usage')
-        before = {t: [tuple(r) for r in cx.execute(f'SELECT * FROM {t} ORDER BY rowid')] for t in tables}
-        hashes = [r[0] for r in cx.execute('SELECT sha256 FROM archive_chatbot_questions ORDER BY position')]
-    assert [len(before[t]) for t in chatbots.TABLE_NAMES] == [1, 2, 8, 4, 0, 0]
-    # Before any migration a read-only reader (the local web app) still gets the payload it always got.
-    assert json.dumps(archive.public_payload(readonly=True)) == payload_before
-    core.init_db()
-    core.init_db()                                                                        # any number of times
-    with core.connect() as cx:
-        for table, expected in before.items():
-            now = [tuple(r) for r in cx.execute(f'SELECT * FROM {table} ORDER BY rowid')]
-            # Every row is kept, value for value; a recorded question gains '' (the main list) as its last column.
-            assert now == [row + (('',) if table == 'archive_chatbot_questions' else ()) for row in expected], table
-        assert [r[0] for r in cx.execute('SELECT sha256 FROM archive_chatbot_questions ORDER BY position')] == hashes
-        fresh = sqlite3.connect(':memory:')
-        fresh.executescript('CREATE TABLE archive_runs(kind TEXT);' + chatbots.TABLES + chatbots.RULES)
-        for table in chatbots.TABLE_NAMES:                                                # a new database has exactly the upgraded one's columns
-            assert [r[1:] for r in fresh.execute(f'PRAGMA table_info({table})')] == [r[1:] for r in cx.execute(f'PRAGMA table_info({table})')], table
-        assert chatbots.questions_problem(cx, chatbots.load_config()) is None            # the recorded hashes still fit the file
-        with pytest.raises(sqlite3.IntegrityError, match='append-only'):
-            cx.execute("UPDATE archive_chatbot_questions SET list='trending'")
-    assert json.dumps(archive.public_payload()) == payload_before                         # the same payload, byte for byte
-    assert archive.public_payload()['schema'] == 'live-genesis-archive/7'
-    # The upgraded database takes the trending questions and an ask of only those, then everything together.
-    models_only(tmp_path, monkeypatch, trending=TREND)
-    monkeypatch.setattr(chatbots, 'today', lambda: NOV_24)
-    adapter(monkeypatch, reply('first'))
-    done = chatbots.ask(max_usd=1, question_list='trending')
-    assert done['run'] == 2 and done['new_questions'] == TREND_IDS and done['questions'] == TREND_IDS and done['first_run'] is False
-    monkeypatch.setattr(chatbots, 'today', lambda: DEC_1)
-    assert chatbots.ask(max_usd=1)['questions'] == IDS + TREND_IDS
+    before = standalone(archive.public_payload())
+    assert 'trending-now.html' not in before and nav(before['index.html']) == ['AI models', 'How it works']
+    assert '<li>6 questions</li>' in before['index.html']
     out = tmp_path / 'published'
     snapshot.export_published(out, archive_only=True)
     snapshot.approve_published(out, confirmed=True)
-    assert snapshot.check_published(out)['reviewed'] is True
-    assert json.loads((out / 'archive.json').read_text(encoding='utf-8'))['schema'] == 'live-genesis-chat-archive/4'
+    exported = (out / 'archive.json').read_bytes()
+    # Now the owner marks the two in the file. Nothing recorded has to change for it.
+    models_only(tmp_path, monkeypatch, trending=TREND)
+    with core.connect() as cx:
+        assert chatbots.questions_problem(cx, chatbots.load_config()) is None
+    assert json.dumps(archive.public_payload()) == payload_before                            # the payload does not carry the mark
+    assert archive.public_payload()['schema'] == 'live-genesis-archive/7'
+    assert snapshot.check_published(out)['reviewed'] is True and (out / 'archive.json').read_bytes() == exported
+    # The site built from the SAME approved file now lists them under Trending: no new export is needed.
+    monkeypatch.setenv('LIVE_DB', str(tmp_path / 'no-such.sqlite'))
+    snapshot.build_from_data(tmp_path / 'site', out, archive_only=True)
+    monkeypatch.setenv('LIVE_DB', str(asking))
+    site = tmp_path / 'site' / 'archive'
+    front, trending = (site / 'index.html').read_text(encoding='utf-8'), (site / 'trending-now.html').read_text(encoding='utf-8')
+    assert nav(front) == ['AI models', 'Trending', 'How it works'] and '<li>4 questions</li>' in front and '<li>2 questions</li>' in trending
+    assert re.findall(r'class="row-open" href="c/(C\d{3})\.html"', front) == IDS
+    assert re.findall(r'class="row-open" href="c/(C\d{3})\.html"', trending) == TREND_IDS
+    assert json.loads((tmp_path / 'site' / 'archive.json').read_text(encoding='utf-8')) == json.loads(exported)
+    # And the database still asks: the trending list alone, then everything together; a new export passes the check.
+    monkeypatch.setattr(chatbots, 'today', lambda: datetime.date(2026, 11, 27))
+    adapter(monkeypatch, reply('first'))
+    done = chatbots.ask(max_usd=1, questions=chatbots.list_ids('trending'))
+    assert (done['run'], done['questions'], done['new_questions'], done['first_run']) == (3, TREND_IDS, [], False)
+    monkeypatch.setattr(chatbots, 'today', lambda: DEC_1)
+    assert chatbots.ask(max_usd=1)['questions'] == IDS + TREND_IDS
+    again = tmp_path / 'published-2'
+    snapshot.export_published(again, archive_only=True)
+    snapshot.approve_published(again, confirmed=True)
+    assert snapshot.check_published(again)['reviewed'] is True
+    assert json.loads((again / 'archive.json').read_text(encoding='utf-8'))['schema'] == 'live-genesis-chat-archive/3'
+    # Taking the mark away again is as harmless: the mark only decides where a question is listed.
+    models_only(tmp_path, monkeypatch, trending=UNMARKED)
+    assert 'trending-now.html' not in standalone(archive.public_payload())
 
 
-# ---- asking only some questions -----------------------------------------------------------------------------------
+# ---- asking only the questions of a list ---------------------------------------------------------------------------
 
 def test_dry_run_for_a_list_shows_what_is_asked_and_what_is_left_out_and_calls_nothing(asking, tmp_path, monkeypatch, capsys):
     models_only(tmp_path, monkeypatch, trending=TREND)
     monkeypatch.delenv('LIVE_ALLOW_PAID_CALLS')
     calls = adapter(monkeypatch, AssertionError('a dry run calls no model'))
+    assert chatbots.list_ids('trending') == 'C005,C006' and chatbots.list_ids('main') == 'C001,C002,C003,C004'
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--list', 'trending', '--dry-run')
     assert code == 0 and 'DRY RUN: nothing was called and nothing was stored.' in out
-    for line in ('Run dated 2026-11-19.', 'Questions (2 of 6), each asked once of each model with its exact prompt:',
+    for line in ('Run dated 2026-11-19.', 'Questions (2 of the 6 on the list, named with --questions), each asked once of each model',
                  'C005  Is a made-up trend a real trend?', 'C006  Would a placeholder say yes to this?',
                  'Left out this time (4): C001, C002, C003, C004. They are not asked, and this run records nothing about them',
                  'Calls: 4 (2 questions x 2 models).', 'Worst-case estimate: $0.00',
-                 'python -m live_genesis.cli archive-chatbot-ask --list trending --max-usd 0.01'):
+                 'python -m live_genesis.cli archive-chatbot-ask --max-usd 0.01 --questions C005,C006'):
         assert line in out, line
     assert 'C001  ' not in out and not [secret for secret in SECRETS if secret in out] and 'PAID RUN' not in out
-    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--questions', 'C006, C002', '--models', 'api-one', '--dry-run')
-    assert code == 0 and 'Questions (2 of 6)' in out and 'Left out this time (4): C001, C003, C004, C005.' in out
-    assert 'Calls: 2 (2 questions x 1 models).' in out and 'archive-chatbot-ask --questions C002,C006 --max-usd' in out
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--list', 'main', '--dry-run')
-    assert code == 0 and 'Questions (4 of 6)' in out and 'Left out this time (2): C005, C006.' in out
+    assert code == 0 and 'Questions (4 of the 6 on the list' in out and 'Left out this time (2): C005, C006.' in out
     # Without the option the plan is what it always was: every question, and no line about leaving any out.
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--dry-run')
     assert code == 0 and 'Questions (6), each asked once' in out and 'Calls: 12 (6 questions x 2 models).' in out
-    assert 'Left out' not in out and 'python -m live_genesis.cli archive-chatbot-ask --max-usd 0.01' in out
+    assert 'Left out' not in out and out.rstrip().splitlines()[-2].endswith('archive-chatbot-ask --max-usd 0.01')
     nothing_stored(calls)
-    planned = chatbots.ask_plan(question_list='trending')
-    assert [q['id'] for q in planned['questions']] == TREND_IDS and planned['left_out'] == IDS and planned['calls'] == 4
-    assert {label: sorted(holds) for label, holds in planned['holds'].items()} == {'local-one': TREND_IDS, 'api-one': TREND_IDS}
-    assert planned['worst_case_usd'] < chatbots.ask_plan()['worst_case_usd']
 
 
-def test_an_unknown_list_or_id_is_refused_before_anything_else(asking, tmp_path, monkeypatch, capsys):
+def test_an_unknown_list_is_refused_before_anything_else_and_every_gate_holds(asking, tmp_path, monkeypatch, capsys):
     models_only(tmp_path, monkeypatch, trending=TREND)
     calls = adapter(monkeypatch)
-    for options, why in [(dict(question_list='hot'), '--list must be one of: main, trending. Nothing was asked.'),
-                         (dict(question_list=''), '--list must be one of: main, trending'),
-                         (dict(questions='C099'), '--questions names an id that is not a question of chatbots-config.json'),
-                         (dict(questions='C005,Q01'), '--questions names an id that is not a question'),
-                         (dict(questions=' , '), '--questions names an id that is not a question'),
-                         (dict(questions='C005', question_list='trending'), 'Give --list or --questions, not both')]:
-        with pytest.raises(archive.ArchiveRefused, match=re.escape(why)):
-            chatbots.ask_plan(**options)
-        # The refusal comes before every other gate: no cap, no opt-in, an unknown model label.
-        monkeypatch.delenv('LIVE_ALLOW_PAID_CALLS', raising=False)
-        with pytest.raises(archive.ArchiveRefused, match=re.escape(why)):
-            chatbots.ask(max_usd=float('nan'), only='nobody', **options)
-        monkeypatch.setenv('LIVE_ALLOW_PAID_CALLS', 'YES')
-    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--list', 'hot', '--max-usd', '1')
-    assert code != 0 and '--list must be one of: main, trending' in out and 'PAID RUN' not in out and 'Model answerers' not in out
-    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--questions', 'C099', '--dry-run')
-    assert code != 0 and '--questions names an id' in out and 'DRY RUN' not in out
+    monkeypatch.delenv('LIVE_ALLOW_PAID_CALLS')
+    for argv, why in [(('--list', 'hot', '--max-usd', '1'), '--list must be one of: main, trending. Nothing was asked.'),
+                      (('--list', '', '--dry-run'), '--list must be one of: main, trending'),
+                      (('--list', 'trending', '--questions', 'C005', '--dry-run'), 'Give --list or --questions, not both'),
+                      (('--questions', 'C099', '--dry-run'), '--questions names an id that is not a question')]:
+        code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', *argv)
+        assert code != 0 and why in out, argv
+        assert 'Model answerers' not in out and 'PAID RUN' not in out and 'DRY RUN' not in out      # before the plan is even printed
+    for name in ('hot', '', 'Trending', 'C005'):
+        with pytest.raises(archive.ArchiveRefused, match='--list must be one of: main, trending'):
+            chatbots.list_ids(name)
     nothing_stored(calls)
     # A list nobody is on: refused too (the four-question configuration has no trending question).
     models_only(tmp_path, monkeypatch)
-    with pytest.raises(archive.ArchiveRefused, match='No question of chatbots-config.json is on the list "trending"'):
-        chatbots.ask(max_usd=1, question_list='trending')
-    nothing_stored(calls)
-    # Every safety gate of a full ask holds for a partial one.
+    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--list', 'trending', '--max-usd', '1')
+    assert code != 0 and 'No question of chatbots-config.json is on the list "trending"' in out
+    # Every safety gate of a full ask holds for an ask of one list: the opt-in, the cap, the worst case under the cap.
     models_only(tmp_path, monkeypatch, trending=TREND)
-    monkeypatch.delenv('LIVE_ALLOW_PAID_CALLS')
-    with pytest.raises(archive.ArchiveRefused, match='Explicit opt-in required for paid calls'):
-        chatbots.ask(max_usd=1, question_list='trending')
+    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--list', 'trending', '--max-usd', '1')
+    assert code != 0 and 'Explicit opt-in required for paid calls' in out
     monkeypatch.setenv('LIVE_ALLOW_PAID_CALLS', 'YES')
-    for cap in (None, 0, -1, float('inf')):
-        with pytest.raises(archive.ArchiveRefused, match='--max-usd is required'):
-            chatbots.ask(max_usd=cap, question_list='trending')
-    with pytest.raises(archive.ArchiveRefused, match=r'Worst-case estimate \$0\.000\d+ for 4 calls exceeds --max-usd'):
-        chatbots.ask(max_usd=0.0000001, question_list='trending')
     code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--list', 'trending')
     assert code != 0 and '--max-usd is required' in out
+    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--list', 'trending', '--max-usd', '0.0000001')
+    assert code != 0 and 'for 4 calls exceeds --max-usd' in out
     nothing_stored(calls)
 
 
 def test_an_ask_of_the_trending_list_records_exactly_what_it_asked(asking, tmp_path, monkeypatch, capsys):
-    first, second, calls = main_then_trending(tmp_path, monkeypatch)
-    assert (first['run'], first['questions'], first['left_out'], first['new_questions']) == (1, IDS, [], IDS)
-    assert (second['run'], second['status'], second['collected_on']) == (2, 'complete', '2026-11-24')
-    assert (second['questions'], second['left_out'], second['new_questions'], second['first_run']) == (TREND_IDS, IDS, TREND_IDS, False)
-    assert second['answers'] == {'answered': 4, 'no_answer': 0, 'withheld': 0} and 'PLACEHOLDER' not in json.dumps(second)
+    adapter(monkeypatch, reply('first'))
+    assert chatbots.ask(max_usd=1)['questions'] == IDS
+    models_only(tmp_path, monkeypatch, trending=TREND)
+    monkeypatch.setattr(chatbots, 'today', lambda: NOV_24)
+    calls = adapter(monkeypatch, reply('first'))
+    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--list', 'trending', '--max-usd', '0.01')
+    assert code == 0 and 'PAID RUN: provider requests follow.' in out and 'Stored as run 2, collected 2026-11-24.' in out
+    assert '"status": "complete"' in out and 'PLACEHOLDER' not in out and not [secret for secret in SECRETS if secret in out]
     # Only the two trending prompts went out, once per model, through the paid path: one settled reservation per call.
-    prompts = [q['prompt'] for q in TREND]
-    assert [c['prompt'] for c in calls] == prompts * 2 and {c['system'] for c in calls} == {archive.SYSTEM_LINE}
+    assert [c['prompt'] for c in calls] == [q['prompt'] for q in TREND] * 2 and {c['system'] for c in calls} == {archive.SYSTEM_LINE}
     runs = rows('SELECT number,kind,collected_on,question_ids FROM archive_chatbot_runs ORDER BY number')
     assert [(r['number'], r['kind'], r['collected_on'], json.loads(r['question_ids'])) for r in runs] == [
         (1, 'asked', '2026-11-19', IDS), (2, 'asked', '2026-11-24', TREND_IDS)]
-    answers = rows('SELECT a.question_id,a.chatbot,a.changed,a.reservation_id,r.number FROM archive_chatbot_answers a '
+    answers = rows('SELECT a.question_id,a.changed,a.reservation_id,r.number FROM archive_chatbot_answers a '
                    'JOIN archive_chatbot_runs r ON r.id=a.run_id ORDER BY a.id')
     assert [(a['number'], a['question_id']) for a in answers] == [(1, q) for q in IDS] * 2 + [(2, q) for q in TREND_IDS] * 2
     assert {a['changed'] for a in answers} == {None}                                      # every one a first answer; nothing "changed"
     assert len({a['reservation_id'] for a in answers}) == 12 == len(rows("SELECT * FROM budget_reservations WHERE status='settled'"))
     assert not rows("SELECT * FROM budget_reservations WHERE status!='settled'")
-    audit = [r['detail'] if 'detail' in r else json.dumps(r) for r in rows('SELECT * FROM operator_audit')]
-    assert any('archive-chatbot-ask run 2' in line and 'questions C005,C006' in line for line in audit)
-    assert not any('archive-chatbot-ask run 1' in line and 'questions C0' in line for line in audit)
-    # The same day cannot hold a second run of an answerer, partial or not; --questions works like --list.
-    with pytest.raises(archive.ArchiveRefused, match='local-one already has a run dated 2026-11-24'):
-        chatbots.ask(max_usd=1, questions='C001')
-    monkeypatch.setattr(chatbots, 'today', lambda: datetime.date(2026, 11, 25))
-    code, out = run_cli(monkeypatch, capsys, 'archive-chatbot-ask', '--questions', 'C006', '--models', 'api-one', '--max-usd', '0.01')
-    assert code == 0 and '"questions": [\n  "C006"\n ]' in out and 'Stored as run 3, collected 2026-11-25' in out and 'PLACEHOLDER' not in out
-    assert json.loads(rows('SELECT question_ids FROM archive_chatbot_runs WHERE number=3')[0]['question_ids']) == ['C006']
-    assert rows('SELECT a.changed FROM archive_chatbot_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id WHERE r.number=3') == [{'changed': 0}]
+    assert rows('SELECT operation FROM operator_audit ORDER BY id')[-1]['operation'].endswith('questions C005,C006')
+    assert [r['first_run'] for r in rows('SELECT first_run FROM archive_chatbot_questions ORDER BY position')] == [1] * 4 + [2] * 2
 
 
-# ---- the pages when one date holds only some questions ----------------------------------------------------------------
+def test_a_subset_may_not_jump_over_a_question_nothing_has_asked(asking, tmp_path, monkeypatch):
+    # Questions are recorded in the file's order and a payload with a gap is malformed, so the gap is refused up front.
+    calls = adapter(monkeypatch)
+    for ids, why in (('C002', 'C001 comes before C002 in chatbots-config.json and has never been asked'),
+                     ('C001,C004', 'C002, C003 come before C004 in chatbots-config.json and have never been asked')):
+        with pytest.raises(archive.ArchiveRefused, match=why + '.*No paid call was made'):
+            chatbots.ask(max_usd=1, questions=ids)
+    nothing_stored(calls)
+    assert chatbots.ask(max_usd=1, questions='C001,C002')['questions'] == ['C001', 'C002']
+    monkeypatch.setattr(chatbots, 'today', lambda: NOV_24)
+    with pytest.raises(archive.ArchiveRefused, match='C003 comes before C004'):
+        chatbots.ask(max_usd=1, questions='C004')
+    assert chatbots.ask(max_usd=1, questions='C001,C003')['new_questions'] == ['C003']      # an earlier one again, and the next: fine
+    assert archive.payload_problem(archive.public_payload()) is None and len(calls) == 8
+
+
+# ---- the pages when one date holds only some questions -------------------------------------------------------------
 
 def test_two_dates_all_main_then_trending_only_no_false_change_no_gap_and_a_trending_tab(asking, tmp_path, monkeypatch):
     main_then_trending(tmp_path, monkeypatch)
     payload = archive.public_payload()
     block = payload['chatbots']
-    assert archive.payload_problem(payload) is None and payload['schema'] == 'live-genesis-archive/8'
-    assert [q.get('list') for q in block['questions']] == [None] * 4 + ['trending'] * 2
-    assert all(set(q) == set(chatbots.QUESTION_KEYS) for q in block['questions'][:4])   # a main question is what it always was
+    # The payload is the shape it always was: no mark on a question, the markers of a file with model answerers.
+    assert archive.payload_problem(payload) is None and payload['schema'] == 'live-genesis-archive/7'
+    assert all(set(q) == set(chatbots.QUESTION_KEYS) for q in block['questions'])
     assert [(run['collected_on'], run['questions']) for run in block['runs']] == [('2026-11-19', IDS), ('2026-11-24', TREND_IDS)]
     site_data = chatbots.site_payload(payload)
-    assert site_data['schema'] == 'live-genesis-chat-archive/4' and chatbots.site_problem(site_data) is None
+    assert site_data['schema'] == 'live-genesis-chat-archive/3' and chatbots.site_problem(site_data) is None
     assert chatbots.export_problem(site_data['chatbots']) is None
     site = standalone(payload)
     pages = {name: page for name, page in site.items() if name.endswith('.html')}
@@ -390,17 +348,16 @@ def test_two_dates_all_main_then_trending_only_no_false_change_no_gap_and_a_tren
     assert {'card/C005.html', 'card/C005-local-one.html', 'card/C005-api-one.html', 'data/C005.json'} <= set(site)
     assert '<meta property="og:title" content="Is a made-up trend a real trend?" />' in trend
     data = json.loads(site['data/C005.json'])
-    assert data['list'] == 'trending' and [(a['collected'], a['state'], a['changed']) for a in data['answers']] == [('2026-11-24', 'answered', None)] * 2
+    assert [(a['collected'], a['state'], a['changed']) for a in data['answers']] == [('2026-11-24', 'answered', None)] * 2
     old = json.loads(site['data/C001.json'])
-    assert 'list' not in old and [(a['collected'], a['state']) for a in old['answers']] == [('2026-11-19', 'answered')] * 2
+    assert set(data) == set(old) and [(a['collected'], a['state']) for a in old['answers']] == [('2026-11-19', 'answered')] * 2
     records = [json.loads(line) for line in site['data/answers.jsonl'].splitlines()]
     assert len(records) == 12 and sorted({(r['question_id'], r['collected']) for r in records}) == (
         [(q, '2026-11-19') for q in IDS] + [(q, '2026-11-24') for q in TREND_IDS])
     assert all(r['state'] == 'answered' and r['previous_id'] is None for r in records)
-    assert site['data/README.txt'] == archive_pages.README_CHAT_MODELS + archive_pages.README_LISTS
+    assert site['data/README.txt'] == archive_pages.README_CHAT_MODELS
     # "Just for fun": each model's style counts all six of its shown answers, whichever date they came on.
-    view = archive_pages._View(site_data)
-    styles = archive_pages._styles(view)
+    styles = archive_pages._styles(archive_pages._View(site_data))
     for label, name in (('local-one', 'sample-local:1b'), ('api-one', 'gpt-test-mini')):
         texts = [f"PLACEHOLDER first {name} to: {q['text']}" for q in chatbots.load_config()['items']]
         assert styles[label][0] == profiles.profile(texts) and styles[label][0]['count'] == 6 and styles[label][0]['step'] is not None
@@ -426,7 +383,7 @@ def test_december_asks_everything_together_and_compares_each_question_with_its_o
         return reply('second' if (model, ids[prompt]) in new else 'first')(model, prompt, n)
     adapter(monkeypatch, december)
     done = chatbots.ask(max_usd=1)
-    assert (done['run'], done['questions'], done['left_out']) == (3, IDS + TREND_IDS, [])
+    assert (done['run'], done['questions']) == (3, IDS + TREND_IDS)
     changed = {(a['chatbot'], a['question_id']): a['changed'] for a in rows(
         'SELECT a.chatbot,a.question_id,a.changed FROM archive_chatbot_answers a JOIN archive_chatbot_runs r ON r.id=a.run_id WHERE r.number=3')}
     # C001 is compared with 19 November, C006 with 24 November: each with its own answer before, whatever lay between.
@@ -448,40 +405,25 @@ def test_december_asks_everything_together_and_compares_each_question_with_its_o
     assert archive_pages._styles(archive_pages._View(chatbots.site_payload(payload)))['local-one'][0]['count'] == 12
 
 
-def test_a_question_recorded_but_never_asked_is_on_no_page_until_it_is(asking, tmp_path, monkeypatch):
-    # The first run of all is a partial one: every question is recorded (fixed) with it, only the main ones are asked.
-    models_only(tmp_path, monkeypatch, trending=TREND)
-    adapter(monkeypatch, reply('first'))
-    done = chatbots.ask(max_usd=1, question_list='main')
-    assert done['first_run'] is True and done['new_questions'] == IDS + TREND_IDS and done['questions'] == IDS
-    payload = archive.public_payload()
-    assert [q['id'] for q in payload['chatbots']['questions']] == IDS + TREND_IDS and payload['schema'] == 'live-genesis-archive/8'
-    site = standalone(payload)
-    assert not [name for name in site if 'C005' in name or 'C006' in name] and 'trending-now.html' not in site
-    assert nav(site['index.html']) == ['AI models', 'How it works'] and '<li>4 questions</li>' in site['index.html']
-    assert all(TREND[0]['text'] not in text for text in site.values())
-    with pytest.raises(KeyError):
-        archive_pages.render_chat_trending(payload)
-    with TestClient(app) as client:
-        assert client.get('/archive/trending-now.html').status_code == 404
-
-
-# ---- the tab only when there is something to show ---------------------------------------------------------------------
+# ---- the tab only when there is something to show ------------------------------------------------------------------
 
 def test_no_trending_tab_while_no_trending_question_has_an_answer_to_show(asking, tmp_path, monkeypatch):
     adapter(monkeypatch, reply('first'))
     chatbots.ask(max_usd=1)
-    plain = standalone(archive.public_payload())
-    assert 'trending-now.html' not in plain and all('rending' not in page for name, page in plain.items() if name.endswith('.html'))
-    assert nav(plain['index.html']) == ['AI models', 'How it works'] and archive.public_payload()['schema'] == 'live-genesis-archive/7'
-    # The trending questions are asked, and every reply is one the pages never show (cut off at the output limit).
+    # Trending questions in the file that nothing has asked: nowhere, and the bar is what it was.
     models_only(tmp_path, monkeypatch, trending=TREND)
+    payload = archive.public_payload()
+    plain = standalone(payload)
+    assert 'trending-now.html' not in plain and all('rending' not in page for name, page in plain.items() if name.endswith('.html'))
+    assert nav(plain['index.html']) == ['AI models', 'How it works'] and '<li>4 questions</li>' in plain['index.html']
+    with pytest.raises(KeyError):
+        archive_pages.render_chat_trending(payload)
+    # They are asked, and every reply is one the pages never show (cut off at the output limit).
     monkeypatch.setattr(chatbots, 'today', lambda: NOV_24)
     adapter(monkeypatch, lambda model, prompt, n: engine.Completion('PLACEHOLDER cut', 40, 12, 'length', finish_reason='length'))
-    done = chatbots.ask(max_usd=1, question_list='trending')
+    done = chatbots.ask(max_usd=1, questions=chatbots.list_ids('trending'))
     assert done['answers'] == {'answered': 0, 'no_answer': 4, 'withheld': 0}
     payload = archive.public_payload()
-    assert payload['schema'] == 'live-genesis-archive/8'
     site = standalone(payload)
     # No tab and no Trending page; the two questions are not lost: they are listed on the front page, with nothing to show yet.
     assert 'trending-now.html' not in site and nav(site['index.html']) == ['AI models', 'How it works']
@@ -490,68 +432,73 @@ def test_no_trending_tab_while_no_trending_question_has_an_answer_to_show(asking
     assert 'Trending question · added' in site['c/C005.html']
     with pytest.raises(KeyError):
         archive_pages.render_chat_trending(payload)
+    with TestClient(app) as client:                                                       # the local app: no such page yet
+        assert client.get('/archive/trending-now.html').status_code == 404
 
 
-def test_the_published_site_of_today_is_unchanged_and_still_passes_the_check(monkeypatch, tmp_path):
+def test_the_published_folder_passes_the_check_and_lists_each_question_once_by_rule(monkeypatch, tmp_path):
+    """The live `published/` folder changes whenever the owner publishes, so nothing here is a pinned figure: the rules
+    are checked against whatever it holds and whatever the checked-in configuration marks as trending."""
     published = REPO / 'published'
+    before = {path.name: path.read_bytes() for path in published.iterdir() if path.is_file()}
     data = json.loads((published / 'archive.json').read_text(encoding='utf-8'))
-    if any('list' in q for q in data['chatbots']['questions']):
-        pytest.skip('the owner has exported trending answers since: this test described the site before that')
+    block = data['chatbots']
     assert snapshot.check_published(published)['reviewed'] is True                        # --check accepts the file as it is
-    assert data['schema'] == chatbots.site_schema(data['chatbots']) and data['schema'] in ('live-genesis-chat-archive/2', 'live-genesis-chat-archive/3')
+    assert all(set(q) == set(chatbots.QUESTION_KEYS) for q in block['questions'])        # the file carries no list mark
     monkeypatch.setenv('LIVE_DB', str(tmp_path / 'no-such.sqlite'))
     snapshot.build_from_data(tmp_path / 'site', published, archive_only=True)
+    assert {path.name: path.read_bytes() for path in published.iterdir() if path.is_file()} == before   # never written to
     site = tmp_path / 'site' / 'archive'
-    assert not (site / 'trending-now.html').exists()
+    marked = chatbots.question_lists()
+    shown = {a['question'] for a in block['answers'] if a['state'] == 'answered' and not a['refused']}
+    trending = [q['id'] for q in block['questions'] if q['id'] in marked]
+    main = [q['id'] for q in block['questions'] if q['id'] not in marked]
     front = (site / 'index.html').read_text(encoding='utf-8')
-    count = len(data['chatbots']['questions'])
-    assert 'How it works' in nav(front) and 'Trending' not in nav(front) and len(nav(front)) == 2
-    assert f'<li>{count} questions</li>' in front and front.count('<article class="row">') == count
-    for page in site.rglob('*.html'):
-        text = page.read_text(encoding='utf-8')
-        assert 'rending' not in text and 'q-since' not in text, page.name
+    listed = lambda page: sorted(re.findall(r'class="row-open" href="c/(C\d{3})\.html"', page))  # noqa: E731
+    if not set(trending) & shown:
+        assert not (site / 'trending-now.html').exists() and 'Trending' not in nav(front)
+        assert listed(front) == [q['id'] for q in block['questions']]
+        return
+    page = (site / 'trending-now.html').read_text(encoding='utf-8')
+    assert nav(front)[1] == nav(page)[1] == 'Trending' and nav(front)[-1] == 'How it works' and len(nav(front)) == 3
+    assert listed(front) == main and listed(page) == sorted(trending)
+    assert f'<li>{len(main)} question{"" if len(main) == 1 else "s"}</li>' in front
+    assert f'<li>{len(trending)} question{"" if len(trending) == 1 else "s"}</li>' in page
+    for question_id in trending:
+        own = (site / 'c' / f'{question_id}.html').read_text(encoding='utf-8')
+        assert own.count('Trending question · added') == 1 and 'href="../trending-now.html">Back to the trending questions' in own
+        assert (site / 'card' / f'{question_id}.html').is_file() and (site / 'data' / f'{question_id}.json').is_file()
+    for question_id in main:
+        assert 'Trending question' not in (site / 'c' / f'{question_id}.html').read_text(encoding='utf-8')
 
 
-def test_hand_entered_replies_cover_trending_questions_too_and_the_schema_says_so(chat, tmp_path, monkeypatch):
+def test_hand_entered_replies_cover_trending_questions_too(chat, tmp_path, monkeypatch):
     models_only(tmp_path, monkeypatch, models=(), trending=TREND)
     sheet = chatbots.template('2026-11-14')
     assert [a['question'] for a in sheet['chatbots'][0]['answers']] == IDS + TREND_IDS    # a sheet holds every question, as before
     chatbots.import_collection(filled(tmp_path))
     payload = archive.public_payload()
-    assert payload['schema'] == 'live-genesis-archive/8' and archive.payload_problem(payload) is None
+    assert payload['schema'] == 'live-genesis-archive/6' and archive.payload_problem(payload) is None
     site_data = chatbots.site_payload(payload)
-    assert site_data['schema'] == 'live-genesis-chat-archive/4' and chatbots.export_problem(site_data['chatbots']) is None
-    assert not chatbots.has_models(site_data['chatbots']) and chatbots.has_lists(site_data['chatbots'])
+    assert site_data['schema'] == 'live-genesis-chat-archive/2' and chatbots.export_problem(site_data['chatbots']) is None
     site = standalone(payload)
     assert nav(site['index.html']) == ['Chat apps', 'Trending', 'How it works'] and '<li>4 questions</li>' in site['index.html']
     assert site['trending-now.html'].count('<li class="mini ') == 2 * 4                   # three apps and the Human, per question
-    # The marker must fit the file both ways, and a list other than "trending" is refused.
-    for edit, why in [(lambda d: d.update(schema='live-genesis-chat-archive/2'), 'the schema marker does not fit the file'),
-                      (lambda d: d.update(schema='live-genesis-chat-archive/3'), 'the schema marker does not fit the file'),
-                      (lambda d: d['chatbots']['questions'][4].update(list='hot'), 'chatbots: a question names a list that does not exist'),
-                      (lambda d: d['chatbots']['questions'][4].update(list=None), 'chatbots: a question names a list that does not exist')]:
-        bad = json.loads(json.dumps(site_data))
-        edit(bad)
-        assert chatbots.site_problem(bad) == why or why in chatbots.site_problem(bad)
-    moved = json.loads(json.dumps(site_data))
-    del moved['chatbots']['questions'][4]['list']
-    assert chatbots.site_problem(moved) is None                                           # well-formed, but not what the file's configuration says
-    assert chatbots.export_problem(moved['chatbots']) == 'chat-app question C005 is not the question chatbots-config.json holds under that id'
+    # A mark inside a published file is not part of its shape: the closed key check refuses it.
     extra = json.loads(json.dumps(site_data))
-    extra['chatbots']['questions'][0]['topic'] = 'x'
-    assert chatbots.closed_problem(extra['chatbots']) == 'chat-app question C001: unexpected key topic'
-    assert chatbots.closed_problem(site_data['chatbots']) is None                         # `list` is the one optional key of a question
+    extra['chatbots']['questions'][4]['list'] = 'trending'
+    assert chatbots.closed_problem(extra['chatbots']) == 'chat-app question C005: unexpected key list'
 
 
-# ---- the scripted sample and the docs ---------------------------------------------------------------------------------
+# ---- the scripted sample and the docs ------------------------------------------------------------------------------
 
 def test_the_scripted_sample_shows_the_tab_with_made_up_questions_labelled_as_a_sample(ready):
     archive.demo_archive()
     payload = archive.public_payload()
     block = payload['chatbots']
-    assert [(q['id'], q['added']) for q in block['questions'] if q.get('list') == 'trending'] == [('C007', '2026-10-01'), ('C008', '2026-10-01')]
+    assert [(q['id'], q['added']) for q in block['questions'][6:]] == [('C007', '2026-10-01'), ('C008', '2026-10-01')]
     assert [run['questions'][-1] for run in block['runs']] == ['C006', 'C006', 'C008', 'C008']   # they join at the third scripted date
-    assert [r['first_run'] for r in rows("SELECT first_run FROM archive_chatbot_questions WHERE list='trending'")] == [3, 3]
+    assert [r['first_run'] for r in rows("SELECT first_run FROM archive_chatbot_questions WHERE id IN ('C007','C008')")] == [3, 3]
     site = standalone(payload)
     trending = site['trending-now.html']
     assert_page_is_safe(trending)
@@ -561,14 +508,12 @@ def test_the_scripted_sample_shows_the_tab_with_made_up_questions_labelled_as_a_
     assert 'Everything here is a sample we wrote' in seen and trending.count('<article class="row">') == 2
     assert trending.count('tag-changed') == 1 and 'Socks with sandals: brave or wrong?' in trending   # one scripted change, at the fourth date
     assert '<li>6 questions</li>' in site['index.html'] and 'Socks with sandals' not in site['index.html']
+    # The sample's list is its own: the checked-in configuration's marks (C011 ...) play no part in a scripted site.
+    assert re.findall(r'class="row-open" href="c/(C\d{3})\.html"', trending) == ['C007', 'C008']
     for name in REAL_NAMES:
         assert name not in json.dumps(block) and all(name not in page for page in site.values())
     two = site['c/C007.html']
     assert re.findall(r'<span class="m-name">([^<]+)</span>', two) == ['Nov 2026', 'Oct 2026'] and 'Trending question · added' in two
-    assert site['data/README.txt'] == archive_pages.README_CHAT + archive_pages.README_LISTS
-
-
-REAL_NAMES = ('ChatGPT', 'Gemini', 'Grok', 'Copilot', 'Claude', 'Phi-4', 'Gemma', 'Granite', 'Qwen')
 
 
 def test_docs_say_how_to_ask_only_the_trending_questions():
@@ -577,8 +522,7 @@ def test_docs_say_how_to_ask_only_the_trending_questions():
         assert told in month, told
     doc = (REPO / 'docs' / 'ANSWERS-OVER-TIME.md').read_text(encoding='utf-8')
     section = doc.split('## The chat-app track', 1)[1].split('\n## ', 1)[0]
-    for told in ('"list": "trending"', '--list trending', '--questions', 'trending-now.html', 'archive_schema_v8.sql',
-                 'live-genesis-chat-archive/4', 'live-genesis-archive/8'):
+    for told in ('"list": "trending"', '--list trending', '--questions', 'trending-now.html'):
         assert told in section, told
     for name in ('SESSION-STATE.md', 'ROADMAP.md'):
         assert '--list trending' in (REPO / 'docs' / name).read_text(encoding='utf-8'), name
