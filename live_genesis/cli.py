@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from . import archive, controls, providers, trends
+from . import archive, controls, encrypted_backup, providers, trends
 from .core import budget_status, db_path, init_db, record_reconciliation
 
 
@@ -20,11 +20,13 @@ def main():
     rec.add_argument("--actual-usd",type=float,help="Charge for that one call as verified on the provider's bill (0 if it was not billed)")
     bak=sub.add_parser("backup",help="SQLite online backup to a NEW file (the copy holds everything the database holds)")
     bak.add_argument("destination")
+    encrypted_backup.add_parsers(sub)  # backup-encrypted, backup-check (free; no network; gpg asks for the passphrase itself)
     providers.add_parser(sub)  # check-provider and archive-check-endpoints (free; no model call)
     archive.add_parsers(sub)  # archive-lock, archive-plan, archive-dry-run, archive-status, demo-archive, the chat-app commands (free) and archive-run (PAID)
     trends.add_parsers(sub)  # archive-trends (free; no model; prints candidates only)
     args=parser.parse_args()
     if trends.handle_command(args,parser): return  # before init_db(): it reads a public feed and never touches the database
+    if encrypted_backup.handle_command(args,parser): return  # before init_db(): backup-check needs no database, and a missing one is never created
     init_db()  # idempotent; also adds tables introduced after a database was first created
     if archive.handle_command(args,parser): return
     if providers.handle_command(args,parser): return

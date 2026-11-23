@@ -258,7 +258,7 @@ def test_cli_commands_are_the_archive_and_the_accounting_only(isolated_db,monkey
     with pytest.raises(SystemExit):
         run_cli(monkeypatch,'--help')
     listed=capsys.readouterr().out
-    commands={'init','reconcile','backup','check-provider','archive-check-endpoints','archive-lock','archive-plan','archive-dry-run',
+    commands={'init','reconcile','backup','backup-encrypted','backup-check','check-provider','archive-check-endpoints','archive-lock','archive-plan','archive-dry-run',
               'archive-run','archive-status','demo-archive','archive-chatbot-template','archive-chatbot-import','archive-chatbot-ask','archive-trends'}
     choices=[name.strip() for name in listed[listed.index('{')+1:listed.index('}')].split(',')]
     assert set(choices)==commands, sorted(set(choices)^commands)
