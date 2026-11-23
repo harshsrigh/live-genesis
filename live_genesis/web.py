@@ -94,6 +94,11 @@ def archive_chatbots():
     return _archive_page(archive_pages.render_chatbots)
 
 
+def archive_chat_trending():
+    """`trending-now.html`: the chat-app track's trending questions. A 404 while none of them has an answer to show."""
+    return _archive_page(archive_pages.render_chat_trending)
+
+
 def archive_models():
     return _archive_page(archive_pages.render_models)
 
@@ -172,6 +177,8 @@ def add_public_routes(application: FastAPI) -> None:
     application.add_api_route("/archive/index.html", archive_index, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/trending.html", archive_trending, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/chatbots.html", archive_chatbots, methods=methods, include_in_schema=False)
+    application.add_api_route(f"/archive/{archive_pages.CHAT_TRENDING_PAGE}", archive_chat_trending, methods=methods,
+                              include_in_schema=False)
     application.add_api_route("/archive/models.html", archive_models, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/c/{name}", archive_chat_question, methods=methods, include_in_schema=False)
     application.add_api_route("/archive/data/{name}", archive_data, methods=methods, include_in_schema=False)

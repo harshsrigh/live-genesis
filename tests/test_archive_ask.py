@@ -609,7 +609,8 @@ def test_a_database_made_before_model_answerers_is_rebuilt_once_and_keeps_every_
     assert [len(before[t]) for t in chatbots.TABLE_NAMES] == [2, 6, 24, 4, 2, 8]
     core.init_db()
     core.init_db()                                                   # any number of times
-    gained = {'archive_chatbot_conditions': ('app',) + (None,) * 8, 'archive_chatbot_answers': (None,)}
+    gained = {'archive_chatbot_conditions': ('app',) + (None,) * 8, 'archive_chatbot_answers': (None,),
+              'archive_chatbot_questions': ('',)}                    # and, since question lists, '' (the main list) per question
     with core.connect() as cx:
         for table, expected in before.items():
             now = [tuple(r) for r in cx.execute(f'SELECT * FROM {table} ORDER BY rowid')]

@@ -511,7 +511,7 @@ def test_demo_archive_is_scripted_dated_monthly_and_separate(ready, monkeypatch)
     assert done == {'runs': 8, 'answerers': ['model-a', 'model-b', 'model-c'], 'answers': 8 * 20 * 3 - 2 + (6 + 4 + 2) * 3,
                     'trending_questions': 3,
                     # the chat-app track, scripted under made-up names (tests/test_archive_chatbots.py)
-                    'chatbot_runs': 4, 'chatbots': ['chat-app-a', 'chat-app-b', 'chat-app-c'], 'chatbot_answers': 84}
+                    'chatbot_runs': 4, 'chatbots': ['chat-app-a', 'chat-app-b', 'chat-app-c'], 'chatbot_answers': 100}
     runs = rows('SELECT number,kind,status,started_at FROM archive_runs ORDER BY number')
     assert [r['started_at'][:7] for r in runs] == [f'2026-{m:02d}' for m in range(4, 12)]
     assert {(r['kind'], r['status']) for r in runs} == {('demo', 'complete')}
@@ -652,10 +652,10 @@ def test_pages_for_the_demo_archive(ready):
     payload = archive.public_payload()
     pages = archive_pages.render_site(payload)
     core_ids, trend_ids = [f'Q{n:02d}' for n in range(1, 21)], ['T001', 'T002', 'T003']
-    chat_ids = [f'C{n:03d}' for n in range(1, 7)]
+    chat_ids = [f'C{n:03d}' for n in range(1, 9)]              # six scripted main questions and two trending ones
     chat_cards = {f'card/{q}-{s}.html' for q in chat_ids for s in ('chat-app-a', 'chat-app-b', 'chat-app-c', 'human')}
     every = core_ids + trend_ids + chat_ids
-    assert set(pages) == ({'index.html', 'models.html', 'trending.html', 'chatbots.html'} | {f'q/{i}.html' for i in core_ids}
+    assert set(pages) == ({'index.html', 'models.html', 'trending.html', 'trending-now.html', 'chatbots.html'} | {f'q/{i}.html' for i in core_ids}
                           | {f't/{i}.html' for i in trend_ids} | {f'c/{i}.html' for i in chat_ids}
                           | {f'card/{i}.html' for i in every} | chat_cards
                           | {f'data/{i}.json' for i in every} | {'data/answers.jsonl', 'data/README.txt'})

@@ -483,7 +483,8 @@ def test_a_database_made_before_groups_upgrades_in_place_and_keeps_every_row(cha
     with core.connect() as cx:
         columns = [r[1] for r in cx.execute('PRAGMA table_info(archive_chatbot_conditions)')]
         assert columns[columns.index('note') + 1:][:3] == ['group_id', 'group_name', 'kind']
-        gained = {'archive_chatbot_conditions': ('', '', 'app') + (None,) * 8, 'archive_chatbot_answers': (None,)}
+        gained = {'archive_chatbot_conditions': ('', '', 'app') + (None,) * 8, 'archive_chatbot_answers': (None,),
+                  'archive_chatbot_questions': ('',)}                # and, since question lists, '' (the main list) per question
         for table, expected in before.items():
             now = [tuple(r) for r in cx.execute(f'SELECT * FROM {table} ORDER BY rowid')]
             # Every row is kept, value for value; the conditions gain the two group columns, empty, and what came with model

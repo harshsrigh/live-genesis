@@ -243,6 +243,7 @@ h1, h2, h3, p, pre, ol, ul { margin: 0; }
 .chip-topic { background: var(--pane); border: 1px solid var(--accent); color: var(--accent); }
 .chip-note { font-size: 0.8125rem; color: var(--muted); }
 .chips .tag { align-self: auto; }
+.q-since { margin: 0; font-size: 0.8125rem; color: var(--muted); }
 .share { margin-left: auto; font-size: 0.875rem; font-weight: 600; }
 .hook { font-size: 0.8125rem; font-weight: 700; color: var(--accent); }
 .chips .hook { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

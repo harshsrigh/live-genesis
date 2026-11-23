@@ -56,6 +56,12 @@ What this module is, honestly:
   reported, a local model's digest, the pricing basis and the sampling sent. Everything said above
   about apps "by hand" holds for apps: no software contacts a chat APP. Hand-entered and asked runs
   may share a database; scripted demo runs share one with neither.
+* QUESTION LISTS, since 23 November 2026: a question may carry `"list": "trending"` (a newer question picked from
+  what people are searching for, added along the way); without the field it belongs to the main list. The list
+  is part of a question's recorded identity (its hash and the `list` column), so a recorded question never
+  moves; a main question hashes exactly as it did before lists. `cli archive-chatbot-ask --list trending` (or
+  `--questions C011,C012`) asks only some questions: the run then records exactly the ids it asked, and a
+  question a run did not ask has no entry for that date anywhere (never "no answer", never a change).
 """
 from __future__ import annotations
 
@@ -76,6 +82,10 @@ CONFIG_FILE = Path(__file__).resolve().parent / "archive_chatbots.json"
 CONFIG_FORMAT = "live-genesis-chatbots/3"   # /3: optional answerer groups (`groups`, and `group` on a chat app)
 FILE_FORMAT = "live-genesis-chatbot-collection/2"
 CHAT_QUESTION_ID = re.compile(r"C[0-9]{3}")
+MAIN_LIST, TRENDING_LIST = "main", "trending"
+# The lists a question can name with `list`. A question without the field is on the main list, and "main" is never
+# written anywhere: not in the configuration, the database ('' there), the hash or the payload.
+LISTS = (TRENDING_LIST,)
 QUESTION_SET = "chat"     # archive_chatbot_answers.question_set of every row written since the track got its own list
 # The fixed prefix of every chat-app prompt: prefix, a blank line, the question. It asks for a short, casual reply so
 # that the reply itself is short; recorded text is never shortened by us.
@@ -229,7 +239,10 @@ CREATE TABLE IF NOT EXISTS archive_chatbot_questions (
     id TEXT PRIMARY KEY CHECK(id GLOB 'C[0-9][0-9][0-9]'), position INTEGER NOT NULL,
     kind TEXT NOT NULL CHECK(kind IN ('manual','demo','asked')),
     text TEXT NOT NULL, prompt TEXT NOT NULL, hook TEXT NOT NULL DEFAULT '', added TEXT NOT NULL,
-    sha256 TEXT NOT NULL, first_run INTEGER NOT NULL REFERENCES archive_chatbot_runs(id)
+    sha256 TEXT NOT NULL, first_run INTEGER NOT NULL REFERENCES archive_chatbot_runs(id),
+    -- The list the question belongs to: '' the main list, 'trending' a question added along the way from what people
+    -- are searching for. Part of the recorded hash when it is not ''. Added in place (the last column).
+    list TEXT NOT NULL DEFAULT '' CHECK(list IN ('','trending'))
 );
 -- HUMAN: answers written by people, collected by hand. A kind of its own: never a chat app, never a model.
 CREATE TABLE IF NOT EXISTS archive_human_collections (
@@ -317,7 +330,9 @@ def migrate(cx) -> None:
     for "an answer needs a recorded chat-app question". One from before answerer groups
     (`tests/fixtures/archive_schema_v6.sql`) gains `group_id` and `group_name` on the conditions, empty
     in every stored row. One from before model answerers (`tests/fixtures/archive_schema_v7.sql`) has four
-    tables rebuilt once (`_rebuild`): same rows, same ids, same values. Nothing recorded is touched."""
+    tables rebuilt once (`_rebuild`): same rows, same ids, same values. One from before question lists
+    (`tests/fixtures/archive_schema_v8.sql`) gains the `list` column on the recorded questions, '' (the main
+    list) in every stored row. Nothing recorded is touched."""
     cx.executescript(TABLES)
     if "refused" not in {row[1] for row in cx.execute("PRAGMA table_info(archive_chatbot_answers)")}:
         cx.execute("ALTER TABLE archive_chatbot_answers ADD COLUMN refused INTEGER NOT NULL DEFAULT 0 CHECK(refused IN (0,1))")
@@ -327,6 +342,9 @@ def migrate(cx) -> None:
             cx.execute(f"ALTER TABLE archive_chatbot_conditions ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
     if _stale_tables(cx):
         _rebuild(cx)
+    if "list" not in {row[1] for row in cx.execute("PRAGMA table_info(archive_chatbot_questions)")}:
+        # Question lists: added in place; every recorded question reads as the main list, and its hash is what it was.
+        cx.execute("ALTER TABLE archive_chatbot_questions ADD COLUMN list TEXT NOT NULL DEFAULT '' CHECK(list IN ('','trending'))")
     cx.executescript("DROP TRIGGER IF EXISTS archive_chatbot_answers_locked_question;" + RULES)
 
 
@@ -463,9 +481,18 @@ def _canonical(body: Any) -> bytes:
 QUESTION_KEYS = ("id", "text", "prompt", "hook", "added")
 
 
+def list_of(question: dict) -> str:
+    """The list a question belongs to: "trending", or "main" for a question that names none."""
+    return question.get("list") or MAIN_LIST
+
+
 def question_hash(question: dict) -> str:
-    """The hash recorded for one question at its first import: id, text, prompt, hook and added date."""
-    return hashlib.sha256(_canonical({key: question[key] for key in QUESTION_KEYS})).hexdigest()
+    """The hash recorded for one question at its first import: id, text, prompt, hook and added date, and its
+    list when it names one. A question of the main list hashes exactly as it did before lists existed."""
+    body = {key: question[key] for key in QUESTION_KEYS}
+    if question.get("list"):
+        body["list"] = question["list"]
+    return hashlib.sha256(_canonical(body)).hexdigest()
 
 
 def config_hash(chatbots: list[dict], questions: list, human: dict | None = None, groups: list[dict] | None = None,
@@ -520,7 +547,8 @@ def load_config(path: str | Path | None = None) -> dict:
     is asked, never here) and the name may not hold a chat app's name; `human` is {name, meta}
     (the wording of the Human column); `aside` one short line of the owner's own (shown once on the
     chat-app page, never on a card; '' when none); `questions` the ids in the file's order; `items` the
-    questions ({id, text, prompt, hook, added}); `prompts` maps each id to its question.
+    questions ({id, text, prompt, hook, added}, and `list` "trending" on a question of that list: a main
+    question has no such key); `prompts` maps each id to its question.
     Strict shape; ids C001... in order without gaps; every prompt is PROMPT_PREFIX, a blank line, the
     question; no obviously political word in a question or a hook. Raises ArchiveRefused."""
     source = Path(path) if path is not None else CONFIG_FILE
@@ -609,8 +637,8 @@ def load_config(path: str | Path | None = None) -> dict:
     items: list[dict] = []
     for position, entry in enumerate(entries, 1):
         wanted = f"C{position:03d}"
-        if not isinstance(entry, dict) or not {"id", "text", "prompt", "added"} <= set(entry) <= set(QUESTION_KEYS):
-            raise bad(f"question {position} must hold id, text, prompt and added, and may have hook")
+        if not isinstance(entry, dict) or not {"id", "text", "prompt", "added"} <= set(entry) <= set(QUESTION_KEYS) | {"list"}:
+            raise bad(f"question {position} must hold id, text, prompt and added, and may have hook and list")
         if entry["id"] != wanted:
             raise bad(f"question {position} must have the id {wanted}: ids are C001, C002, ... in order, without gaps")
         text, hook = entry["text"], entry.get("hook", "")
@@ -630,7 +658,11 @@ def load_config(path: str | Path | None = None) -> dict:
         if term:
             raise bad(f'{wanted}: holds the word "{term}". This list has no political questions (a crude word check; '
                       "reword the question or leave it out)")
-        items.append({"id": wanted, "text": text, "prompt": entry["prompt"], "hook": hook, "added": entry["added"]})
+        if "list" in entry and entry["list"] not in LISTS:
+            raise bad(f'{wanted}: list must be "{TRENDING_LIST}", or left out for the main list')
+        # A main question is the dict it always was: no `list` key, so the configuration hash and its own hash are unchanged.
+        items.append({"id": wanted, "text": text, "prompt": entry["prompt"], "hook": hook, "added": entry["added"],
+                      **({"list": entry["list"]} if "list" in entry else {})})
     if len({q["text"].casefold() for q in items}) != len(items):
         raise bad("two questions have the same text")
     return {"status": raw["status"], "groups": groups, "chatbots": chatbots, "models": models, "human": human,
@@ -1123,16 +1155,16 @@ def _record_questions(cx, run_id: int, kind: str, items: list[dict]) -> list[str
     known = {row[0] for row in cx.execute("SELECT id FROM archive_chatbot_questions")}
     new = [q for q in items if q["id"] not in known]
     for question in new:
-        cx.execute("INSERT INTO archive_chatbot_questions(id,position,kind,text,prompt,hook,added,sha256,first_run) "
-                   "VALUES (?,?,?,?,?,?,?,?,?)",
+        cx.execute("INSERT INTO archive_chatbot_questions(id,position,kind,text,prompt,hook,added,sha256,first_run,list) "
+                   "VALUES (?,?,?,?,?,?,?,?,?,?)",
                    (question["id"], int(question["id"][1:]), kind, question["text"], question["prompt"], question["hook"],
-                    question["added"], question_hash(question), run_id))
+                    question["added"], question_hash(question), run_id, question.get("list", "")))
     return [q["id"] for q in new]
 
 
 def questions_problem(cx, config: dict) -> str | None:
     """Why the configuration's question list does not fit what this database recorded, or None: a recorded
-    question is gone, or its text, prompt, hook or date was changed."""
+    question is gone, or its text, prompt, hook, date or list was changed."""
     recorded = {row["id"]: row["sha256"] for row in cx.execute("SELECT id,sha256 FROM archive_chatbot_questions WHERE kind!='demo'")}
     dropped = sorted(set(recorded) - set(config["questions"]))
     if dropped:
@@ -1140,8 +1172,8 @@ def questions_problem(cx, config: dict) -> str | None:
                 "A recorded question never disappears: restore it")
     edited = sorted(i for i in recorded if question_hash(config["prompts"][i]) != recorded[i])
     if edited:
-        return (f"{CONFIG_FILE.name}: {', '.join(edited)} was changed since it was first imported (text, prompt, hook or "
-                "date). A recorded question never changes: restore it and add a new question instead")
+        return (f"{CONFIG_FILE.name}: {', '.join(edited)} was changed since it was first imported (text, prompt, hook, "
+                "date or list). A recorded question never changes: restore it and add a new question instead")
     return None
 
 
@@ -1273,16 +1305,41 @@ def _model_answerers(config: dict, only: str | None) -> list[dict]:
     return models
 
 
-def ask_plan(only: str | None = None) -> dict:
+def _asked_questions(config: dict, questions: str | None, question_list: str | None) -> list[dict]:
+    """The questions one ask covers, in the file's order: all of them, or only those of one list
+    (`question_list`, --list: "main" or "trending"), or only the named ids (`questions`, --questions: comma
+    separated). An unknown list or id, both options together, or a choice that leaves nothing is refused."""
+    items = config["items"]
+    if questions is None and question_list is None:
+        return list(items)
+    if questions is not None and question_list is not None:
+        raise _refused("Give --list or --questions, not both. Nothing was asked.")
+    if question_list is not None:
+        if question_list not in (MAIN_LIST,) + LISTS:
+            raise _refused(f"--list must be one of: {', '.join((MAIN_LIST,) + LISTS)}. Nothing was asked.")
+        chosen = [q for q in items if list_of(q) == question_list]
+        if not chosen:
+            raise _refused(f"No question of {CONFIG_FILE.name} is on the list \"{question_list}\". Nothing was asked.")
+        return chosen
+    wanted = [name.strip() for name in questions.split(",") if name.strip()]
+    if not wanted or any(name not in config["prompts"] for name in wanted):
+        raise _refused(f"--questions names an id that is not a question of {CONFIG_FILE.name} (ids look like C011, separated "
+                       "by commas). Nothing was asked.")
+    return [q for q in items if q["id"] in wanted]
+
+
+def ask_plan(only: str | None = None, *, questions: str | None = None, question_list: str | None = None) -> dict:
     """Free; contacts nothing and stores nothing. What `cli archive-chatbot-ask` would do: the model answerers
     of the configuration (`only`, --models: a subset of their labels), each resolved through LIVE_ARCHIVE_MODELS
     and the endpoint settings exactly as `archive-run` resolves it (`archive.answerers`, `archive.resolve`),
-    the questions, the number of calls (one per model and question) and the worst-case estimate.
+    the questions (all, or the subset `_asked_questions` picks; `left_out` are the others), the number of
+    calls (one per model and question) and the worst-case estimate.
     Raises ArchiveRefused / controls.ConfigError when a setting is unusable.
 
     Each entry of `models` is the resolved answerer with `label` = the chat-track label, `answerer` = the
     LIVE_ARCHIVE_MODELS label and `chat` = the configuration entry."""
     config = load_config()
+    chosen = _asked_questions(config, questions, question_list)     # an unknown list or id is refused before anything else
     wanted = _model_answerers(config, only)
     configured = {answerer["label"]: answerer for answerer in archive.answerers()}
     missing = [f"{model['label']} (answerer {model['answerer']})" for model in wanted if model["answerer"] not in configured]
@@ -1293,9 +1350,12 @@ def ask_plan(only: str | None = None) -> dict:
     models = [{**answerer, "label": by_answerer[answerer["label"]]["label"], "answerer": answerer["label"],
                "chat": by_answerer[answerer["label"]]} for answerer in resolved]
     holds = {a["label"]: {q["id"]: archive.call_hold(q["prompt"], a["input_rate"], a["output_rate"], a["max_output_tokens"])
-                          for q in config["items"]} for a in models}
-    return {"config": config, "collected_on": today().isoformat(), "models": models, "questions": config["items"],
-            "calls": len(models) * len(config["items"]), "holds": holds, "spend_limit_usd": budget["spend_limit_usd"],
+                          for q in chosen} for a in models}
+    option = f"--list {question_list} " if question_list is not None else \
+        f"--questions {','.join(q['id'] for q in chosen)} " if questions is not None else ""
+    return {"config": config, "collected_on": today().isoformat(), "models": models, "questions": chosen,
+            "left_out": [q["id"] for q in config["items"] if q not in chosen], "option": option,
+            "calls": len(models) * len(chosen), "holds": holds, "spend_limit_usd": budget["spend_limit_usd"],
             "worst_case_usd": math.fsum(value for per in holds.values() for value in per.values())}
 
 
@@ -1307,8 +1367,14 @@ def render_ask_plan(planned: dict) -> str:
              "Model answerers (label = endpoint:model, shown as), in the order they are asked:"]
     lines += [f"  {a['label']} = {a['endpoint']}:{a['model']}, shown as \"{a['chat']['name']}\", {basis[a['basis']]}, "
               f"output limit {a['max_output_tokens']} tokens" for a in planned["models"]]
-    lines.append(f"Questions ({len(planned['questions'])}), each asked once of each model with its exact prompt:")
+    left_out = planned.get("left_out") or []
+    total = len(planned["questions"]) + len(left_out)
+    lines.append(f"Questions ({len(planned['questions'])}{f' of {total}' if left_out else ''}), each asked once of each model "
+                 "with its exact prompt:")
     lines += [f"  {q['id']}  {q['text']}" for q in planned["questions"]]
+    if left_out:
+        lines.append(f"Left out this time ({len(left_out)}): {', '.join(left_out)}. They are not asked, and this run records "
+                     "nothing about them: their pages stay as they are.")
     if any(a["basis"] == providers.BASIS_FREE for a in planned["models"]):
         lines.append("  " + archive.DECLARED_FREE_NOTE)
     lines += [f"Calls: {planned['calls']} ({len(planned['questions'])} questions x {len(planned['models'])} models).",
@@ -1316,15 +1382,22 @@ def render_ask_plan(planned: dict) -> str:
               "If a call fails: " + archive.FAILURE_RULE,
               "The PAID command, to be run only on the owner's explicit word (--max-usd and LIVE_ALLOW_PAID_CALLS=YES are "
               "required for every run, a free one included):",
-              f"  python -m live_genesis.cli archive-chatbot-ask --max-usd {controls.suggested_cap(planned['worst_case_usd'])}"]
+              f"  python -m live_genesis.cli archive-chatbot-ask {planned.get('option', '')}--max-usd "
+              f"{controls.suggested_cap(planned['worst_case_usd'])}"]
     return "\n".join(lines)
 
 
-def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0) -> dict:
+def ask(*, max_usd: float, only: str | None = None, questions: str | None = None, question_list: str | None = None,
+        pause_seconds: float = 0.0) -> dict:
     """`cli archive-chatbot-ask`: PAID when `engine.infer` is the real adapter. Run only on the owner's explicit
     instruction. Asks every model answerer of the configuration each chat-app question ONCE, with the question's
     exact prompt as the one user message (and the model track's fixed system line, `archive.SYSTEM_LINE`), and
     stores the replies as one run of kind `asked` dated today.
+
+    `question_list` (--list) or `questions` (--questions) asks only some questions (`_asked_questions`; an unknown
+    list or id is refused before anything else is looked at). The run row then records exactly the ids it asked:
+    a question it left out has no entry for this date, so no page, data file or `changed` flag treats it as
+    unanswered. Every question of the configuration is still recorded (fixed) by the first run, asked or not.
 
     Refuses (ArchiveRefused / controls.ConfigError), before any provider request and before anything is
     stored, when: no model answerer is configured or one names an answerer LIVE_ARCHIVE_MODELS does not list;
@@ -1345,12 +1418,15 @@ def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0) 
     reply is judged by `classify_asked`; a reply the guards match is stored as withheld, without its text.
     Returns counts, categories and reservation ids only: never the text of a reply."""
     from . import engine   # lazy: only this command needs the adapter
-    _model_answerers(load_config(), only)
+    first_look = load_config()
+    _asked_questions(first_look, questions, question_list)
+    _model_answerers(first_look, only)
     if os.getenv("LIVE_ALLOW_PAID_CALLS") != "YES":
         raise _refused("Explicit opt-in required for paid calls: set LIVE_ALLOW_PAID_CALLS=YES")
     if isinstance(max_usd, bool) or not isinstance(max_usd, (int, float)) or not math.isfinite(max_usd) or max_usd <= 0:
         raise _refused("--max-usd is required and must be a finite positive number. No paid call was made.")
-    planned = ask_plan(only)
+    planned = ask_plan(only, questions=questions, question_list=question_list)
+    asked_ids = [q["id"] for q in planned["questions"]]
     config, models, day, worst = planned["config"], planned["models"], planned["collected_on"], planned["worst_case_usd"]
     archive._check_ready(models)
     if engine.infer is not engine.REAL_INFER:
@@ -1431,7 +1507,7 @@ def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0) 
                     cx.execute("BEGIN IMMEDIATE")
                     if run["id"] is None:
                         run["first"] = not (_has_run(cx, MANUAL) or _has_run(cx, ASKED))
-                        run["id"], run["number"] = _open_run(cx, ASKED, day, config["questions"], config["sha256"], "", stamp)
+                        run["id"], run["number"] = _open_run(cx, ASKED, day, asked_ids, config["sha256"], "", stamp)
                         run["new_questions"] = _record_questions(cx, run["id"], ASKED, config["items"])
                     if not state_of["recorded"]:
                         _store_model(cx, run["id"], answerer["chat"], answerer,
@@ -1474,9 +1550,12 @@ def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0) 
         with core.connect() as cx:
             outcomes = ", ".join(f"{a['label']} {progress[a['label']]['outcome']} {progress[a['label']]['recorded']}" for a in models)
             controls.audit(cx, f"archive-chatbot-ask {'run ' + str(run['number']) if run['id'] else '(nothing stored)'}: "
-                               f"collected {day}, {status}, {outcomes}, config sha256 {config['sha256'][:16]}")
+                               f"collected {day}, {status}, {outcomes}, "
+                               + (f"questions {','.join(asked_ids)}, " if planned["left_out"] else "")
+                               + f"config sha256 {config['sha256'][:16]}")
     return {"run": run["number"], "collected_on": day, "status": status, "stop_reason": reason,
-            "first_run": run["first"], "new_questions": run["new_questions"], "answers": counts,
+            "first_run": run["first"], "new_questions": run["new_questions"], "questions": asked_ids,
+            "left_out": planned["left_out"], "answers": counts,
             "estimated_usd": round(math.fsum(spent), 6), "max_usd": float(max_usd),
             "models": [{"chatbot": a["label"], "answerer": a["answerer"], "endpoint": a["endpoint"], "model": a["model"],
                         "pricing_basis": a["basis"], **progress[a["label"]]} for a in models]}
@@ -1548,15 +1627,34 @@ DEMO_QUESTIONS = (
         "chat-app-c": ((2, "Yes, until they ask me to draw a hand."),),
         HUMAN_LABEL: ((2, "My ten-year-old beat it at tic-tac-toe, so no.", "quoted"),)}),
 )
+# Two scripted questions of the "trending" list: added at the third scripted date and asked from then on, so the
+# sample site shows the Trending tab and questions that start later than the others. Made up like everything here:
+# they are not taken from any list of searches.
+DEMO_TRENDING_FROM = 3
+DEMO_TRENDING = (
+    ("Socks with sandals: brave or wrong?", "Socks with sandals?", {
+        "chat-app-a": ((3, "Brave. Wrong, but brave."),),
+        "chat-app-b": ((3, "Wrong, and my toes agree."), (4, "Brave, if the socks have little avocados on them.")),
+        "chat-app-c": ((3, "It's a cry for help with good arch support."),),
+        HUMAN_LABEL: ((3, "My dad does it and he has never been happier.", "quoted"),)}),
+    ("Does the milk go in before the cereal?", "Milk first or cereal first?", {
+        "chat-app-a": ((3, "Cereal first. Milk first is how you get soup with regrets."),),
+        "chat-app-b": ((3, "Cereal first, unless you enjoy chaos."),),
+        "chat-app-c": ((3, "Milk first, and I'd like to speak to nobody about it."),),
+        HUMAN_LABEL: ((3, "Nearly everyone said cereal first; two people said bowl last.", "summarised"),)}),
+)
 # (question position, answerer, run) scripted as a reply that is stored and never shown, so the "left out" line is real.
 DEMO_SKIPPED = {(4, "chat-app-b", 3): f"{SKIPPED}: the app showed an error (scripted)"}
 DEMO_REFUSED = {(2, "chat-app-a", 4): "I'd rather not say anything unkind about anyone."}
 
 
 def demo_items() -> list[dict]:
-    """The scripted question list as question dicts (ids C001...)."""
-    return [{"id": f"C{n:03d}", "text": text, "prompt": prompt_of(text), "hook": hook, "added": DEMO_DATES[0]}
+    """The scripted question list as question dicts (ids C001...): the main questions, then the trending ones."""
+    main = [{"id": f"C{n:03d}", "text": text, "prompt": prompt_of(text), "hook": hook, "added": DEMO_DATES[0]}
             for n, (text, hook, _script) in enumerate(DEMO_QUESTIONS, 1)]
+    return main + [{"id": f"C{n:03d}", "text": text, "prompt": prompt_of(text), "hook": hook,
+                    "added": DEMO_DATES[DEMO_TRENDING_FROM - 1], "list": TRENDING_LIST}
+                   for n, (text, hook, _script) in enumerate(DEMO_TRENDING, len(main) + 1)]
 
 
 def _at(steps: tuple, run: int):
@@ -1566,24 +1664,26 @@ def _at(steps: tuple, run: int):
 def demo(cx, sets: list[dict] | None = None) -> dict:
     """Scripted chat-app runs for `cli demo-archive`, written inside its transaction. Three made-up apps
     and "Human (sample)", four dated runs, the scripted question list above, every row source `demo`.
+    The two scripted trending questions join at the third date: the runs before it neither list nor record them.
     No app and no person was asked. `sets` is ignored (the track has its own questions)."""
-    items = demo_items()
-    ids = [q["id"] for q in items]
+    every = demo_items()
+    scripts = DEMO_QUESTIONS + DEMO_TRENDING
     groups = [dict(DEFAULT_GROUP)]      # one group, as on the real site today; several groups are covered by the tests
     apps = [{"label": label, "name": name, "maker": maker, "attribution": DEMO_ATTRIBUTION.get(label, ""), "group": groups[0]["id"]}
             for label, name, maker in DEMO_APPS]
-    digest = config_hash(apps, items, DEMO_HUMAN, groups)
     written = 0
     for number, day in enumerate(DEMO_DATES, 1):
         stamp = f"{day}T12:00:00+00:00"
-        run_id, _ = _open_run(cx, DEMO, day, ids, digest, "", stamp)
+        items = [q for q in every if "list" not in q or number >= DEMO_TRENDING_FROM]   # the list as it stood on that date
+        ids = [q["id"] for q in items]
+        run_id, _ = _open_run(cx, DEMO, day, ids, config_hash(apps, items, DEMO_HUMAN, groups), "", stamp)
         _record_questions(cx, run_id, DEMO, items)
         for app in apps:
             label = app["label"]
             if DEMO_FIRST_RUN.get(label, 1) > number:
                 continue
             _store_conditions(cx, run_id, app, _at(DEMO_CONDITIONS[label], number)[1], groups)
-            for position, (question, (_text, _hook, script)) in enumerate(zip(items, DEMO_QUESTIONS), 1):
+            for position, (question, (_text, _hook, script)) in enumerate(zip(items, scripts), 1):
                 skipped, refusal = DEMO_SKIPPED.get((position, label, number)), DEMO_REFUSED.get((position, label, number))
                 if skipped:
                     answer = {"question": question["id"], "state": "no_answer", "reason": skipped, "text": None}
@@ -1594,7 +1694,7 @@ def demo(cx, sets: list[dict] | None = None) -> dict:
                 written += 1
         if DEMO_FIRST_RUN[HUMAN_LABEL] <= number:
             _store_human_collection(cx, run_id, DEMO_HUMAN, {"source": DEMO_HUMAN_SOURCE, "collected_on": day, "count": None})
-            for question, (_text, _hook, script) in zip(items, DEMO_QUESTIONS):
+            for question, (_text, _hook, script) in zip(items, scripts):
                 _from, text, manner = _at(script[HUMAN_LABEL], number)
                 state, reason, kept = classify_reply(text, HUMAN_CHARS)
                 _store_human(cx, run_id, DEMO, day, {"question": question["id"], "state": state, "reason": reason, "text": kept,
@@ -1643,7 +1743,9 @@ def public_block(cx, tables: set[str]) -> dict | None:
     payload then has no `chatbots` key at all and is what it always was). Runs are ordered by the day
     the owner asked. `groups` are the answerer groups ({id, name}) in the order their first app was
     recorded, and every app carries its `group`; a row stored before groups existed belongs to the default
-    group. `questions` are the recorded questions (id, text, prompt, hook, added); `human` is
+    group. `questions` are the recorded questions (id, text, prompt, hook, added; and `list` "trending" on a
+    question of that list, a key no main question has); a run's `questions` are the ids THAT run asked, which
+    may be only some of them (`cli archive-chatbot-ask --list`); `human` is
     the Human column's wording ({name, meta}) or None when no human answer was ever collected; each run
     carries the apps' `conditions` and `human` ({source, collected_on, count} or None). A reply the owner
     marked as a refusal is here as a fact (`refused`: true, no text; `_public_answer`) and on no page; a
@@ -1657,8 +1759,10 @@ def public_block(cx, tables: set[str]) -> dict | None:
     database without such a run: its block is what it always was."""
     if not set(TABLE_NAMES) <= tables:
         return None
-    questions = [{key: row[key] for key in QUESTION_KEYS}
-                 for row in cx.execute("SELECT * FROM archive_chatbot_questions ORDER BY position")]
+    # `list` only on a question of a list other than the main one (.get: a database opened read-only before migrate()
+    # ran has no such column): a block without such a question is what it always was.
+    questions = [{**{key: row[key] for key in QUESTION_KEYS}, **({"list": row["list"]} if row.get("list") else {})}
+                 for row in (dict(r) for r in cx.execute("SELECT * FROM archive_chatbot_questions ORDER BY position"))]
     own = {q["id"] for q in questions}
     # A run from the track's first shape (its ids referred to the core and trending lists) stays in the database and is
     # never shown: it has no question of this track's own list.
@@ -1749,9 +1853,16 @@ def has_models(block: Any) -> bool:
     return isinstance(block, dict) and any(isinstance(app, dict) and "kind" in app for app in block.get("apps") or ())
 
 
+def has_lists(block: Any) -> bool:
+    """Does a (well-formed) block hold a question of a list other than the main one (`list` on the question)?
+    Decides the schema marker of the payload around it, before the model answerers do."""
+    return isinstance(block, dict) and any(isinstance(q, dict) and "list" in q for q in block.get("questions") or ())
+
+
 def payload_schema(block: dict) -> str:
     """The schema marker of a whole payload that holds this block (archive.public_payload)."""
-    return archive.PAYLOAD_SCHEMA_ASKED if has_models(block) else archive.PAYLOAD_SCHEMA_CHATBOTS
+    return archive.PAYLOAD_SCHEMA_LISTS if has_lists(block) else archive.PAYLOAD_SCHEMA_ASKED if has_models(block) \
+        else archive.PAYLOAD_SCHEMA_CHATBOTS
 
 
 def _text_problem(answer: dict, limit: int) -> bool:
@@ -1805,6 +1916,8 @@ def block_problem(block: Any, question_ids: set[str] | None = None) -> str | Non
                 or len(question["prompt"]) > QUESTION_CHARS + 400 or not archive.ADDED_DATE.fullmatch(question["added"]) \
                 or "\n" in question["text"] or "\n" in question["hook"]:
             return "chatbots: a question lacks a field, its id is out of order, or its prompt does not end with the question"
+        if "list" in question and question["list"] not in LISTS:
+            return "chatbots: a question names a list that does not exist"
         ids.append(question["id"])
     if len(ids) > MAX_CHATBOT_QUESTIONS:
         return "chatbots: too many questions"
@@ -1910,7 +2023,7 @@ def closed_problem(block: dict) -> str | None:
     checks += [("a group", group, GROUP_KEYS, ()) for group in block["groups"]]
     checks += [("a chat app", app, APP_KEYS, ("kind",)) for app in block["apps"]]
     checks += [("the human column", block["human"], HUMAN_KEYS, ())] if block["human"] is not None else []
-    checks += [(f"chat-app question {q['id']}", q, QUESTION_KEYS, ()) for q in block["questions"]]
+    checks += [(f"chat-app question {q['id']}", q, QUESTION_KEYS, ("list",)) for q in block["questions"]]
     checks += [(f"chat-app run {run['number']}", run, RUN_KEYS, ("models",)) for run in block["runs"]]
     checks += [(f"a model answerer of chat-app run {run['number']}", facts, MODEL_KEYS, ())
                for run in block["runs"] for facts in run.get("models", {}).values()]
@@ -1969,8 +2082,16 @@ SITE_SCHEMA = "live-genesis-chat-archive/2"   # /2: the block holds `groups` and
 # /3: the block also holds a model answerer (`kind` on its app entry, `models` on its runs, answers of source `asked`).
 # Written exactly when it does: a site without one is still /2, byte for byte.
 SITE_SCHEMA_ASKED = "live-genesis-chat-archive/3"
-SITE_SCHEMAS = (SITE_SCHEMA, SITE_SCHEMA_ASKED)
+# /4: a question of the block carries `list` (a trending question), with or without a model answerer. Written exactly
+# when one does: a site whose questions are all on the main list is still /2 or /3, byte for byte.
+SITE_SCHEMA_LISTS = "live-genesis-chat-archive/4"
+SITE_SCHEMAS = (SITE_SCHEMA, SITE_SCHEMA_ASKED, SITE_SCHEMA_LISTS)
 SITE_KEYS = ("schema", "chatbots")
+
+
+def site_schema(block: Any) -> str:
+    """The schema marker of a chat-app-only payload that holds this block."""
+    return SITE_SCHEMA_LISTS if has_lists(block) else SITE_SCHEMA_ASKED if has_models(block) else SITE_SCHEMA
 
 
 def site_payload(payload: dict) -> dict:
@@ -1981,7 +2102,7 @@ def site_payload(payload: dict) -> dict:
         return payload
     empty = {"groups": [], "apps": [], "human": None, "questions": [], "runs": [], "answers": [], "human_answers": []}
     block = payload.get("chatbots") or empty
-    return {"schema": SITE_SCHEMA_ASKED if has_models(block) else SITE_SCHEMA, "chatbots": block}
+    return {"schema": site_schema(block), "chatbots": block}
 
 
 def site_problem(data: Any) -> str | None:
@@ -1992,8 +2113,9 @@ def site_problem(data: Any) -> str | None:
     if data.get("schema") not in SITE_SCHEMAS:
         return "unknown schema"
     problem = archive._keys_problem("top level", data, SITE_KEYS) or block_problem(data["chatbots"])
-    if problem is None and data["schema"] != (SITE_SCHEMA_ASKED if has_models(data["chatbots"]) else SITE_SCHEMA):
-        return "the schema marker does not fit the file (/3 exactly when it holds a model answerer)"
+    if problem is None and data["schema"] != site_schema(data["chatbots"]):
+        return ("the schema marker does not fit the file (/4 exactly when a question names a list, else /3 exactly when it "
+                "holds a model answerer)")
     return problem
 
 
@@ -2062,10 +2184,12 @@ def add_parsers(sub) -> None:
     import_p.add_argument("file", metavar="FILE")
     import_p.add_argument("--dry-run", action="store_true", help="Check everything and print what would be stored; store nothing")
     import_p.add_argument("--allow-old", action="store_true", help=f"Accept a collected_on more than {MAX_AGE_DAYS} days ago")
-    ask_p = sub.add_parser("archive-chatbot-ask", help="PAID: Answers Over Time, chat-app questions: ask every MODEL answerer of archive_chatbots.json (kind \"model\") each question once and store the replies as one run dated today. Needs the owner's explicit decision, the paid opt-in and --max-usd. With --dry-run: free, prints the plan and calls nothing")
+    ask_p = sub.add_parser("archive-chatbot-ask", help="PAID: Answers Over Time, chat-app questions: ask every MODEL answerer of archive_chatbots.json (kind \"model\") each question once (or only some: --list, --questions) and store the replies as one run dated today. Needs the owner's explicit decision, the paid opt-in and --max-usd. With --dry-run: free, prints the plan and calls nothing")
     ask_p.add_argument("--max-usd", type=float, default=None, help="Required for a run: hard cap on this run's estimated USD; the worst case must fit under it before the first call")
     ask_p.add_argument("--dry-run", action="store_true", help="Print the plan (models, questions, calls, worst-case estimate); call nothing, store nothing")
     ask_p.add_argument("--models", help="Comma-separated labels of model answerers in archive_chatbots.json (default: all)")
+    ask_p.add_argument("--list", dest="question_list", metavar="LIST", default=None, help="Ask only the questions of one list: trending (the questions marked \"list\": \"trending\" in archive_chatbots.json) or main (default: every question)")
+    ask_p.add_argument("--questions", metavar="IDS", default=None, help="Ask only these questions: comma-separated ids such as C011,C012 (default: every question; not together with --list)")
     ask_p.add_argument("--pause", type=float, default=0.0, help="Seconds to wait between calls (an endpoint's own _PAUSE_SECONDS applies when it is longer)")
 
 
@@ -2080,7 +2204,7 @@ def handle_command(args) -> None:
         print(f"When it is filled in, check it (this stores nothing): python -m live_genesis.cli archive-chatbot-import {target} --dry-run")
         return
     if args.command == "archive-chatbot-ask":
-        print(render_ask_plan(ask_plan(args.models)))
+        print(render_ask_plan(ask_plan(args.models, questions=args.questions, question_list=args.question_list)))
         if args.dry_run:
             print("DRY RUN: nothing was called and nothing was stored.")
             return
@@ -2089,7 +2213,8 @@ def handle_command(args) -> None:
         print("PAID RUN: provider requests follow. A failed call is handled by the rule printed above (\"If a call fails\").")
         settings.load_provider_credentials()   # as for `cli archive-run`: the only moment .env provider keys enter the process
         os.environ["LIVE_COMPAT_JSON_MODE"] = "off"   # replies are plain sentences, not JSON objects
-        done = ask(max_usd=args.max_usd, only=args.models, pause_seconds=args.pause)
+        done = ask(max_usd=args.max_usd, only=args.models, questions=args.questions, question_list=args.question_list,
+                   pause_seconds=args.pause)
         print(json.dumps(done, indent=1))
         if done["status"] == "complete_with_gaps":
             print("RUN COMPLETE WITH GAPS:", done["stop_reason"])

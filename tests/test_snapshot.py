@@ -67,8 +67,8 @@ def run_main(monkeypatch, *argv):
 
 # Owner decision ("Remove anything from previous models"): the public site is the chat-app comparison only.
 # Exactly what a standalone build of the scripted demo writes outside static/: listed by name, not derived.
-CHAT_DEMO_IDS = ['C001', 'C002', 'C003', 'C004', 'C005', 'C006']
-CHAT_DEMO_SITE = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/chatbots.html',
+CHAT_DEMO_IDS = ['C001', 'C002', 'C003', 'C004', 'C005', 'C006', 'C007', 'C008']     # the last two are scripted trending questions
+CHAT_DEMO_SITE = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/chatbots.html', 'archive/trending-now.html',
                    'archive/data/answers.jsonl', 'archive/data/README.txt'}
                   | {f'archive/c/{name}.html' for name in CHAT_DEMO_IDS} | {f'archive/data/{name}.json' for name in CHAT_DEMO_IDS}
                   | {f'archive/card/{name}{suffix}.html' for name in CHAT_DEMO_IDS
@@ -78,7 +78,7 @@ MODEL_PAGES = {'archive/models.html', 'archive/trending.html', 'archive/q/Q01.ht
 MODEL_KEYS = ('answers', 'answerers', 'questions', 'trending', 'runs', 'set_hash', 'question_set', 'groups', 'answers_by_source',
               'locked', 'locked_at', 'demo_only', 'system_line', 'changed_rule')
 # Text that only the model track has: its page names and links, its labels, the scripted models and their versions.
-MODEL_ONLY_TEXT = ('models.html', 'trending.html', '>Models<', '>Trending<', 'Want the plain models', 'straight to the models',
+MODEL_ONLY_TEXT = ('models.html', 'trending.html', '>Models<', '>Model trends<', 'Want the plain models', 'straight to the models',
                    'Questions from what people search for', 'We asked it ourselves', 'asked-by-server', 'sent-in-unverified',
                    'model-a', 'model-b', 'model-c', 'Scripted sample, not a real trend', 'set_hash', 'Q01', 'T001')
 
@@ -98,9 +98,13 @@ def assert_no_model_track(root):
         if name.endswith(('.html', '.txt')):
             # "model" is not a word a visitor reads anywhere (the one data key `shown_model` is a chat app's version name).
             assert not re.search(r'(?i)\bmodels?\b', visible_text(text) if name.endswith('.html') else text), name
-            assert not re.search(r'(?i)trending', text), name
+            # The model track's trending list is not linked or named; the chat-app track's own trending questions
+            # (`trending-now.html`, tests/test_archive_lists.py) are a different page.
+            assert 'trending.html' not in text and 'Model trends' not in text, name
     data = json.loads((root / 'archive.json').read_text(encoding='utf-8'))
-    assert list(data) == ['schema', 'chatbots'] and data['schema'] == 'live-genesis-chat-archive/2' and not set(data) & set(MODEL_KEYS)
+    lists = any('list' in question for question in data['chatbots']['questions'])
+    assert list(data) == ['schema', 'chatbots'] and not set(data) & set(MODEL_KEYS)
+    assert data['schema'] == ('live-genesis-chat-archive/4' if lists else 'live-genesis-chat-archive/2')
     assert list(data['chatbots']) == ['groups', 'apps', 'human', 'questions', 'runs', 'answers', 'human_answers']
     return data
 
@@ -137,7 +141,7 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
     assert lines and {line['answerer_kind'] for line in lines} == {'chat-app', 'human'}
     assert {line['question_id'] for line in lines} == set(CHAT_DEMO_IDS) and {line['provenance'] for line in lines} == {'scripted-sample'}
     readme = (out / 'archive' / 'data' / 'README.txt').read_text(encoding='utf-8')
-    assert readme == archive_pages.README_CHAT != archive_pages.README and 'scripted-sample' in readme and 'typed-by-hand' not in readme and 'by hand' not in readme
+    assert readme == archive_pages.README_CHAT + archive_pages.README_LISTS != archive_pages.README and 'scripted-sample' in readme and 'typed-by-hand' not in readme and 'by hand' not in readme
     assert 'chat-app | human' in readme and 'not affiliated' in readme and 'It may be wrong.' in readme
     everything = ''.join((out / name).read_text(encoding='utf-8') for name in written if name.endswith(('.html', '.json')))
     assert '<script' not in everything and 'overview.json' not in everything and 'app.js' not in everything
