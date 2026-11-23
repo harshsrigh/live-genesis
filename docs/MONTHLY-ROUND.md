@@ -237,7 +237,7 @@ You should see `OK: export is intact and approved.`
 python -m live_genesis.snapshot ../site-preview --from-data published
 ```
 
-You should see `Static snapshot written to ../site-preview (rendered from approved data ...)`. That folder is the public site, built from the file you just read. Two things differ from the live site, and both are expected: there is no Facebook link in the share line (it needs the site's public address), and the Instagram and TikTok links open the share-card page instead of a picture (the pictures are made when the site is published).
+You should see `Static snapshot written to ../site-preview (rendered from approved data ...)`. That folder is the public site, built from the file you just read. Two things differ from the live site, and both are expected: there is no Facebook link in the share line (it needs the site's public address), and in place of "Save card" and "Open picture" there is one link, "Open card", to the share-card page (the pictures are made when the site is published).
 
 ### Step 16. Push
 
@@ -265,7 +265,7 @@ Only the `published` folder goes up. Never add a database, your sheet or `.env`,
 
 ### Step 17. Check the live pages
 
-Wait a few minutes, then open <https://harshsrigh.github.io/live-genesis/>. Check the front page, one question page and "How it works". The month should be the new one. There is no sample site and no "Sample site" link any more, and no small-print line at the foot of a page or a card. Under a question on the front page, tap **Instagram** in the share line: a picture of the share card should open (the site makes one for every card when it is published). If the site has not changed after ten minutes, the publishing step may have failed, and then nothing was published: ask for help.
+Wait a few minutes, then open <https://harshsrigh.github.io/live-genesis/>. Check the front page, the **Trending** page (the newer questions are listed there, not on the front page), one question page and "How it works". The month should be the new one. There is no sample site and no "Sample site" link any more, and no small-print line at the foot of a page or a card. Under a question, the share line reads "Facebook · Save card · Open picture". Tap **Open picture**: a picture of the share card should open (the site makes one for every card when it is published). **Save card** is the same picture with a file name to save it under; whether it saves, opens or asks depends on the browser. On a question's own page there is also a "Caption to copy" block. Nothing here posts anything: you save the picture and upload it yourself (`docs/SHARE-CARD.md`). If the site has not changed after ten minutes, the publishing step may have failed, and then nothing was published: ask for help.
 
 ### Step 18. Make the share cards
 
@@ -277,7 +277,7 @@ Node, Playwright, its browser and an emoji font were installed in WSL on this PC
 
 You should see one line per card and, at the end, `card(s) written to ../cards at 1080 x 1920.` Posting them is by hand too: `docs/SOCIAL-POSTS.md`.
 
-This step is optional now: the live site already holds a picture of every card, next to its page (the Instagram and TikTok links open it). Do this step when you want all the pictures in one folder on your PC.
+This step is optional now: the live site already holds a picture of every card, next to its page ("Save card" and "Open picture" lead to it). Do this step when you want all the pictures in one folder on your PC.
 
 ---
 
@@ -350,3 +350,5 @@ export LIVE_DB=~/live-genesis/live.db
 *Checked again on 19 November 2026 in WSL on the owner's PC, in a throwaway copy of the project with a scratch database and placeholder replies: steps 1, 3, 8 to 15 printed what this guide says. Step 16: `git add published` staged exactly the two files, `git commit` worked, `git push` was run as a dry run only. Step 18 was run later that day on the published answers and wrote 50 cards. Not run: a push by you, and the two PowerShell forms.*
 
 *Checked again on 21 November 2026 in WSL on the owner's PC, against the published answers: the step 3 command writes a sheet with thirteen questions per app; the step 14 and step 15 commands printed what this guide says; the live checks of step 17 (no sample site, no small-print line, a picture behind the Instagram link) were made on the live site on 20 November. Not run again: an import, the `git` commands and step 18.*
+
+*Checked again on 23 November 2026 (UTC) in WSL on the owner's PC, at commit `292f9f7`, in a throwaway copy of the project with a scratch database and placeholder replies: steps 1, 3 (`--out`, `--date`, the refusal to overwrite), 8, 9 (and the refusal of a second import), 10, 11 (plain, the refusal without `--replace`, `--replace`), 13, 14 and 15 printed what this guide says, with thirteen questions per app; step 16's `git add published` staged exactly the two files and `git push` was a dry run only; step 18 wrote 65 cards. The preview of step 15 shows "Open card"; the same data built the way the site is published shows "Facebook · Save card · Open picture" and the caption block. In "The models": the backup line and both `--dry-run` lines were run (the two dry runs against the real settings: 12 calls for the trending list, 52 for everything); the two lines with `--max-usd` were not run, because they call models. Not run: the two PowerShell forms, and a real push by you.*

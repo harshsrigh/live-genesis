@@ -4,7 +4,7 @@ Written 20 November 2026 for any future session (cloud, WSL, Codex) that starts 
 
 ## What this is
 
-A public static site that puts the same playful questions (ten asked so far, thirteen on the list) to AI answerers every month and keeps every reply side by side, in a "Group chat" look. Live: <https://harshsrigh.github.io/live-genesis/archive/index.html> (GitHub Pages, rebuilt by `.github/workflows/snapshot.yml` on every push to `main`).
+A public static site that puts the same playful questions (thirteen: ten main questions and three under a "Trending" tab) to AI answerers every month and keeps every reply side by side, in a "Group chat" look. Live: <https://harshsrigh.github.io/live-genesis/archive/index.html> (GitHub Pages, rebuilt by `.github/workflows/snapshot.yml` on every push to `main`).
 
 The owner is not a programmer. Write to them in plain words, give commands in copyable blocks, and put decisions to them as short choices with a recommendation.
 
@@ -13,11 +13,11 @@ The owner is not a programmer. Write to them in plain words, give commands in co
 1. LIVE Genesis, an agent-only society. **Removed from the code** on 14 Nov 2026. Do not bring it back.
 2. Answers Over Time with API models (the "model track"). Kept in the code, **never published**.
 3. Chat-app comparison: ChatGPT, Gemini, Grok asked **by hand** by the owner, plus a Human column. This is the product. No hand-collected month has been imported yet.
-4. A second group of answerers, "AI models": models asked the same ten questions by software (`archive-chatbot-ask`). **This is what is live today:** four local models (Phi-4 mini, Gemma 3 4B, Granite 4.2 3B, Qwen 3.5 4B), ten questions, asked 19 Nov 2026, exported and approved by the owner (`published/`).
+4. A second group of answerers, "AI models": models asked the same ten questions by software (`archive-chatbot-ask`). **This is what is live today:** four local models (Phi-4 mini, Gemma 3 4B, Granite 4.2 3B, Qwen 3.5 4B); ten questions asked 19 Nov 2026 and three more asked 22 Nov, each exported and approved by the owner (`published/`, 52 answers).
 
-## State on 20 Nov 2026 (two lines brought up to date on 21 Nov)
+## State on 20 Nov 2026 (some lines brought up to date on 21 and 23 Nov)
 
-- `main` passes 633 offline tests (`python -m pytest -q`, about 2 minutes), counted on 21 Nov at `f9804ed`.
+- `main` passes 648 offline tests (`python -m pytest -q`, about a minute), counted on 23 Nov at `292f9f7`.
 - Three questions (C011 to C013) were appended on 20 Nov, asked on 22 Nov with `--questions` and published. Since 23 Nov they are marked `"list": "trending"` in `archive_chatbots.json` (a display attribute only) and the site lists them under a "Trending" tab; `archive-chatbot-ask --list trending` asks only those, and from December one ask covers all thirteen (`docs/SESSION-STATE.md`, "Decided on 23 Nov").
 - Free-only OpenRouter collector, guided Windows launcher (`Collect-Free.cmd`) and its guards are merged. **No real request to OpenRouter's model API has ever been made**; tested with mocked answers only; the launcher was never run on Windows itself.
 - The owner's step-by-step guide for a month: `docs/MONTHLY-ROUND.md`.
@@ -35,7 +35,7 @@ The owner is not a programmer. Write to them in plain words, give commands in co
 
 ## Open
 
-- Share links, settled on 20 Nov: the publishing workflow makes a picture of every share card; the Instagram and TikTok links open it, and a question page carries preview tags. Facebook still opens Facebook's own share page. The front page has no history squares and no key; a changed answer says "Changed".
+- Share links, settled on 20 Nov: the publishing workflow makes a picture of every share card; a question page carries preview tags. Since 23 Nov the share line is "Facebook · Save card · Open picture" (plain links to the card's picture, the first with a save name), and a question page has a "Caption to copy" block; the links named Instagram and TikTok are gone, and nothing posts anywhere. Never tried on a real phone yet (`docs/SHARE-CARD.md`). Facebook still opens Facebook's own share page. The front page has no history squares and no key; a changed answer says "Changed".
 - "How it works" still speaks of "apps" and has a "Humans too" rule while only models are shown. Not changed; the owner's call.
 - First hand-collected month for the chat apps: the owner reads the ten draft questions (fixed for good at the first import), then follows `docs/MONTHLY-ROUND.md`.
 - Codex's Windows review of the collector and launcher: instructions given, report not seen yet.
