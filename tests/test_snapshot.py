@@ -67,8 +67,8 @@ def run_main(monkeypatch, *argv):
 
 # Owner decision ("Remove anything from previous models"): the public site is the chat-app comparison only.
 # Exactly what a standalone build of the scripted demo writes outside static/: listed by name, not derived.
-CHAT_DEMO_IDS = ['C001', 'C002', 'C003', 'C004', 'C005', 'C006']
-CHAT_DEMO_SITE = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/chatbots.html',
+CHAT_DEMO_IDS = ['C001', 'C002', 'C003', 'C004', 'C005', 'C006', 'C007', 'C008']     # the last two are scripted trending questions
+CHAT_DEMO_SITE = ({'index.html', '.nojekyll', 'archive.json', 'archive/index.html', 'archive/chatbots.html', 'archive/trending-now.html',
                    'archive/data/answers.jsonl', 'archive/data/README.txt'}
                   | {f'archive/c/{name}.html' for name in CHAT_DEMO_IDS} | {f'archive/data/{name}.json' for name in CHAT_DEMO_IDS}
                   | {f'archive/card/{name}{suffix}.html' for name in CHAT_DEMO_IDS
@@ -78,7 +78,7 @@ MODEL_PAGES = {'archive/models.html', 'archive/trending.html', 'archive/q/Q01.ht
 MODEL_KEYS = ('answers', 'answerers', 'questions', 'trending', 'runs', 'set_hash', 'question_set', 'groups', 'answers_by_source',
               'locked', 'locked_at', 'demo_only', 'system_line', 'changed_rule')
 # Text that only the model track has: its page names and links, its labels, the scripted models and their versions.
-MODEL_ONLY_TEXT = ('models.html', 'trending.html', '>Models<', '>Trending<', 'Want the plain models', 'straight to the models',
+MODEL_ONLY_TEXT = ('models.html', 'trending.html', '>Models<', '>Model trends<', 'Want the plain models', 'straight to the models',
                    'Questions from what people search for', 'We asked it ourselves', 'asked-by-server', 'sent-in-unverified',
                    'model-a', 'model-b', 'model-c', 'Scripted sample, not a real trend', 'set_hash', 'Q01', 'T001')
 
@@ -98,7 +98,9 @@ def assert_no_model_track(root):
         if name.endswith(('.html', '.txt')):
             # "model" is not a word a visitor reads anywhere (the one data key `shown_model` is a chat app's version name).
             assert not re.search(r'(?i)\bmodels?\b', visible_text(text) if name.endswith('.html') else text), name
-            assert not re.search(r'(?i)trending', text), name
+            # The model track's trending list is not linked or named; the chat-app track's own trending questions
+            # (`trending-now.html`, tests/test_archive_lists.py) are a different page.
+            assert 'trending.html' not in text and 'Model trends' not in text, name
     data = json.loads((root / 'archive.json').read_text(encoding='utf-8'))
     assert list(data) == ['schema', 'chatbots'] and data['schema'] == 'live-genesis-chat-archive/2' and not set(data) & set(MODEL_KEYS)
     assert list(data['chatbots']) == ['groups', 'apps', 'human', 'questions', 'runs', 'answers', 'human_answers']
@@ -163,7 +165,7 @@ def test_archive_only_writes_the_chat_app_track_and_nothing_of_the_models_or_the
     # The bar: the comparison and how it is made. No "Trending", no "Models".
     for name in ('archive/index.html', 'archive/chatbots.html', 'archive/c/C001.html'):
         nav = pages[name].split('<nav aria-label="Archive navigation">', 1)[1].split('</nav>', 1)[0]
-        assert re.findall(r'>([^<>]+)</a>', nav) == ['Chat apps', 'How it works'], name
+        assert re.findall(r'>([^<>]+)</a>', nav) == ['Chat apps', 'Trending', 'How it works'], name
     # The pages are what render_site makes for a standalone archive, from the whole payload or from the reduced one.
     alone = archive_pages.render_site(payload, standalone=True)
     assert alone == archive_pages.render_site(archive_chatbots.site_payload(payload), standalone=True)

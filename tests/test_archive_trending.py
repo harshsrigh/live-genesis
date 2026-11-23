@@ -468,12 +468,15 @@ def test_trending_pages_for_the_demo(ready):
         assert_page_is_safe(page)
         assert 'Sample we wrote, not a real AI answer' in page, name
         assert '<script' not in page and ' style=' not in page and 'onclick' not in page
-    # Navigation: Trending stays reachable from every page; the model list has its own page.
+    # Navigation: the model track's trending list stays reachable from every page; the model list has its own page.
+    # The scripted chat-app track has trending questions of its own (`trending-now.html`, the link "Trending"), so the
+    # local app names the model track's list apart: "Model trends".
     for page in (pages['index.html'], models, listing, t2, pages['q/Q01.html'], pages['c/C001.html']):
-        assert re.search(r'<a href="(\.\./)?trending\.html"( aria-current="page")?>Trending</a>', page)
+        assert re.search(r'<a href="(\.\./)?trending\.html"( aria-current="page")?>Model trends</a>', page)
+        assert re.search(r'<a href="(\.\./)?trending-now\.html"( aria-current="page")?>Trending</a>', page)
         assert re.search(r'<a href="(\.\./)?models\.html"( aria-current="page")?>Models</a>', page)
-    assert '<a href="trending.html" aria-current="page">Trending</a>' in listing and '<a href="models.html" aria-current="page">Models</a>' in models
-    assert '<a href="../trending.html" aria-current="page">Trending</a>' in t2
+    assert '<a href="trending.html" aria-current="page">Model trends</a>' in listing and '<a href="models.html" aria-current="page">Models</a>' in models
+    assert '<a href="../trending.html" aria-current="page">Model trends</a>' in t2
     assert models.count('class="timeline"') == 60 and 't/T00' not in models       # the model list keeps to the fixed list
     # The list: newest first, each model's newest answer inline, timelines that start late.
     assert listing.index('t/T003.html') < listing.index('t/T002.html') < listing.index('t/T001.html')
@@ -649,12 +652,13 @@ def test_the_default_rendering_holds_trending_pages_and_cards_at_the_same_addres
     out = tmp_path / 'site'
     payload = json.loads(json.dumps(rendered_site(out)))
     names = sorted(str(p.relative_to(out / 'archive')) for p in (out / 'archive').rglob('*.html'))
-    chat = [f'C00{n}' for n in range(1, 7)]
-    assert names == sorted(['index.html', 'models.html', 'trending.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)]
+    chat = [f'C00{n}' for n in range(1, 9)]
+    assert names == sorted(['index.html', 'models.html', 'trending.html', 'trending-now.html'] + [f'q/Q{n:02d}.html' for n in range(1, 21)]
                            + [f't/T00{n}.html' for n in (1, 2, 3)] + [f'c/{q}.html' for q in chat]
                            + [f'card/Q{n:02d}.html' for n in range(1, 21)] + [f'card/T00{n}.html' for n in (1, 2, 3)]
                            + ['chatbots.html'] + [f'card/{q}{s}.html' for q in chat
                                                   for s in ('', '-chat-app-a', '-chat-app-b', '-chat-app-c', '-human')])
+    # /5: the scripted archive also holds the scripted chat-app track
     # /5: the scripted archive also holds the scripted chat-app track
     assert payload['schema'] == 'live-genesis-archive/6' and len(payload['trending']['questions']) == 3
     assert (out / 'archive' / 'card' / 'T001.html').read_text(encoding='utf-8') == archive_pages.render_card(payload, 'T001')

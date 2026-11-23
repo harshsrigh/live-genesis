@@ -73,7 +73,7 @@ python -m live_genesis.cli reconcile [--provider-usd X | --receipt ID --actual-u
 python -m live_genesis.cli backup NEW-FILE
 # PAID: only on the owner's explicit word
 python -m live_genesis.cli archive-run --max-usd 0.02 [--models a,b] [--set core|trending] [--samples N]
-python -m live_genesis.cli archive-chatbot-ask --max-usd 0.02 [--models a,b] [--questions C011,C012] [--pause N]   # the chat-app questions, once, to each model answerer
+python -m live_genesis.cli archive-chatbot-ask --max-usd 0.02 [--models a,b] [--questions C011,C012 | --list trending] [--pause N]   # the chat-app questions, once, to each model answerer
 ```
 Every command except `archive-run` and `archive-chatbot-ask` (without `--dry-run`) is free and calls no model. Both refuse without `LIVE_ALLOW_PAID_CALLS=YES`, a usable key, valid budget settings and a `--max-usd` the worst case fits under.
 

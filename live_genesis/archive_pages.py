@@ -16,6 +16,12 @@ Pages (under `archive/`):
 * `c/C001.html` (a chat-app question), `q/Q01.html`, `t/T001.html` (a model question): one layout.
   This month's answers as cards; older months one tap away (radio inputs and labels, no script); a
   changed answer shows what it was before; each card has its history; a table shows what changed.
+* `trending-now.html`: the chat-app track's TRENDING questions (a question the checked-in configuration marks
+  `"list": "trending"`: newer, picked from what people are searching for, added along the way; the payload
+  does not carry the mark, `archive_chatbots.question_lists` is read when a page is built), with the same
+  question cards as the front page. It exists, and the top bar links it as "Trending", only when at least
+  one such question has a shown answer; the front page then lists the main questions only. Its name differs
+  from `trending.html` on purpose: that one is the model track's list and is never part of the public site.
 * `chatbots.html`: how the chat apps are asked, and the conditions recorded.
 * `card/<ID>.html` (a model question: up to three models; a chat-app question: the apps and Human),
   `card/<ID>-<app label>.html`, `card/<ID>-human.html`: 9:16 share cards. A card holds at most four bubbles:
@@ -54,7 +60,7 @@ page says once, in its footer, "When an app refuses or dodges, we leave it out."
 App names are plain text, never a logo, and never the largest thing on a page or card.
 
 Standalone: `render_site(payload, standalone=True)` is the archive published on its own (snapshot.py
-`--archive-only`), and it is the chat-app track ONLY (owner decision): `index.html`, `chatbots.html`,
+`--archive-only`), and it is the chat-app track ONLY (owner decision): `index.html`, `chatbots.html`, `trending-now.html` (when it exists),
 `c/`, the chat-app cards and the chat-app data files. No `models.html`, `trending.html`, `q/`, `t/`,
 model card or model data file is made, and no page links to one. The local web app
 keeps every page. `sibling` (standalone only) is the relative address of the other published
@@ -171,6 +177,8 @@ SKIP_WORDS = {"rate_limited": "the service limited the number of requests", "not
 NATIVE = ("openai", "anthropic", "openai-compatible")   # not a named endpoint: nothing to add to the label
 FOLDER = {"core": "q", "trending": "t", "chat": "c"}
 CARD_MODELS = 3
+CHAT_TRENDING_PAGE = "trending-now.html"   # the chat-app track's trending questions; never `trending.html` (model track)
+TRENDING = "trending"          # archive_chatbots.TRENDING_LIST: the `list` of a chat-app question added along the way
 FIRST_PAGE = "index.html"      # the page a visitor lands on; with a chat-app run it is the chat-app comparison
 
 
@@ -438,6 +446,17 @@ class _View:
         self.run_date = {r["number"]: r["date"] for r in self.runs}
         self.chat = _Chat(payload)
         self.chat_questions = [q for q in self.chat.questions if q["id"] not in self.hidden]
+        # The trending questions of the chat-app track, newest first, and whether the "Trending" tab exists: only
+        # when one of them has an answer to show. Without the tab every question is listed on the front page.
+        # Which question is trending is not in the payload: the checked-in configuration says it (the scripted
+        # sample has its own list), so a file published before the mark existed needs no new export.
+        self.chat_lists = archive_chatbots.question_lists(self.chat.demo) if self.chat_questions else {}
+        self.chat_trending = sorted((q for q in self.chat_questions if self.chat_lists.get(q["id"]) == TRENDING),
+                                    key=lambda q: q["added"], reverse=True)
+        trend_ids = {q["id"] for q in self.chat_trending}
+        self.trend_tab = any(key[0] in trend_ids and answer["state"] == "answered" and not answer.get("refused")
+                             for key, answer in self.chat.cell.items())
+        self.chat_main = [q for q in self.chat_questions if not (self.trend_tab and q["id"] in trend_ids)]
         self.models_demo = any(a["source"] == "demo" for a in self.answers) or any(r["demo"] for r in self.runs)
         self.demo = self.models_demo or self.chat.demo
         self.empty = not self.answers and not self.chat.cell
@@ -689,8 +708,12 @@ def _chat_board(view: _View, question_id: str) -> dict:
                     cell["facts"].append(FORM_WORDS[answer["manner"]])
                 previous = date
             cells[(key, date)] = cell
+    trending = view.chat_lists.get(question_id) == TRENDING
     return {"id": question_id, "text": question["text"], "prompt": question["prompt"], "hook": question["hook"],
-            "why": "No deep reason. We wanted to see who's funny, and whether they're still funny next month.",
+            "list": view.chat_lists.get(question_id), "added": question["added"],
+            "why": ("Lots of people were searching for this when we added it. We wanted to see who's funny about it, and "
+                    "whether they're still funny next month." if trending and not sample else
+                    "No deep reason. We wanted to see who's funny, and whether they're still funny next month."),
             "chips": [("chip", "Chat apps")], "track": "chat", "columns": chat.columns, "periods": periods, "cells": cells,
             "threads": chat.threads,
             "demo": sample, "kicker": "Chat apps",
@@ -841,8 +864,12 @@ def _bar(view: _View, up: str, base: str, versions: dict[str, str], current: str
     # A site whose AI answerers are all models asked by software says so: a model is never called a chat app.
     only_models = {column["kind"] for column in view.chat.columns if column["kind"] != "human"} == {"model"}
     links = [("front", f"{base}index.html", ("AI models" if only_models else "Chat apps") if chat else "Questions")]
+    if view.trend_tab:   # the chat-app track's trending questions; only when one of them has an answer to show
+        links.append(("trending-now", f"{base}{CHAT_TRENDING_PAGE}", "Trending"))
     if not standalone:   # a standalone archive is the chat-app track only: it has no model page to link
-        links += [("trending", f"{base}trending.html", "Trending"), ("models", f"{base}models.html", "Models")]
+        # The local app shows both tracks: next to the chat-app "Trending" the model track's list is named apart.
+        links += [("trending", f"{base}trending.html", "Model trends" if view.trend_tab else "Trending"),
+                  ("models", f"{base}models.html", "Models")]
     links.append(("chatbots", f"{base}chatbots.html", "How it works") if chat or standalone
                  else ("method", f"{base}models.html#method", "How it works"))
     nav = "".join(f'    <a href="{href}"{" aria-current=" + chr(34) + "page" + chr(34) if name == current else ""}>{text}</a>\n'
@@ -1207,6 +1234,59 @@ def _trending_note(view: _View) -> str:
             'medical, legal or money advice are not added.</p>\n')
 
 
+def _chat_list(view: _View, shown: list[str]) -> list[str]:
+    """The chat-app questions `shown` as one section of question cards (the front page and the Trending page):
+    the group switch when there are several answerer groups, the link to the answerers, then one card each."""
+    chat = view.chat
+    several = len(chat.groups) > 1
+    body = ['<section class="group">\n']
+    if several:
+        # The group switch: one radio per group, the first one chosen. No script; without the stylesheet every group shows.
+        body.append("".join(f'  <input class="g-radio" type="radio" name="group" id="grp-{n}"{" checked" if n == 1 else ""} />\n'
+                            for n in range(1, len(chat.groups) + 1)))
+    body.append(f'  <div class="group-head"><h2>The latest answers</h2></div>\n')
+    if several:
+        sizes = [sum(1 for app in chat.apps if app["group"] == group["id"]) for group in chat.groups]
+        body.append('  <div class="group-strip" role="group" aria-label="Choose a group">'
+                    + "".join(f'<label for="grp-{n}"><span class="g-name">{esc(group["name"])}</span>'
+                              f'<span class="g-count">{size} asked</span></label>'
+                              for n, (group, size) in enumerate(zip(chat.groups, sizes), 1)) + '</div>\n')
+    if chat.apps:
+        # One plain text link to the answerers and their "just for fun" answering styles on "How it works".
+        body.append(f'  <p class="meet"><a href="chatbots.html#answerers">{esc(MEET)}</a></p>\n')
+    body += ['  <div class="qs">\n', *[_row(_chat_board(view, question_id), f"c/{question_id}.html") for question_id in shown],
+             '  </div>\n', '</section>\n']
+    return body
+
+
+TRENDING_DESCRIPTION = "Newer questions, picked from what people are searching for, with every answer kept month by month."
+TRENDING_LEDE = ("Newer questions, picked from what people are searching for and added along the way. "
+                 "Each one is asked again every month from when it was added.")
+TRENDING_LEDE_SAMPLE = ("Newer questions, added along the way and asked again every month from then on. On the real site "
+                        "they are picked from what people are searching for; here we made them up.")
+
+
+def render_chat_trending(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
+                         sibling: str | None = None) -> str:
+    """`trending-now.html`: the chat-app track's trending questions, newest first, as the same question cards
+    as the front page. Raises KeyError when no trending question has an answer to show: there is then no such
+    page and no tab for it."""
+    view = _View(payload)
+    if not view.trend_tab:
+        raise KeyError(CHAT_TRENDING_PAGE)
+    versions = versions or asset_versions()
+    shown = [q["id"] for q in view.chat_trending]
+    steps = [_plural(len(shown), "question"), "Added along the way", "Asked again every month"]
+    body = [_list_head(view.tag("chat"), ["New questions.", "Same game."],
+                       esc(TRENDING_LEDE_SAMPLE if view.chat.demo else TRENDING_LEDE), steps),
+            *_chat_list(view, shown),
+            '<p class="list-note muted">The questions we started with are on <a href="index.html">the first page</a>. '
+            '<a href="chatbots.html">Here is how it works</a>.</p>\n']
+    return _page(view, _head("Trending · Answers Over Time", "../", versions, TRENDING_DESCRIPTION, _meta(view, "", track="chat")),
+                 _bar(view, "../", "", versions, "trending-now", here=CHAT_TRENDING_PAGE, standalone=standalone, sibling=sibling),
+                 body, _foot(view, "chat", shown))
+
+
 def render_index(payload: dict, versions: dict[str, str] | None = None, *, standalone: bool = False,
                  sibling: str | None = None) -> str:
     """`index.html`, the front page: the chat-app comparison when the payload holds a chat-app run,
@@ -1223,31 +1303,16 @@ def render_index(payload: dict, versions: dict[str, str] | None = None, *, stand
                      _bar(view, "../", "", versions, "front", here="index.html", standalone=standalone, sibling=sibling), body,
                      _foot(view, "chat", []))
     if chat.dates:
-        shown = [q["id"] for q in view.chat_questions]
+        shown = [q["id"] for q in view.chat_main]      # with a Trending tab: the main questions only
         several = len(chat.groups) > 1
         lede = "We ask again every month and keep every reply. Tap a question to see who changed their answer."
         if several:
             lede = f"{_listed([group['name'] for group in chat.groups])}. {lede}"
         steps = [_plural(len(shown), "question"), "Same words every month", "Every reply kept"]
-        body = [_list_head(view.tag("chat"), chat_headline(chat), esc(lede), steps), '<section class="group">\n']
-        if several:
-            # The group switch: one radio per group, the first one chosen. No script; without the stylesheet every group shows.
-            body.append("".join(f'  <input class="g-radio" type="radio" name="group" id="grp-{n}"{" checked" if n == 1 else ""} />\n'
-                                for n in range(1, len(chat.groups) + 1)))
-        body.append(f'  <div class="group-head"><h2>The latest answers</h2></div>\n')
-        if several:
-            sizes = [sum(1 for app in chat.apps if app["group"] == group["id"]) for group in chat.groups]
-            body.append('  <div class="group-strip" role="group" aria-label="Choose a group">'
-                        + "".join(f'<label for="grp-{n}"><span class="g-name">{esc(group["name"])}</span>'
-                                  f'<span class="g-count">{size} asked</span></label>'
-                                  for n, (group, size) in enumerate(zip(chat.groups, sizes), 1)) + '</div>\n')
-        if chat.apps:
-            # One plain text link to the answerers and their "just for fun" answering styles on "How it works".
-            body.append(f'  <p class="meet"><a href="chatbots.html#answerers">{esc(MEET)}</a></p>\n')
-        body += ['  <div class="qs">\n', *[_row(_chat_board(view, question_id), f"c/{question_id}.html") for question_id in shown],
-                 '  </div>\n', '</section>\n']
+        body = [_list_head(view.tag("chat"), chat_headline(chat), esc(lede), steps), *_chat_list(view, shown)]
         body.append('<p class="list-note muted">Every app gets the exact same words. '
                     '<a href="chatbots.html">Here is how it works</a>.'
+                    + (f' Newer questions are under <a href="{CHAT_TRENDING_PAGE}">Trending</a>.' if view.trend_tab else '')
                     + ('' if standalone else ' Want the plain models instead? <a href="models.html">Models</a> and '
                                              '<a href="trending.html">Trending</a>.') + '</p>\n')
         return _page(view, _head("Answers Over Time", "../", versions, CHAT_DESCRIPTION, _meta(view, "", track="chat")),
@@ -1486,7 +1551,11 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
     body = ['<div class="q-hero">\n'
             f'  <div class="chips">{title_row}</div>\n'
             f'  <h1 class="display display-q{" q-long" if len(board["text"]) > 40 else ""}" itemprop="name">{esc(board["text"])}</h1>\n'
-            f'  <meta itemprop="text" content="{esc(board["prompt"])}" />\n</div>\n']
+            f'  <meta itemprop="text" content="{esc(board["prompt"])}" />\n'
+            # A trending question says so, once, in plain words (a label, not a pill), with the month it was added.
+            + (f'  <p class="q-since">Trending question · added <time datetime="{esc(board["added"])}">'
+               f'{esc(month_year(board["added"]))}</time></p>\n' if board.get("list") == TRENDING else '')
+            + '</div>\n']
     periods = list(reversed(board["periods"]))[:MAX_PANELS]
     if periods and board["columns"]:
         body.append('<section class="months" aria-label="Answers, month by month">\n')
@@ -1542,11 +1611,13 @@ def _question_page(view: _View, board: dict, versions: dict[str, str], *, standa
                 f'  <details><summary>Why we ask this</summary><p>{esc(board["why"])}</p></details>\n'
                 + behind +
                 '</section>\n')
-    back = {"chat": '<a class="back" href="../index.html">Back to all the questions</a>',
+    trend_page = board.get("list") == TRENDING and view.trend_tab     # listed on the Trending page, not the front page
+    back = {"chat": f'<a class="back" href="../{CHAT_TRENDING_PAGE}">Back to the trending questions</a>' if trend_page else
+                    '<a class="back" href="../index.html">Back to all the questions</a>',
             "trending": '<a class="back" href="../trending.html">All trending questions</a>',
             "core": f'<a class="back" href="../models.html">All {esc(count_word(len(view.questions)))} questions</a>'}[board["track"]]
     track = "chat" if chat else "models"
-    current = "front" if chat else "trending" if board["track"] == "trending" else "models"
+    current = "trending-now" if trend_page else "front" if chat else "trending" if board["track"] == "trending" else "models"
     description = f"{board['text']} Every answer, month by month." if chat else board["text"]
     return _page(view, _head(f"{board['text']} · Answers Over Time", "../../", versions, description,
                              _meta(view, "../", board=board, track=track)),
@@ -2081,6 +2152,8 @@ def render_site(payload: dict, *, standalone: bool = False, sibling: str | None 
     view = _View(payload)
     options = {"standalone": standalone, "sibling": sibling if standalone else None}
     pages = {"index.html": render_index(payload, versions, **options), "chatbots.html": render_chatbots(payload, versions, **options)}
+    if view.trend_tab:
+        pages[CHAT_TRENDING_PAGE] = render_chat_trending(payload, versions, **options)
     if not standalone:
         pages["models.html"] = render_models(payload, versions, **options)
         pages["trending.html"] = render_trending(payload, versions, **options)

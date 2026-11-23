@@ -281,6 +281,40 @@ This step is optional now: the live site already holds a picture of every card, 
 
 ---
 
+## The models: trending questions on their own, everything together from December
+
+This part is about the group "AI models" (the models this software asks), not about the chat apps you ask by hand. It makes model calls, so each run needs your own word for that run, the switch for model calls in your own settings (`docs/ANSWERS-OVER-TIME.md` names it; nobody sets it for you) and a `--max-usd` ceiling, also for local models that cost nothing.
+
+A question marked `"list": "trending"` in `live_genesis/archive_chatbots.json` is a newer question, picked from what people are searching for. The site lists those under the **Trending** tab and the others on the front page. The mark only decides where a question is listed, so you can add it to a question that is already recorded.
+
+To ask only the trending questions (your decision of 23 November: the others wait for December):
+
+```bash
+python -m live_genesis.cli backup backups/before-trending.sqlite
+python -m live_genesis.cli archive-chatbot-ask --list trending --dry-run
+```
+
+The second line is free and calls nothing. It prints the questions it would ask, the ones it leaves out, the number of calls and an estimate (an estimate from token counts, not an invoice). If that is what you want:
+
+```bash
+python -m live_genesis.cli archive-chatbot-ask --list trending --max-usd 0.01
+```
+
+One run per model and day: a model that was already asked today is refused until tomorrow. A question that was left out is not marked as unanswered anywhere; its page stays as it is.
+
+**From December, ask everything together**, once a month, with no `--list` and no `--questions`:
+
+```bash
+python -m live_genesis.cli archive-chatbot-ask --dry-run
+python -m live_genesis.cli archive-chatbot-ask --max-usd 0.01
+```
+
+The trending questions simply have one month fewer than the others. After any ask: steps 11 to 17 (export with `--replace`, read every answer, approve, check, push).
+
+*Checked on 23 November 2026 against a scratch database with stand-in models: both `--dry-run` lines, the backup, and the build from `published/`. The two lines with `--max-usd` were not run: they call models.*
+
+---
+
 ## If something goes wrong
 
 **"is not ready yet, and nothing was stored"** (step 8). Read the lines under it. Each one names the app, the question and the fix. Nothing was stored, so nothing is lost.

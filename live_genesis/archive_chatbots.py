@@ -56,6 +56,13 @@ What this module is, honestly:
   reported, a local model's digest, the pricing basis and the sampling sent. Everything said above
   about apps "by hand" holds for apps: no software contacts a chat APP. Hand-entered and asked runs
   may share a database; scripted demo runs share one with neither.
+* QUESTION LISTS, since 23 November 2026: a question of `archive_chatbots.json` may carry `"list": "trending"` (a
+  newer question picked from what people are searching for, added along the way); without the field it is on
+  the main list. The mark is a DISPLAY attribute of the checked-in configuration and nothing else: it is not
+  part of a question's recorded hash, of the configuration hash, of any table or of the payload, so a
+  database or a published file made before it is exactly what it was. The pages read it when they are built
+  (`question_lists`; the scripted sample has its own, `DEMO_TRENDING`) to list such questions under
+  "Trending". `cli archive-chatbot-ask --list trending` is `--questions` with that list's ids.
 """
 from __future__ import annotations
 
@@ -76,6 +83,8 @@ CONFIG_FILE = Path(__file__).resolve().parent / "archive_chatbots.json"
 CONFIG_FORMAT = "live-genesis-chatbots/3"   # /3: optional answerer groups (`groups`, and `group` on a chat app)
 FILE_FORMAT = "live-genesis-chatbot-collection/2"
 CHAT_QUESTION_ID = re.compile(r"C[0-9]{3}")
+MAIN_LIST, TRENDING_LIST = "main", "trending"
+LISTS = (TRENDING_LIST,)  # what a question's optional `list` may say; without it the question is on the main list
 QUESTION_SET = "chat"     # archive_chatbot_answers.question_set of every row written since the track got its own list
 # The fixed prefix of every chat-app prompt: prefix, a blank line, the question. It asks for a short, casual reply so
 # that the reply itself is short; recorded text is never shortened by us.
@@ -520,7 +529,8 @@ def load_config(path: str | Path | None = None) -> dict:
     is asked, never here) and the name may not hold a chat app's name; `human` is {name, meta}
     (the wording of the Human column); `aside` one short line of the owner's own (shown once on the
     chat-app page, never on a card; '' when none); `questions` the ids in the file's order; `items` the
-    questions ({id, text, prompt, hook, added}); `prompts` maps each id to its question.
+    questions ({id, text, prompt, hook, added}); `prompts` maps each id to its question; `lists` maps the id of
+    a question marked `"list": "trending"` to that word (a display attribute: in no hash, table or payload).
     Strict shape; ids C001... in order without gaps; every prompt is PROMPT_PREFIX, a blank line, the
     question; no obviously political word in a question or a hook. Raises ArchiveRefused."""
     source = Path(path) if path is not None else CONFIG_FILE
@@ -607,10 +617,11 @@ def load_config(path: str | Path | None = None) -> dict:
     if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_CHATBOT_QUESTIONS:
         raise bad(f"questions must list 1 to {MAX_CHATBOT_QUESTIONS} questions")
     items: list[dict] = []
+    lists: dict[str, str] = {}
     for position, entry in enumerate(entries, 1):
         wanted = f"C{position:03d}"
-        if not isinstance(entry, dict) or not {"id", "text", "prompt", "added"} <= set(entry) <= set(QUESTION_KEYS):
-            raise bad(f"question {position} must hold id, text, prompt and added, and may have hook")
+        if not isinstance(entry, dict) or not {"id", "text", "prompt", "added"} <= set(entry) <= set(QUESTION_KEYS) | {"list"}:
+            raise bad(f"question {position} must hold id, text, prompt and added, and may have hook and list")
         if entry["id"] != wanted:
             raise bad(f"question {position} must have the id {wanted}: ids are C001, C002, ... in order, without gaps")
         text, hook = entry["text"], entry.get("hook", "")
@@ -630,15 +641,44 @@ def load_config(path: str | Path | None = None) -> dict:
         if term:
             raise bad(f'{wanted}: holds the word "{term}". This list has no political questions (a crude word check; '
                       "reword the question or leave it out)")
+        if "list" in entry and entry["list"] not in LISTS:
+            raise bad(f'{wanted}: list must be "{TRENDING_LIST}", or left out for the main list')
+        if "list" in entry:
+            lists[wanted] = entry["list"]
+        # The question itself is the five fields it always was: its list is kept beside it (`lists`), outside every hash.
         items.append({"id": wanted, "text": text, "prompt": entry["prompt"], "hook": hook, "added": entry["added"]})
     if len({q["text"].casefold() for q in items}) != len(items):
         raise bad("two questions have the same text")
     return {"status": raw["status"], "groups": groups, "chatbots": chatbots, "models": models, "human": human,
             "aside": aside_text.strip(),
-            "questions": [q["id"] for q in items], "items": items, "prompts": {q["id"]: q for q in items},
+            "questions": [q["id"] for q in items], "items": items, "prompts": {q["id"]: q for q in items}, "lists": lists,
             # A group without an answerer is recorded nowhere, the hash included: declaring one changes nothing.
             "sha256": config_hash(chatbots, items, human,
                                   [g for g in groups if any(a["group"] == g["id"] for a in chatbots + models)], models)}
+
+
+def question_lists(demo: bool = False) -> dict[str, str]:
+    """{question id: "trending"} for the questions that are not on the main list, as the pages need it: from the
+    checked-in configuration for recorded data, from the scripted list for the sample (`demo`). Empty when the
+    configuration cannot be read: every question is then listed on the front page, as before lists."""
+    if demo:
+        return {q["id"]: TRENDING_LIST for q in demo_items()[len(DEMO_QUESTIONS):]}
+    try:
+        return dict(load_config()["lists"])
+    except archive.ArchiveRefused:
+        return {}
+
+
+def list_ids(name: str) -> str:
+    """`--list NAME` as the value of `--questions`: the ids of the configuration's questions on that list ("main"
+    or "trending"), comma separated. An unknown list, or one without a question, is refused."""
+    config = load_config()
+    if name not in (MAIN_LIST,) + LISTS:
+        raise _refused(f"--list must be one of: {', '.join((MAIN_LIST,) + LISTS)}. Nothing was asked.")
+    ids = [i for i in config["questions"] if config["lists"].get(i, MAIN_LIST) == name]
+    if not ids:
+        raise _refused(f'No question of {CONFIG_FILE.name} is on the list "{name}". Nothing was asked.')
+    return ",".join(ids)
 
 
 def aside() -> str:
@@ -1326,6 +1366,10 @@ def render_ask_plan(planned: dict) -> str:
     count = str(len(planned["questions"])) if len(planned["questions"]) == listed else         f"{len(planned['questions'])} of the {listed} on the list, named with --questions"
     lines.append(f"Questions ({count}), each asked once of each model with its exact prompt:")
     lines += [f"  {q['id']}  {q['text']}" for q in planned["questions"]]
+    left_out = [q["id"] for q in planned["config"]["items"] if q not in planned["questions"]]
+    if left_out:
+        lines.append(f"Left out this time ({len(left_out)}): {', '.join(left_out)}. They are not asked, and this run records "
+                     "nothing about them: their pages stay as they are.")
     if any(a["basis"] == providers.BASIS_FREE for a in planned["models"]):
         lines.append("  " + archive.DECLARED_FREE_NOTE)
     lines += [f"Calls: {planned['calls']} ({len(planned['questions'])} questions x {len(planned['models'])} models).",
@@ -1391,6 +1435,14 @@ def ask(*, max_usd: float, only: str | None = None, pause_seconds: float = 0.0, 
         problem = questions_problem(cx, config)
         if problem:
             raise _refused(f"{problem}. No paid call was made.")
+        # Questions are recorded in the file's order, without a gap (a payload with one is malformed): a subset may
+        # not jump over a question that nothing has asked yet.
+        known = {row[0] for row in cx.execute("SELECT id FROM archive_chatbot_questions")} | set(asked_ids)
+        jumped = [i for i in config["questions"] if i < max(asked_ids) and i not in known]
+        if jumped:
+            raise _refused(f"{', '.join(jumped)} come{'s' if len(jumped) == 1 else ''} before {max(asked_ids)} in "
+                           f"{CONFIG_FILE.name} and {'has' if len(jumped) == 1 else 'have'} never been asked. Questions are "
+                           "recorded in the file's order: ask the earlier ones too, or first. No paid call was made.")
         for model in models:
             latest, kind = cx.execute("SELECT MAX(r.collected_on),MIN(c.kind) FROM archive_chatbot_conditions c JOIN "
                                       "archive_chatbot_runs r ON r.id=c.run_id WHERE c.chatbot=?", (model["label"],)).fetchone()
@@ -1571,15 +1623,34 @@ DEMO_QUESTIONS = (
         "chat-app-c": ((2, "Yes, until they ask me to draw a hand."),),
         HUMAN_LABEL: ((2, "My ten-year-old beat it at tic-tac-toe, so no.", "quoted"),)}),
 )
+# Two scripted questions of the "trending" list: added at the third scripted date and asked from then on, so the
+# sample site shows the Trending tab and questions that start later than the others. Made up like everything here:
+# they are not taken from any list of searches.
+DEMO_TRENDING_FROM = 3
+DEMO_TRENDING = (
+    ("Socks with sandals: brave or wrong?", "Socks with sandals?", {
+        "chat-app-a": ((3, "Brave. Wrong, but brave."),),
+        "chat-app-b": ((3, "Wrong, and my toes agree."), (4, "Brave, if the socks have little avocados on them.")),
+        "chat-app-c": ((3, "It's a cry for help with good arch support."),),
+        HUMAN_LABEL: ((3, "My dad does it and he has never been happier.", "quoted"),)}),
+    ("Does the milk go in before the cereal?", "Milk first or cereal first?", {
+        "chat-app-a": ((3, "Cereal first. Milk first is how you get soup with regrets."),),
+        "chat-app-b": ((3, "Cereal first, unless you enjoy chaos."),),
+        "chat-app-c": ((3, "Milk first, and I'd like to speak to nobody about it."),),
+        HUMAN_LABEL: ((3, "Nearly everyone said cereal first; two people said bowl last.", "summarised"),)}),
+)
 # (question position, answerer, run) scripted as a reply that is stored and never shown, so the "left out" line is real.
 DEMO_SKIPPED = {(4, "chat-app-b", 3): f"{SKIPPED}: the app showed an error (scripted)"}
 DEMO_REFUSED = {(2, "chat-app-a", 4): "I'd rather not say anything unkind about anyone."}
 
 
 def demo_items() -> list[dict]:
-    """The scripted question list as question dicts (ids C001...)."""
-    return [{"id": f"C{n:03d}", "text": text, "prompt": prompt_of(text), "hook": hook, "added": DEMO_DATES[0]}
+    """The scripted question list as question dicts (ids C001...): the main questions, then the trending ones."""
+    main = [{"id": f"C{n:03d}", "text": text, "prompt": prompt_of(text), "hook": hook, "added": DEMO_DATES[0]}
             for n, (text, hook, _script) in enumerate(DEMO_QUESTIONS, 1)]
+    return main + [{"id": f"C{n:03d}", "text": text, "prompt": prompt_of(text), "hook": hook,
+                    "added": DEMO_DATES[DEMO_TRENDING_FROM - 1]}
+                   for n, (text, hook, _script) in enumerate(DEMO_TRENDING, len(main) + 1)]
 
 
 def _at(steps: tuple, run: int):
@@ -1589,24 +1660,27 @@ def _at(steps: tuple, run: int):
 def demo(cx, sets: list[dict] | None = None) -> dict:
     """Scripted chat-app runs for `cli demo-archive`, written inside its transaction. Three made-up apps
     and "Human (sample)", four dated runs, the scripted question list above, every row source `demo`.
+    The two scripted trending questions join at the third date: the runs before it neither list nor record them.
     No app and no person was asked. `sets` is ignored (the track has its own questions)."""
-    items = demo_items()
-    ids = [q["id"] for q in items]
+    every = demo_items()
+    scripts = DEMO_QUESTIONS + DEMO_TRENDING
     groups = [dict(DEFAULT_GROUP)]      # one group, as on the real site today; several groups are covered by the tests
     apps = [{"label": label, "name": name, "maker": maker, "attribution": DEMO_ATTRIBUTION.get(label, ""), "group": groups[0]["id"]}
             for label, name, maker in DEMO_APPS]
-    digest = config_hash(apps, items, DEMO_HUMAN, groups)
     written = 0
     for number, day in enumerate(DEMO_DATES, 1):
         stamp = f"{day}T12:00:00+00:00"
-        run_id, _ = _open_run(cx, DEMO, day, ids, digest, "", stamp)
+        # The list as it stood on that date: the trending questions are not in it before they were added.
+        items = every[:len(DEMO_QUESTIONS) if number < DEMO_TRENDING_FROM else len(every)]
+        ids = [q["id"] for q in items]
+        run_id, _ = _open_run(cx, DEMO, day, ids, config_hash(apps, items, DEMO_HUMAN, groups), "", stamp)
         _record_questions(cx, run_id, DEMO, items)
         for app in apps:
             label = app["label"]
             if DEMO_FIRST_RUN.get(label, 1) > number:
                 continue
             _store_conditions(cx, run_id, app, _at(DEMO_CONDITIONS[label], number)[1], groups)
-            for position, (question, (_text, _hook, script)) in enumerate(zip(items, DEMO_QUESTIONS), 1):
+            for position, (question, (_text, _hook, script)) in enumerate(zip(items, scripts), 1):
                 skipped, refusal = DEMO_SKIPPED.get((position, label, number)), DEMO_REFUSED.get((position, label, number))
                 if skipped:
                     answer = {"question": question["id"], "state": "no_answer", "reason": skipped, "text": None}
@@ -1617,7 +1691,7 @@ def demo(cx, sets: list[dict] | None = None) -> dict:
                 written += 1
         if DEMO_FIRST_RUN[HUMAN_LABEL] <= number:
             _store_human_collection(cx, run_id, DEMO_HUMAN, {"source": DEMO_HUMAN_SOURCE, "collected_on": day, "count": None})
-            for question, (_text, _hook, script) in zip(items, DEMO_QUESTIONS):
+            for question, (_text, _hook, script) in zip(items, scripts):
                 _from, text, manner = _at(script[HUMAN_LABEL], number)
                 state, reason, kept = classify_reply(text, HUMAN_CHARS)
                 _store_human(cx, run_id, DEMO, day, {"question": question["id"], "state": state, "reason": reason, "text": kept,
@@ -2090,6 +2164,7 @@ def add_parsers(sub) -> None:
     ask_p.add_argument("--dry-run", action="store_true", help="Print the plan (models, questions, calls, worst-case estimate); call nothing, store nothing")
     ask_p.add_argument("--models", help="Comma-separated labels of model answerers in archive_chatbots.json (default: all)")
     ask_p.add_argument("--questions", help="Comma-separated question ids from archive_chatbots.json, like C011,C012 (default: all). For questions added since the last ask")
+    ask_p.add_argument("--list", dest="question_list", metavar="LIST", default=None, help="Ask only the questions of one list: trending (marked \"list\": \"trending\" in archive_chatbots.json) or main. The same as --questions with that list's ids; not together with --questions")
     ask_p.add_argument("--pause", type=float, default=0.0, help="Seconds to wait between calls (an endpoint's own _PAUSE_SECONDS applies when it is longer)")
 
 
@@ -2104,6 +2179,10 @@ def handle_command(args) -> None:
         print(f"When it is filled in, check it (this stores nothing): python -m live_genesis.cli archive-chatbot-import {target} --dry-run")
         return
     if args.command == "archive-chatbot-ask":
+        if args.question_list is not None:     # --list is --questions with that list's ids; refused before anything else
+            if args.questions is not None:
+                raise _refused("Give --list or --questions, not both. Nothing was asked.")
+            args.questions = list_ids(args.question_list)
         print(render_ask_plan(ask_plan(args.models, args.questions)))
         if args.dry_run:
             print("DRY RUN: nothing was called and nothing was stored.")
