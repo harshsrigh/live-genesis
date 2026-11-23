@@ -4,11 +4,17 @@ import copy
 import json
 import re
 
+import pytest
+
 from live_genesis import archive, archive_pages, profiles
 from test_archive import REPO, STATIC, assert_page_is_safe, ready  # noqa: F401
 from test_archive_chatbots import visible
 
-PUBLISHED = json.loads((REPO / 'published' / 'archive.json').read_text(encoding='utf-8'))
+# A frozen copy of what was published on 19 Nov 2026 (four models, ten questions). The exact figures below are pinned
+# to it, NOT to the live `published/` folder, which the owner adds to every month: a test must not break because
+# real answers were published.
+PUBLISHED = json.loads((REPO / 'tests' / 'fixtures' / 'profiles_published_2026-11-19.json').read_text(encoding='utf-8'))
+LIVE = REPO / 'published' / 'archive.json'
 
 # Hand-made answers, five or more per step, wild end first.
 GREMLIN = ['OMG yes!! 😂', 'LOL nah, never! 🔥', 'Haha, totally! 😜', 'WOW, like, who even asks that? 😂', 'Nope!! 🤪', 'Yay, soup! 🎉']
@@ -236,3 +242,16 @@ def test_stylesheet_rules_for_the_profile_and_the_docs():
     for phrase in ('Answering style', 'Chaos gremlin', 'The grown-up', 'English only', 'Too early to tell', 'live_genesis/profiles.py',
                    'display only'):
         assert phrase in doc, phrase
+
+
+def test_whatever_is_published_today_gets_a_style_or_too_early_and_the_page_renders():
+    """The live `published/` folder changes every month, so nothing here pins a figure: only the rules."""
+    if not LIVE.exists():
+        pytest.skip('nothing is published')
+    payload = json.loads(LIVE.read_text(encoding='utf-8'))
+    styles = real_styles(payload)
+    assert styles and all(key != 'human' for key in styles)
+    for style in styles.values():
+        assert style['count'] >= 0 and (style.get('step') in (1, 2, 3, 4, 5) or style['count'] < 5)
+    how = archive_pages.render_chatbots(payload)
+    assert 'Just for fun' in how and '<script' not in how
