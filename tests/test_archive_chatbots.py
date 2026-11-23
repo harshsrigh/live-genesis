@@ -913,6 +913,19 @@ def test_chat_cards_three_apps_and_human_in_the_safe_box(chat, tmp_path):
     assert archive_pages.card_lines('i' * 400, 20) > archive_pages.card_lines('i' * 40, 20) == 1     # a word wider than a line
     # A character whose width is not known counts as wide, so the mistake can only be an unneeded note.
     assert archive_pages.card_lines('中' * 30, 20) == 2 and archive_pages._W['m'] < archive_pages.CARD_WIDE
+    # A line may also break after a hyphen and on either side of a long dash, between two letters only: never next to
+    # a digit, at the start or end of a word, or at a non-breaking hyphen. Two real replies the browser showed whole
+    # (22 Nov 2026) and the earlier rule marked as cut:
+    pieces = archive_pages._SOFT_BREAK.split
+    assert pieces('Home-court') == ['Home-', 'court'] and pieces('hype—like') == ['hype', '—', 'like']
+    assert pieces('x-5') == ['x-5'] and pieces('-dash') == ['-dash'] and pieces('end—') == ['end—'] and pieces('Wi‑Fi') == ['Wi‑Fi']
+    dashed = ('Home-court advantage? More like home-court hype—like your team’s favorite snack, but only works if you '
+              'actually show up. 😄')
+    long = ('Honestly, the best comedy is the one that makes you laugh so hard you forget you’re supposed to be watching '
+            'it—like my cat stealing the remote and then doing the cha-cha on the couch. 😂')
+    assert not archive_pages.card_cut(dashed, 4) and not archive_pages.card_cut(long, 1) and archive_pages.card_cut(long, 4)
+    assert archive_pages.card_lines('aa aaaa-bbbb cc', 6) == 2 and archive_pages.card_lines('aa aaaa‑bbbb cc', 6) == 3
+    assert 0.99 <= archive_pages.CARD_FIT_SLACK < 1                                   # at 1.005 the browser check found a line too few
     assert one.count('<section class="card-panel') == 1 and '<div class="card-panels one">' in one and 'ChatGPT' not in one
     assert 'data-answerer-kind="human"' in person and 'data-human-form="quoted"' in person and 'data-provenance="human-written"' in person
     assert '<p class="card-before"><span class="mono">Before · Oct 2026</span> PLACEHOLDER first human C001.</p>' in person
