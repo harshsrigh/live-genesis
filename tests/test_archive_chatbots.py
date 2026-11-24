@@ -118,8 +118,8 @@ def test_checked_in_configuration_three_apps_human_and_ten_draft_questions_of_it
     assert config['aside'] == raw['aside'] == 'Why no Copilot? It is cheaper to ask a human than Copilot.'
     assert config['aside'].startswith('Why no Copilot?') and len(config['aside']) <= chatbots.ASIDE_CHARS
     # The questions are this track's own list: ids C001..., one fixed prefix, nothing taken from the two locked lists.
-    # The first ten of 14 Nov 2026, then questions appended later (three on 20 Nov 2026 and two on 24 Nov 2026, from the weekly trend ideas).
-    assert config['questions'] == [f'C{n:03d}' for n in range(1, 16)] and raw['prompt_prefix'] == chatbots.PROMPT_PREFIX == PREFIX
+    # The first ten of 14 Nov 2026, then questions appended later (three on 20 Nov 2026 and three on 24 Nov 2026, from the weekly trend ideas).
+    assert config['questions'] == [f'C{n:03d}' for n in range(1, 17)] and raw['prompt_prefix'] == chatbots.PROMPT_PREFIX == PREFIX
     locked_ids = {q['id'] for track in archive.TRACKS for q in archive.load_questions(track=track)['questions']}
     assert not set(config['questions']) & locked_ids                                          # ids of its own: nothing refers to the two lists
     for item in config['items']:

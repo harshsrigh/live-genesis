@@ -4,7 +4,7 @@ Written 20 November 2026 for any future session (cloud, WSL, Codex) that starts 
 
 ## What this is
 
-A public static site that puts the same playful questions (thirteen shown: ten main questions and three under a "Trending" tab; two more trending ones wait for the December ask) to AI answerers every month and keeps every reply side by side, in a "Group chat" look. Live: <https://harshsrigh.github.io/live-genesis/archive/index.html> (GitHub Pages, rebuilt by `.github/workflows/snapshot.yml` on every push to `main`).
+A public static site that puts the same playful questions (thirteen shown: ten main questions and three under a "Trending" tab; three more trending ones wait for the December ask) to AI answerers every month and keeps every reply side by side, in a "Group chat" look. Live: <https://harshsrigh.github.io/live-genesis/archive/index.html> (GitHub Pages, rebuilt by `.github/workflows/snapshot.yml` on every push to `main`).
 
 The owner is not a programmer. Write to them in plain words, give commands in copyable blocks, and put decisions to them as short choices with a recommendation.
 
@@ -18,7 +18,7 @@ The owner is not a programmer. Write to them in plain words, give commands in co
 ## State on 20 Nov 2026 (some lines brought up to date on 21 and 23 Nov)
 
 - `main` passes 648 offline tests (`python -m pytest -q`, about a minute), counted on 23 Nov at `292f9f7`.
-- Two more trending questions were appended on 24 Nov from the weekly trend ideas, on the owner's word: C014 "What makes a western movie a western?" and C015 "Who wins a standoff at high noon: a cowboy or a robot?". Not asked yet, so in no page or data file; the December ask covers all fifteen.
+- Three more trending questions were appended on 24 Nov from the weekly trend ideas, on the owner's word: C014 "What makes a western movie a western?" C015 "Who wins a standoff at high noon: a cowboy or a robot?" and C016 "What's the best way to survive a long airport layover?". Not asked yet, so in no page or data file; the December ask covers all sixteen.
 - Three questions (C011 to C013) were appended on 20 Nov, asked on 22 Nov with `--questions` and published. Since 23 Nov they are marked `"list": "trending"` in `archive_chatbots.json` (a display attribute only) and the site lists them under a "Trending" tab; `archive-chatbot-ask --list trending` asks only those, and from December one ask covers all thirteen (`docs/SESSION-STATE.md`, "Decided on 23 Nov").
 - Free-only OpenRouter collector, guided Windows launcher (`Collect-Free.cmd`) and its guards are merged. **No real request to OpenRouter's model API has ever been made**; tested with mocked answers only; the launcher was never run on Windows itself.
 - The owner's step-by-step guide for a month: `docs/MONTHLY-ROUND.md`.

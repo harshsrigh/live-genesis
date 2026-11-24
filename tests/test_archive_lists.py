@@ -103,9 +103,9 @@ def test_the_three_new_questions_are_marked_trending_and_no_recorded_hash_change
     raw = json.loads(CONFIG.read_text(encoding='utf-8'))
     loaded = chatbots.load_config()
     assert raw['format'] == 'live-genesis-chatbots/3'                                   # an optional field: the file format is the same
-    assert [q['id'] for q in raw['questions'] if 'list' in q] == ['C011', 'C012', 'C013', 'C014', 'C015'] and 'main' not in json.dumps(raw['questions'])
-    # C014 and C015 were added on 24 Nov 2026, marked from the start and not yet asked.
-    assert loaded['lists'] == {i: 'trending' for i in ('C011', 'C012', 'C013', 'C014', 'C015')} == chatbots.question_lists()
+    assert [q['id'] for q in raw['questions'] if 'list' in q] == ['C011', 'C012', 'C013', 'C014', 'C015', 'C016'] and 'main' not in json.dumps(raw['questions'])
+    # C014 to C016 were added on 24 Nov 2026, marked from the start and not yet asked.
+    assert loaded['lists'] == {i: 'trending' for i in ('C011', 'C012', 'C013', 'C014', 'C015', 'C016')} == chatbots.question_lists()
     assert chatbots.LISTS == ('trending',) and chatbots.question_lists(demo=True) == {'C007': 'trending', 'C008': 'trending'}
     # A question is the five fields it always was, marked or not, and its recorded hash is what the version before worked
     # out, to the byte: the real database and the published file recorded all thirteen WITHOUT the mark.
