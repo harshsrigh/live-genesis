@@ -61,6 +61,7 @@ python -m live_genesis.cli archive-chatbot-ask --list trending --max-usd 0.01
 - Owner's PC (WSL, `~/live-genesis`): the real database, `.env`, the local models. Model-calling commands run only there, only on the owner's explicit word for that run.
 - Windows has no Python. Tests run through WSL.
 - Backups sit outside the repository, in the owner's home folder in WSL and in `~/live-genesis/backups/` (git-ignored). Latest: 23 Nov 2026 (UTC), before the checks above.
+- First encrypted backup made on 24 Nov 2026 (UTC) by the owner (`docs/BACKUP.md`), checked (`backup-check`, also with `--compare-live`: every table the same as the real database; a wrong passphrase was refused), uploaded: yes, to a cloud-synced folder, seen by the owner on the cloud's website. `~/cloud-backups` on the PC is the short name for that folder.
 
 ## Next (the owner's moves)
 1. Try the share line on your own phone (`docs/SHARE-CARD.md`, the table at the end). In December: one ask of all thirteen questions together (`docs/MONTHLY-ROUND.md`, "The models"), on your word for that run.

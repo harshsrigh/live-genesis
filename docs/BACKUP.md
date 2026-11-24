@@ -67,6 +67,15 @@ ln -s "/mnt/c/Users/YOURNAME/OneDrive/AnswersOverTimeBackups" ~/cloud-backups
 
 You should see nothing again. From now on `~/cloud-backups` means that folder. Every command below uses it.
 
+If a folder called `cloud-backups` is already in your home folder (for example from an earlier try), the line above does not replace it: it quietly puts the short name *inside* that folder, and your backups stay on the PC. Check first, and move the old folder aside under another name:
+
+```bash
+ls -ld ~/cloud-backups
+mv ~/cloud-backups ~/local-backups
+```
+
+After the `ln -s` line, `ls -ld ~/cloud-backups` should show an arrow (`->`) pointing at the folder in your cloud folder.
+
 The folder must be **outside the project folder**. The command refuses a folder inside the project or inside any other git folder, because a database must never end up on GitHub, locked or not.
 
 ### Step 3. Choose the passphrase, and where you keep it
@@ -148,7 +157,7 @@ You get a second table with one line per table:
 
 ### Step 6. See that it arrived in the cloud
 
-Your cloud program uploads the two files by itself; give it a minute. Then open the cloud's website in your browser (for OneDrive: <https://onedrive.live.com>), sign in, open the folder `AnswersOverTimeBackups` and look for the two files with today's date. Do this at least the first time, and again whenever you change PC or cloud settings. A file that is only on this PC is not a cloud backup.
+Your cloud program uploads the two files by itself; give it a minute. It only does that while it is running: a folder called `OneDrive` can sit on the PC while the program itself is switched off (on the first real backup, 24 November 2026, it was). Look for its cloud icon beside the clock, or start it from the Start menu. Then open the cloud's website in your browser (for OneDrive: <https://onedrive.live.com>), sign in, open the folder `AnswersOverTimeBackups` and look for the two files with today's date. Do this at least the first time, and again whenever you change PC or cloud settings. A file that is only on this PC is not a cloud backup.
 
 ---
 
@@ -226,3 +235,5 @@ The unlocked file is your real database again: keep it out of the cloud folder a
 ---
 
 *Checked on 23 November 2026 in a cloud session (Linux, GnuPG 2.4.4), against a scratch database made with `demo-archive` and a throwaway passphrase: `backup-encrypted --to` through a short name made with `ln -s` as in step 2, `backup-check` with and without `--compare-live`, the refusals (a folder inside the project, a folder that does not exist, a wrong passphrase), the `gpg --decrypt` line of the restore and `archive-status` on the restored file. The outputs shown above are the ones those runs printed, with the folder and the date changed. gpg's own passphrase box was typed into through a simulated terminal: both commands, and a wrong passphrase. Not run: anything on the owner's PC, a real OneDrive, Google Drive or Dropbox folder under `/mnt/c`, the upload itself, `sudo apt install gnupg`, and steps 1, 2, 6 and 7 of the restore on a second PC. The first real backup on the owner's PC is the first real check of those.*
+
+*Checked on 24 November 2026 (UTC) on the owner's PC (WSL, GnuPG 2.4.8), on the real database, by the owner, who alone typed the passphrase into gpg's box: steps 1 to 6 with a personal OneDrive folder under `/mnt/c`. `backup-encrypted --to ~/cloud-backups` printed what step 4 shows; `backup-check` printed the table of step 5, with 45 tables; `--compare-live` said `same` for every table; a wrong passphrase gave "That passphrase did not open this backup." and left nothing behind (the backup folder held only `.gpg` files and their receipts, no unlocked copy in `/tmp`, the project's `git status` clean); the two files were seen on the cloud's website (how long the upload took was not noted). gpg's box asked every time, also a few minutes after a right passphrase. Two things did not match the guide and are now in it: a plain folder `~/cloud-backups` was already there, so the `ln -s` line of step 2 could not be used as written; and the OneDrive program was not running although its folder existed. Not run: the restore.*
