@@ -61,6 +61,7 @@ python -m live_genesis.cli archive-chatbot-ask --list trending --max-usd 0.01
 - Owner's PC (WSL, `~/live-genesis`): the real database, `.env`, the local models. Model-calling commands run only there, only on the owner's explicit word for that run.
 - Windows has no Python. Tests run through WSL.
 - Backups sit outside the repository, in the owner's home folder in WSL and in `~/live-genesis/backups/` (git-ignored). Latest: 23 Nov 2026 (UTC), before the checks above.
+- 24 Nov 2026 (cloud session, on the owner's word "pick"): C014 "What makes a western movie a western?" and C015 "Who wins a standoff at high noon: a cowboy or a robot?" appended to `archive_chatbots.json` with `"list": "trending"`, from the weekly trend ideas of 23 Nov. Not asked: they are on no page and in no data file. The list is now fifteen (ten main, five trending); `archive-chatbot-ask --dry-run` will plan 60 calls and `--list trending --dry-run` 20. Wherever this file says "all thirteen" for the December ask, read "all fifteen".
 - First encrypted backup made on 24 Nov 2026 (UTC) by the owner (`docs/BACKUP.md`), checked (`backup-check`, also with `--compare-live`: every table the same as the real database; a wrong passphrase was refused), uploaded: yes, to a cloud-synced folder, seen by the owner on the cloud's website. `~/cloud-backups` on the PC is the short name for that folder.
 
 ## Next (the owner's moves)

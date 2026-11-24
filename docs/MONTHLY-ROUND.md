@@ -52,7 +52,7 @@ python -m live_genesis.cli archive-chatbot-template --out chatbots-2026-12.json
 
 You should see `Template written to chatbots-2026-12.json. This is your sheet for the month.`
 
-The sheet holds every question on the list: thirteen since 20 November 2026 (C011 to C013 were added that day).
+The sheet holds every question on the list: fifteen since 24 November 2026 (C011 to C013 were added on 20 November, C014 and C015 on 24 November).
 
 The sheet carries today's date. If you will ask on another day, give that day:
 
@@ -161,7 +161,7 @@ DRY RUN: the file passed every check. Nothing was stored.
   human: 10 of 10 answers will show
 ```
 
-The second number is how many questions the sheet holds (thirteen today, so `13 of 13`; the example above is from the ten-question list). Do the numbers match what happened? Then go on.
+The second number is how many questions the sheet holds (fifteen today, so `15 of 15`; the example above is from the ten-question list). Do the numbers match what happened? Then go on.
 
 If instead it says the file `is not ready yet`, that is this check doing its job. It lists what to fix: the app, the question, and what to do. Fix the sheet, save it, run the same command again. As often as you like.
 
