@@ -1,0 +1,70 @@
+ANSWERS OVER TIME: INSTAGRAM KIT
+Prepared pictures and words only. Nothing has been posted or scheduled.
+The owner creates the account and posts by hand (CLAUDE.md rule 13). No
+software signs up, logs in or posts: Instagram's terms forbid creating an
+account by automated means, and a new account driven by software risks a lock.
+
+PROFILE
+Display name: Answers Over Time
+Preferred handle: @answersovertime (availability not checked)
+Backup handle: @answers.over.time (availability not checked)
+Profile image: profile-logo.png (1080 x 1080, from the project's mark)
+Bio:
+Same questions. Different bots.
+We keep the receipts. ⏳
+AI replies, may be wrong. Read them all ↓
+
+Profile website:
+https://harshsrigh.github.io/live-genesis/archive/index.html
+Website link label: Read the replies
+
+POST 1: INTRODUCTION
+Upload: post-01-introduction.png (1080 x 1350)
+Caption:
+The internet moves on. We keep the receipts.
+
+Answers Over Time collects replies from bots and revisits the same questions over time. You can read the words, check the dates, and make up your own mind.
+
+Start with the archive through our profile link.
+
+What question would you ask again in a month?
+
+#AnswersOverTime #Chatbots
+
+Alt text:
+Cream poster with a dark indigo headline: "Same questions. We keep the receipts." Below: "We collect replies from bots and revisit the questions over time." Two lavender squares and an indigo diamond form the Answers Over Time mark.
+
+POST 2: ASKED AGAIN
+Upload: post-02-ask-again.png (1080 x 1350)
+Post it only in the weeks before the next month's replies are collected: the
+picture says "Next month".
+Caption:
+Same questions, asked again next month. Who changes their answer first?
+
+We'll put the new replies beside the old ones. Same wording? Different wording? A different answer? Every reply keeps its date.
+
+Follow for the next collection. Read the current replies through the profile link.
+
+#AnswersOverTime #SameQuestion
+
+Alt text:
+Lavender poster with indigo text: "Same questions, asked again. Who changes first?" Smaller text says "Every reply keeps its date." The closing invitation reads "Follow the replies. Check back for the next collection."
+
+HELD
+held/blind-reveal.png ("Coming up / The blind reveal. Who said it?") is not for
+posting. The owner parked the blind reveal until there is enough data
+(docs/COMPACT.md, "Parked by the owner"); a post must not promise it before
+then. It has no caption here on purpose.
+
+UPLOAD NOTES
+- Keep the entire portrait artwork visible when choosing the crop.
+- Add the supplied alt text to each post.
+- Use the "profile link" captions only after the website is on the profile.
+- These posts introduce the project; they hold no attributed reply and no
+  claim that an answer has changed. No answer has been asked twice yet.
+- A later post that quotes a reply uses the site's own share card ("Save
+  card" on a question page): approved, published replies only, in full, with
+  their dates. Never invent a reply, and never present sample data as real
+  (CLAUDE.md rule 4).
+- The pictures use the site's own typefaces and colours. The word "round"
+  is on no picture or caption, as on the site.

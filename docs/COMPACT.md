@@ -23,6 +23,7 @@ The owner is not a programmer. Write to them in plain words, give commands in co
 - Free-only OpenRouter collector, guided Windows launcher (`Collect-Free.cmd`) and its guards are merged. **No real request to OpenRouter's model API has ever been made**; tested with mocked answers only; the launcher was never run on Windows itself.
 - The owner's step-by-step guide for a month: `docs/MONTHLY-ROUND.md`.
 - Since 23 Nov: `cli backup-encrypted --to DIR` writes a gpg-encrypted copy of the database and a counts-only receipt into a folder the owner names (a cloud-synced one); `cli backup-check FILE.gpg` proves it opens. The passphrase is the owner's alone and gpg asks for it; the software makes no network request. Guide: `docs/BACKUP.md`. Not yet run on the owner's PC.
+- Since 25 Nov: `social/instagram/` holds a small kit for the owner to post by hand (profile picture, bio, two posters with captions and alt text; a third poster about the parked blind reveal is under `held/` and not for posting). There is no account-setup or posting skill and rule 13 has no exception: pull request 18, which proposed both, was closed on the owner's word.
 - A weekly scheduled task ("Weekly trend question ideas", Mondays 18:35 UTC) runs `archive-trends` in a fresh cloud session and reports 5 to 8 draft question ideas. It changes nothing; the owner adds a question by hand.
 
 ## The owner's decisions that shape the pages
